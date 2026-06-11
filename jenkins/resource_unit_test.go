@@ -1,8 +1,10 @@
 package jenkins
 
 import (
+	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 )
 
@@ -40,5 +42,39 @@ func TestResourceHelperSchemaCredential(t *testing.T) {
 		if _, ok := s[key]; !ok {
 			t.Errorf("schemaCredential() missing attribute %q", key)
 		}
+	}
+}
+
+func TestResourceHelperConfigure_nilData(t *testing.T) {
+	r := newResourceHelper()
+	resp := &resource.ConfigureResponse{}
+	r.Configure(context.Background(), resource.ConfigureRequest{ProviderData: nil}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Errorf("Configure() with nil ProviderData should not return error, got: %v", resp.Diagnostics)
+	}
+	if r.client != nil {
+		t.Error("Configure() with nil ProviderData should leave client nil")
+	}
+}
+
+func TestResourceHelperConfigure_wrongType(t *testing.T) {
+	r := newResourceHelper()
+	resp := &resource.ConfigureResponse{}
+	r.Configure(context.Background(), resource.ConfigureRequest{ProviderData: "unexpected-string"}, resp)
+	if !resp.Diagnostics.HasError() {
+		t.Error("Configure() with wrong type should return an error")
+	}
+}
+
+func TestResourceHelperConfigure_valid(t *testing.T) {
+	r := newResourceHelper()
+	client := newJenkinsClient(&Config{})
+	resp := &resource.ConfigureResponse{}
+	r.Configure(context.Background(), resource.ConfigureRequest{ProviderData: client}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Errorf("Configure() with valid client should not return error, got: %v", resp.Diagnostics)
+	}
+	if r.client != client {
+		t.Error("Configure() should set client on resource helper")
 	}
 }
