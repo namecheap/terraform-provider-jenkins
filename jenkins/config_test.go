@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -48,8 +49,12 @@ func TestNewJenkinsClient(t *testing.T) {
 	c = newJenkinsClient(&Config{
 		CACert: []byte("certificate"),
 	})
-	if string(c.Requester.CACert) != "certificate" {
-		t.Errorf("Initialization did not extract certificate data")
+	// When CACert is provided, a custom http.Client (not http.DefaultClient) must be used
+	// so the TLS config with the CA cert pool is active.
+	if r, ok := c.Requester.(*jenkins.Requester); !ok {
+		t.Fatal("Expected *jenkins.Requester")
+	} else if r.Client == http.DefaultClient {
+		t.Error("Expected custom HTTP client when CACert is set")
 	}
 }
 

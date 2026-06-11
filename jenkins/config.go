@@ -2,6 +2,9 @@ package jenkins
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"net/http"
 	"strings"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -30,13 +33,17 @@ type Config struct {
 }
 
 func newJenkinsClient(c *Config) *jenkinsAdapter {
-	client := jenkins.CreateJenkins(nil, c.ServerURL, c.Username, c.Password)
+	var httpClient *http.Client
 	if len(c.CACert) > 0 {
-		// provide CA certificate if server is using self-signed certificate
-		client.Requester.CACert = c.CACert
+		certPool := x509.NewCertPool()
+		certPool.AppendCertsFromPEM(c.CACert)
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: certPool},
+			},
+		}
 	}
-
-	// return the Jenkins API client
+	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
 	return &jenkinsAdapter{Jenkins: client}
 }
 
