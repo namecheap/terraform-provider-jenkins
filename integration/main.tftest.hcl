@@ -69,6 +69,7 @@ run "credentials" {
 
   providers = {
     random = random
+    tls    = tls
   }
 
   assert {
@@ -106,5 +107,9 @@ run "credentials" {
   assert {
     condition     = output.aws_cred_folder.access_key == jenkins_credential_aws.folder_iam.access_key
     error_message = "${nonsensitive(output.aws_cred_folder.access_key)} data value did not match resource value"
+  }
+  assert {
+    condition     = jenkins_credential_github_app.global.app_id == "12345"
+    error_message = "${jenkins_credential_github_app.global.app_id} did not contain expected \"12345\" value"
   }
 }

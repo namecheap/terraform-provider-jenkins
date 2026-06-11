@@ -89,6 +89,40 @@ func TestAccJenkinsCredentialVaultAppRole_basic_namespaced(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsCredentialVaultAppRole_ignoreChanges(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialVaultAppRoleDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_credential_vault_approle foo {
+				  name = "test-approle-ignore"
+				  role_id = "role-id"
+				  secret_id = "initial-secret"
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_vault_approle.foo", "id", "/test-approle-ignore"),
+			},
+			{
+				// Update description while ignoring secret_id; secret must not be overwritten.
+				Config: `
+				resource jenkins_credential_vault_approle foo {
+				  name = "test-approle-ignore"
+				  description = "updated"
+				  role_id = "role-id"
+				  secret_id = "initial-secret"
+
+				  lifecycle {
+				    ignore_changes = [secret_id]
+				  }
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_vault_approle.foo", "description", "updated"),
+			},
+		},
+	})
+}
+
 func TestAccJenkinsCredentialVaultAppRole_folder_namespaced(t *testing.T) {
 	var cred VaultAppRoleCredentials
 	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)

@@ -78,3 +78,12 @@ func TestResourceHelperConfigure_valid(t *testing.T) {
 		t.Error("Configure() should set client on resource helper")
 	}
 }
+
+func TestResourceHelperImportState_invalidID(t *testing.T) {
+	r := newResourceHelper()
+	resp := &resource.ImportStateResponse{}
+	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "no-slash"}, resp)
+	if !resp.Diagnostics.HasError() {
+		t.Error("ImportState() with ID missing slash should return an error")
+	}
+}
