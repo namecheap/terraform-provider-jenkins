@@ -13,7 +13,4 @@ import (
 // Format Terraform code for use in documentation.
 //go:generate terraform fmt -recursive ../examples/
 // Generate documentation.
-// --provider-name jenkins is required because the repo is named terraform-provider-jenkins-v2;
-// without it tfplugindocs derives the name "jenkins-v2", which mismatches the
-// "jenkins_*" type prefix used in the provider schema.
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir .. --provider-name jenkins
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir ..

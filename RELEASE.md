@@ -1,7 +1,7 @@
 # Publishing to the Terraform Registry
 
 This document is the one-time runbook for setting up and performing releases to
-[registry.terraform.io/namecheap/jenkins-v2](https://registry.terraform.io/providers/namecheap/jenkins-v2).
+[registry.terraform.io/namecheap/jenkins](https://registry.terraform.io/providers/namecheap/jenkins).
 
 ---
 
@@ -40,7 +40,7 @@ another key. You only need to publish the provider:
 1. Open [registry.terraform.io](https://registry.terraform.io) and sign in with
    the **namecheap** GitHub organisation account (requires Owner or Admin
    permission on the org).
-2. Click **Publish → Provider** and select `terraform-provider-jenkins-v2`.
+2. Click **Publish → Provider** and select `terraform-provider-jenkins`.
 3. The Registry installs a webhook automatically. Verify it appears under
    **Settings → Webhooks** in this repository.
 
@@ -77,7 +77,7 @@ After the workflow completes, check:
 terraform {
   required_providers {
     jenkins = {
-      source  = "namecheap/jenkins-v2"
+      source  = "namecheap/jenkins"
       version = "X.Y.Z"
     }
   }

@@ -1,9 +1,9 @@
 # Configuration for tfplugindocs
 # https://github.com/hashicorp/terraform-plugin-docs
 #
-# Without this file, tfplugindocs derives the provider name from the binary
-# name (terraform-provider-jenkins-v2 → jenkins-v2), which mismatches the
-# actual resource type prefix used in the provider schema (jenkins_*).
+# Sets the provider name used in docs page titles and resource headings.
+# The binary is terraform-provider-jenkins, so tfplugindocs auto-derives
+# "jenkins" — this file makes the setting explicit.
 provider-name: jenkins
 
 rendered-provider-name: Jenkins

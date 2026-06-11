@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     jenkins = {
-      source  = "namecheap/jenkins-v2"
+      source  = "namecheap/jenkins"
       version = ">= 1.0.0"
     }
   }

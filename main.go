@@ -1,6 +1,6 @@
 // Package main defines the Jenkins Terraform Provider entrypoint.
 //
-// See https://registry.terraform.io/providers/namecheap/jenkins-v2 for usage documentation.
+// See https://registry.terraform.io/providers/namecheap/jenkins for usage documentation.
 package main
 
 import (
@@ -13,10 +13,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6/tf6server"
 	"github.com/hashicorp/terraform-plugin-mux/tf5to6server"
 	"github.com/hashicorp/terraform-plugin-mux/tf6muxserver"
-	"github.com/namecheap/terraform-provider-jenkins-v2/jenkins"
+	"github.com/namecheap/terraform-provider-jenkins/jenkins"
 )
 
-const providerAddress = "registry.terraform.io/namecheap/jenkins-v2"
+const providerAddress = "registry.terraform.io/namecheap/jenkins"
 
 func main() {
 	ctx := context.Background()

@@ -128,7 +128,7 @@ jobs:
           cat << TFRC > ~/.terraformrc
           provider_installation {
             dev_overrides {
-              "namecheap/jenkins-v2" = "$GOBIN_DIR"
+              "namecheap/jenkins" = "$GOBIN_DIR"
             }
             direct {}
           }
@@ -141,9 +141,9 @@ jobs:
 
       - name: Init integration
         working-directory: integration/
-        # namecheap/jenkins-v2 is not yet published on the Terraform Registry.
+        # namecheap/jenkins is not yet published on the Terraform Registry.
         # terraform init installs kreuzwerker/docker and hashicorp/random before
-        # failing on the jenkins-v2 registry lookup; we tolerate that exit code so
+        # failing on the jenkins registry lookup; we tolerate that exit code so
         # downstream steps can use the dev_override binary instead.
         run: terraform init || true
 
