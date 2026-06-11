@@ -88,9 +88,9 @@ func configureProvider(ctx context.Context, d *schema.ResourceData) (interface{}
 	// Read the certificate
 	var err error
 	if caCert != "" {
-		config.CACert, err = os.Open(caCert)
+		config.CACert, err = os.ReadFile(caCert)
 		if err != nil {
-			return nil, diag.Errorf("Unable to open certificate file %s: %s", caCert, err.Error())
+			return nil, diag.Errorf("Unable to read certificate file %s: %s", caCert, err.Error())
 		}
 	}
 

@@ -97,19 +97,20 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 	}
 
 	// Read the certificate
-	var err error
 	if caCert != "" {
-		config.CACert, err = os.Open(caCert)
+		var err error
+		config.CACert, err = os.ReadFile(caCert)
 		if err != nil {
 			resp.Diagnostics.AddError(
-				"Unable to open certificate file",
-				fmt.Sprintf("Unable to open certificate file %s: %s", caCert, err.Error()),
+				"Unable to read certificate file",
+				fmt.Sprintf("Unable to read certificate file %s: %s", caCert, err.Error()),
 			)
+			return
 		}
 	}
 
 	client := newJenkinsClient(&config)
-	if _, err = client.Init(ctx); err != nil {
+	if _, err := client.Init(ctx); err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to initialize client",
 			err.Error(),

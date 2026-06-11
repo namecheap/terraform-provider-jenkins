@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"io"
 	"strings"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -25,16 +24,16 @@ type jenkinsAdapter struct {
 // Config is the set of parameters needed to configure the Jenkins provider.
 type Config struct {
 	ServerURL string
-	CACert    io.Reader
+	CACert    []byte
 	Username  string
 	Password  string
 }
 
 func newJenkinsClient(c *Config) *jenkinsAdapter {
 	client := jenkins.CreateJenkins(nil, c.ServerURL, c.Username, c.Password)
-	if c.CACert != nil {
+	if len(c.CACert) > 0 {
 		// provide CA certificate if server is using self-signed certificate
-		client.Requester.CACert, _ = io.ReadAll(c.CACert)
+		client.Requester.CACert = c.CACert
 	}
 
 	// return the Jenkins API client
