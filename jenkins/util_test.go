@@ -1,8 +1,13 @@
 package jenkins
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
+
+	gojenkins "github.com/bndr/gojenkins"
 )
 
 func TestFormatFolderName(t *testing.T) {
@@ -181,4 +186,60 @@ func TestGenerateCredentialID(t *testing.T) {
 	if actual != "test-folder/test-name" {
 		t.Errorf("Expected %s/%s but got: %s", inputFolder, inputName, actual)
 	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"404 prefix", errors.New("404 Not Found"), true},
+		{"404 suffix", errors.New("error: 404"), true},
+		{"404 in middle", errors.New("got 404 response"), true},
+		{"200 ok", errors.New("200 OK"), false},
+		{"500 error", errors.New("500 Internal Server Error"), false},
+		{"unrelated", errors.New("connection refused"), false},
+	}
+	for _, tt := range tests {
+		if got := isNotFound(tt.err); got != tt.want {
+			t.Errorf("isNotFound(%q) = %v, want %v", tt.err.Error(), got, tt.want)
+		}
+	}
+}
+
+func TestFolderExists(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty name skips lookup", func(t *testing.T) {
+		client := &mockJenkinsClient{}
+		if err := folderExists(ctx, client, ""); err != nil {
+			t.Errorf("unexpected error for empty folder name: %v", err)
+		}
+	})
+
+	t.Run("existing folder returns nil", func(t *testing.T) {
+		client := &mockJenkinsClient{
+			mockGetFolder: func(_ context.Context, _ string, _ ...string) (*gojenkins.Folder, error) {
+				return &gojenkins.Folder{}, nil
+			},
+		}
+		if err := folderExists(ctx, client, "my-folder"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("missing folder returns error", func(t *testing.T) {
+		want := fmt.Errorf("404 not found")
+		client := &mockJenkinsClient{
+			mockGetFolder: func(_ context.Context, _ string, _ ...string) (*gojenkins.Folder, error) {
+				return nil, want
+			},
+		}
+		if err := folderExists(ctx, client, "missing-folder"); err == nil {
+			t.Error("expected error, got nil")
+		} else if err.Error() != want.Error() {
+			t.Errorf("got %v, want %v", err, want)
+		}
+	})
 }

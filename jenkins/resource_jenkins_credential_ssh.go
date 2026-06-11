@@ -181,9 +181,11 @@ func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadReque
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data credentialSSHResourceModel
+	var state credentialSSHResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -202,8 +204,9 @@ func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateR
 		},
 	}
 
-	// Only enforce the secrets if non-empty
-	if data.Passphrase.ValueString() != "" {
+	// Only send the passphrase if it changed; omitting it leaves the Jenkins-stored
+	// value untouched, which is correct when lifecycle.ignore_changes = [passphrase].
+	if !data.Passphrase.Equal(state.Passphrase) {
 		cred.Passphrase = data.Passphrase.ValueString()
 	}
 

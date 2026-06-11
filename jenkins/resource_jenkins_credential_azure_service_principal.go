@@ -266,9 +266,11 @@ func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req 
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data credentialAzureServicePrincipalResourceModel
+	var state credentialAzureServicePrincipalResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -294,8 +296,9 @@ func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, re
 		Data:        credData,
 	}
 
-	// Only enforce the password if it is non-empty
-	if data.ClientSecret.ValueString() != "" {
+	// Only send the client_secret if it changed; omitting it leaves the Jenkins-stored
+	// value untouched, which is correct when lifecycle.ignore_changes = [client_secret].
+	if !data.ClientSecret.Equal(state.ClientSecret) {
 		cred.Data.ClientSecret = data.ClientSecret.ValueString()
 	}
 

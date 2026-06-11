@@ -48,6 +48,38 @@ func TestAccJenkinsCredentialSecretText_basic(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsCredentialSecretText_ignoreChanges(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialSecretTextDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_credential_secret_text foo {
+				  name   = "test-secret-text-ignore"
+				  secret = "initial-secret"
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_secret_text.foo", "id", "/test-secret-text-ignore"),
+			},
+			{
+				// Update description while ignoring the secret; secret must not be overwritten.
+				Config: `
+				resource jenkins_credential_secret_text foo {
+				  name        = "test-secret-text-ignore"
+				  description = "updated"
+				  secret      = "initial-secret"
+
+				  lifecycle {
+				    ignore_changes = [secret]
+				  }
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_secret_text.foo", "description", "updated"),
+			},
+		},
+	})
+}
+
 func TestAccJenkinsCredentialSecretText_folder(t *testing.T) {
 	var cred jenkins.StringCredentials
 	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
