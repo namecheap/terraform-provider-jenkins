@@ -51,9 +51,7 @@ func TestNewJenkinsClient(t *testing.T) {
 	})
 	// When CACert is provided, a custom http.Client (not http.DefaultClient) must be used
 	// so the TLS config with the CA cert pool is active.
-	if r, ok := c.Requester.(*jenkins.Requester); !ok {
-		t.Fatal("Expected *jenkins.Requester")
-	} else if r.Client == http.DefaultClient {
+	if c.Requester.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when CACert is set")
 	}
 }
