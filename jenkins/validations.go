@@ -17,6 +17,9 @@ func validateJobName(val interface{}, path cty.Path) diag.Diagnostics {
 }
 
 func validateFolderName(val interface{}, path cty.Path) diag.Diagnostics {
+	if strings.Contains(val.(string), `\`) {
+		return diag.Errorf("folder path must not contain backslashes; use '/' as the path separator")
+	}
 	return diag.Diagnostics{}
 }
 
