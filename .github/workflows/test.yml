@@ -17,6 +17,12 @@ on:
 permissions:
   contents: read
 
+# Suppress git's "init.defaultBranch" hint that appears on every checkout.
+env:
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 jobs:
   lint:
     name: Lint
@@ -26,11 +32,12 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+          cache: true
           check-latest: true
       - name: golangci-lint
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          version: v2.11
+          version: v2.12
 
   unit:
     name: Unit Tests
@@ -43,19 +50,20 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+          cache: true
           check-latest: true
 
       - run: go mod download
 
       - name: Test with coverage
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
 
       - name: Check coverage threshold
         # This provider relies heavily on acceptance tests for coverage.
         # The threshold guards against removing unit tests entirely, not against
         # a low total (the acceptance job reports ~67% when Jenkins is running).
         run: |
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          COVERAGE=$(go tool cover -func=coverage.txt | grep total | awk '{print $3}' | sed 's/%//')
           echo "Total coverage: ${COVERAGE}%"
           THRESHOLD=5.0
           if [ "$(echo "${COVERAGE} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
@@ -63,18 +71,22 @@ jobs:
             exit 1
           fi
 
+      - name: Trust Codecov GPG key
+        run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          files: coverage.out
+          files: coverage.txt
           flags: unit
           fail_ci_if_error: false
           disable_search: true
+          plugins: noop
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unit-coverage
-          path: coverage.out
+          path: coverage.txt
           retention-days: 30
 
   acceptance:
@@ -88,6 +100,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+          cache: true
           check-latest: true
 
       - run: go mod download
@@ -114,20 +127,24 @@ jobs:
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
           JENKINS_PASSWORD: "admin"
-        run: go test -v -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -v -covermode=atomic -coverprofile=coverage.txt ./...
+
+      - name: Trust Codecov GPG key
+        run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          files: coverage.out
+          files: coverage.txt
           flags: acceptance
           fail_ci_if_error: false
           disable_search: true
+          plugins: noop
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: acceptance-coverage
-          path: coverage.out
+          path: coverage.txt
           retention-days: 30
 
   integration:
@@ -138,6 +155,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+          cache: true
           check-latest: true
 
       - name: Build binary
@@ -178,6 +196,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
+          cache: true
           check-latest: true
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
