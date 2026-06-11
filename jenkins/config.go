@@ -31,10 +31,23 @@ type Config struct {
 	Username  string
 	Password  string
 	Insecure  bool
+	UserAgent string
+}
+
+// userAgentTransport injects a User-Agent header on every outbound request.
+type userAgentTransport struct {
+	inner     http.RoundTripper
+	userAgent string
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("User-Agent", t.userAgent)
+	return t.inner.RoundTrip(req)
 }
 
 func newJenkinsClient(c *Config) *jenkinsAdapter {
-	var httpClient *http.Client
+	transport := http.RoundTripper(http.DefaultTransport)
 	tlsCfg := &tls.Config{}
 	if c.Insecure {
 		tlsCfg.InsecureSkipVerify = true //nolint:gosec // user-opted-in skip
@@ -44,9 +57,14 @@ func newJenkinsClient(c *Config) *jenkinsAdapter {
 		tlsCfg.RootCAs = certPool
 	}
 	if c.Insecure || len(c.CACert) > 0 {
-		httpClient = &http.Client{
-			Transport: &http.Transport{TLSClientConfig: tlsCfg},
-		}
+		transport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
+	if c.UserAgent != "" {
+		transport = &userAgentTransport{inner: transport, userAgent: c.UserAgent}
+	}
+	var httpClient *http.Client
+	if transport != http.DefaultTransport {
+		httpClient = &http.Client{Transport: transport}
 	}
 	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
 	return &jenkinsAdapter{Jenkins: client}

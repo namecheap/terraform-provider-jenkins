@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -60,6 +61,24 @@ func TestNewJenkinsClient(t *testing.T) {
 	})
 	if c.Requester.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when Insecure is set")
+	}
+}
+
+func TestNewJenkinsClient_UserAgent(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newJenkinsClient(&Config{ServerURL: srv.URL, UserAgent: "terraform-provider-jenkins my-org"})
+	// make any request to trigger the transport
+	//nolint:errcheck
+	c.Requester.Get(context.Background(), "/", nil, nil)
+
+	if got != "terraform-provider-jenkins my-org" {
+		t.Errorf("User-Agent = %q, want %q", got, "terraform-provider-jenkins my-org")
 	}
 }
 

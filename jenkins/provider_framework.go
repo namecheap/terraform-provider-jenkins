@@ -95,11 +95,17 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 		password = data.Password.ValueString()
 	}
 
+	userAgent := "terraform-provider-jenkins"
+	if extra := os.Getenv("TF_APPEND_USER_AGENT"); extra != "" {
+		userAgent = userAgent + " " + extra
+	}
+
 	config := Config{
 		ServerURL: serverURL,
 		Username:  username,
 		Password:  password,
 		Insecure:  data.Insecure.ValueBool(),
+		UserAgent: userAgent,
 	}
 
 	// Read the certificate
