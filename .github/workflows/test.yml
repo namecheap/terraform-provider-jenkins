@@ -69,8 +69,9 @@ jobs:
           files: coverage.out
           flags: unit
           fail_ci_if_error: false
+          disable_search: true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.7.0 -> actually v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unit-coverage
           path: coverage.out
@@ -90,7 +91,6 @@ jobs:
           check-latest: true
 
       - run: go mod download
-
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -122,8 +122,9 @@ jobs:
           files: coverage.out
           flags: acceptance
           fail_ci_if_error: false
+          disable_search: true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.7.0 -> actually v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: acceptance-coverage
           path: coverage.out
@@ -161,9 +162,7 @@ jobs:
 
       - name: Init integration
         working-directory: integration/
-        # namecheap/jenkins is not yet published on the Terraform Registry.
-        # terraform init installs kreuzwerker/docker and hashicorp/random before
-        # failing on the jenkins registry lookup; we tolerate that exit code so
+        # terraform init fails on the jenkins registry lookup; we tolerate that exit code so
         # downstream steps can use the dev_override binary instead.
         run: terraform init || true
 
