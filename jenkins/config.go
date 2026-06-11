@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -80,4 +81,17 @@ func (j *jenkinsAdapter) Credentials() *jenkins.CredentialsManager {
 // and cannot take a canonical job ID without mishandling it.
 func (j *jenkinsAdapter) DeleteJobInFolder(ctx context.Context, name string, parentIDs ...string) (bool, error) {
 	return j.DeleteJob(ctx, strings.Join(append(parentIDs, name), "/job/"))
+}
+
+// GetPlugin returns the installed plugin with the given short name, or an error if not found.
+func (j *jenkinsAdapter) GetPlugin(ctx context.Context, name string) (*jenkins.Plugin, error) {
+	plugins, err := j.GetPlugins(ctx, 1)
+	if err != nil {
+		return nil, err
+	}
+	p := plugins.Contains(name)
+	if p == nil {
+		return nil, fmt.Errorf("404 plugin %q not installed", name)
+	}
+	return p, nil
 }

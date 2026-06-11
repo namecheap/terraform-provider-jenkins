@@ -145,6 +145,7 @@ func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.D
 		newViewDataSource,
 		newJobDataSource,
 		newFolderDataSource,
+		newPluginDataSource,
 	}
 }
 
