@@ -78,15 +78,20 @@ func folderExists(ctx context.Context, client jenkinsClient, name string) error 
 
 func templateDiff(k, old, new string, d *schema.ResourceData) bool {
 	// Sanitize the XML entries to prevent inadvertent inequalities
-	re := regexp.MustCompile(`<\?xml.+\?>`)
-	old = re.ReplaceAllString(old, "")
-	old = strings.ReplaceAll(old, " ", "")
-	old = strings.TrimSpace(old)
-	old = html.UnescapeString(old)
-	new = re.ReplaceAllString(new, "")
-	new = strings.ReplaceAll(new, " ", "")
-	new = strings.TrimSpace(new)
-	new = html.UnescapeString(new)
+	reXMLDecl := regexp.MustCompile(`<\?xml.+\?>`)
+	// Jenkins rewrites plugin="..." version attributes on every read; strip them so
+	// a version bump in Jenkins does not register as configuration drift.
+	rePlugin := regexp.MustCompile(` plugin="[^"]*"`)
+	normalize := func(s string) string {
+		s = reXMLDecl.ReplaceAllString(s, "")
+		s = rePlugin.ReplaceAllString(s, "")
+		s = strings.ReplaceAll(s, " ", "")
+		s = strings.TrimSpace(s)
+		s = html.UnescapeString(s)
+		return s
+	}
+	old = normalize(old)
+	new = normalize(new)
 
 	log.Printf("[DEBUG] jenkins::diff - Old: %q", old)
 	log.Printf("[DEBUG] jenkins::diff - New: %q", new)
