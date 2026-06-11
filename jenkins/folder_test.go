@@ -269,14 +269,12 @@ func Test_folder_Render(t *testing.T) {
 				return
 			}
 
-			strGot := strings.ReplaceAll(string(got), "
-", "")
-			strGot = strings.ReplaceAll(strGot, "  ", "	")
-			strGot = strings.ReplaceAll(strGot, "	", "")
-			want := strings.ReplaceAll(string(tt.want), "
-", "")
-			want = strings.ReplaceAll(want, "  ", "	")
-			want = strings.ReplaceAll(want, "	", "")
+			strGot := strings.ReplaceAll(string(got), "\n", "")
+			strGot = strings.ReplaceAll(strGot, "  ", "\t")
+			strGot = strings.ReplaceAll(strGot, "\t", "")
+			want := strings.ReplaceAll(string(tt.want), "\n", "")
+			want = strings.ReplaceAll(want, "  ", "\t")
+			want = strings.ReplaceAll(want, "\t", "")
 
 			if strGot != want {
 				t.Errorf("folder.Render() = %v, want %v", strGot, want)
