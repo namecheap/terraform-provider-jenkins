@@ -31,7 +31,7 @@ And in `job.xml`:
       <configVersion>2</configVersion>
       <userRemoteConfigs>
         <hudson.plugins.git.UserRemoteConfig>
-          <url>https://github.com/taiidani/terraform-provider-jenkins.git</url>
+          <url>https://github.com/namecheap/terraform-provider-jenkins-v2.git</url>
           <credentialsId>github</credentialsId>
         </hudson.plugins.git.UserRemoteConfig>
       </userRemoteConfigs>

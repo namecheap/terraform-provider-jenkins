@@ -51,9 +51,16 @@ func (j *folder) Render() ([]byte, error) {
 }
 
 func handleXml(def string) []byte {
-	// This is a horrible practice...but Go doesn't seem to have any mature
-	// support for the XML 1.1 specification. As long as Jenkins doesn't make
-	// use of any 1.1 additions then this should still parse.
-	def = strings.ReplaceAll(def, `<?xml version='1.1' encoding='UTF-8'?>`, `<?xml version='1.0' encoding='UTF-8'?>`)
+	// Go's encoding/xml only supports XML 1.0. Jenkins returns XML 1.1
+	// declarations in some responses (e.g. <?xml version="1.1" encoding="UTF-8"?>).
+	// The XML 1.1 additions Jenkins actually uses are backwards-compatible with
+	// 1.0 parsers, so rewriting the version declaration is safe. Both single-
+	// and double-quoted attribute variants are replaced.
+	//
+	// Known issue: if Jenkins config XML ever includes characters outside the
+	// XML 1.0 legal set (C0 control chars), parsing will still fail even with
+	// this workaround. That is a separate upstream bug.
+	def = strings.ReplaceAll(def, "version='1.1'", "version='1.0'")
+	def = strings.ReplaceAll(def, `version="1.1"`, `version="1.0"`)
 	return []byte(def)
 }

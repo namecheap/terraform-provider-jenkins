@@ -44,7 +44,7 @@ jobs:
           check-latest: true
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@4e6e71f6c0eb1690862f2e8fce7c6d4b7e56c61c # v3.28.18
+        uses: github/codeql-action/init@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
@@ -53,6 +53,6 @@ jobs:
         run: go build .
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@4e6e71f6c0eb1690862f2e8fce7c6d4b7e56c61c # v3.28.18
+        uses: github/codeql-action/analyze@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
         with:
           category: "/language:${{ matrix.language }}"
