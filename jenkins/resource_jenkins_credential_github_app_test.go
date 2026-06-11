@@ -66,7 +66,7 @@ func TestGitHubAppCredentials_xmlMarshal(t *testing.T) {
 	if got.PrivateKey != cred.PrivateKey {
 		t.Errorf("PrivateKey = %q, want %q", got.PrivateKey, cred.PrivateKey)
 	}
-	wantLocal := "org.jenkinsci.plugins.github_branch_source.GitHubAppCredentials"
+	wantLocal := "org.jenkinsci.plugins.github__branch__source.GitHubAppCredentials"
 	if got.XMLName.Local != wantLocal {
 		t.Errorf("XMLName.Local = %q, want %q", got.XMLName.Local, wantLocal)
 	}

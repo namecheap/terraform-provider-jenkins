@@ -12,8 +12,9 @@ import (
 
 // GitHubAppCredentials represents a Jenkins GitHub App credential.
 // It requires the GitHub Branch Source plugin.
+// Jenkins/XStream encodes underscores in package names as double underscores, hence github__branch__source.
 type GitHubAppCredentials struct {
-	XMLName     xml.Name `xml:"org.jenkinsci.plugins.github_branch_source.GitHubAppCredentials"`
+	XMLName     xml.Name `xml:"org.jenkinsci.plugins.github__branch__source.GitHubAppCredentials"`
 	ID          string   `xml:"id"`
 	Scope       string   `xml:"scope"`
 	Description string   `xml:"description"`
