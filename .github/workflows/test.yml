@@ -38,6 +38,11 @@ jobs:
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
           version: v2.12
+      - name: govulncheck
+        # Reports vulnerabilities; continue-on-error keeps stdlib vulns from
+        # blocking PRs until Go itself is upgraded to include the fix.
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
   unit:
     name: Unit Tests
