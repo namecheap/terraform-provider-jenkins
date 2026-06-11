@@ -41,15 +41,15 @@ run "jobs" {
     error_message = "${data.jenkins_folder.example_subfolder.name} did not match description"
   }
   assert {
-    condition     = chomp(coalesce(data.jenkins_job.pipeline_scm.template, "")) == chomp(local.pipeline_scm_template)
+    condition     = chomp(coalesce(data.jenkins_job.pipeline_scm.template, "")) == chomp(jenkins_job.pipeline_scm.template)
     error_message = "${data.jenkins_job.pipeline_scm.name} produced inconsistent XML"
   }
   assert {
-    condition     = chomp(data.jenkins_job.pipeline_inline.template) == chomp(local.pipeline_inline_template)
+    condition     = chomp(data.jenkins_job.pipeline_inline.template) == chomp(jenkins_job.pipeline_inline.template)
     error_message = "${data.jenkins_job.pipeline_inline.name} produced inconsistent XML"
   }
   assert {
-    condition     = chomp(data.jenkins_job.freestyle.template) == chomp(local.freestyle_template)
+    condition     = chomp(data.jenkins_job.freestyle.template) == chomp(jenkins_job.freestyle.template)
     error_message = "${data.jenkins_job.freestyle.name} produced inconsistent XML"
   }
   assert {

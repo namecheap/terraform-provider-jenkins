@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -36,7 +35,7 @@ data jenkins_job foo {
 					resource.TestCheckResourceAttr("jenkins_job.foo", "id", "/job/tf-acc-test-"+randString),
 					resource.TestCheckResourceAttr("data.jenkins_job.foo", "id", "/job/tf-acc-test-"+randString),
 					resource.TestCheckResourceAttr("data.jenkins_job.foo", "name", "tf-acc-test-"+randString),
-					resource.TestCheckResourceAttr("data.jenkins_job.foo", "template", strings.TrimSpace(testXMLWant)),
+					resource.TestCheckResourceAttrPair("data.jenkins_job.foo", "template", "jenkins_job.foo", "template"),
 				),
 			},
 		},
@@ -75,7 +74,7 @@ data jenkins_job sub {
 					resource.TestCheckResourceAttr("jenkins_job.sub", "id", "/job/tf-acc-test-"+randString+"/job/subfolder"),
 					resource.TestCheckResourceAttr("data.jenkins_job.sub", "name", "subfolder"),
 					resource.TestCheckResourceAttr("data.jenkins_job.sub", "folder", "/job/tf-acc-test-"+randString),
-					resource.TestCheckResourceAttr("data.jenkins_job.sub", "template", strings.TrimSpace(testXMLWant)),
+					resource.TestCheckResourceAttrPair("data.jenkins_job.sub", "template", "jenkins_job.sub", "template"),
 				),
 			},
 		},

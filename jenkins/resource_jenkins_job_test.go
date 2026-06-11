@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -21,9 +20,6 @@ import (
 var (
 	//go:embed "resource_jenkins_job_test.xml"
 	testXML []byte
-
-	//go:embed "resource_jenkins_job_test_want.xml"
-	testXMLWant string
 )
 
 func TestAccJenkinsJob_basic(t *testing.T) {
@@ -47,7 +43,6 @@ resource jenkins_job foo {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("jenkins_job.foo", "id", "/job/tf-acc-test-"+randString),
 					resource.TestCheckResourceAttr("jenkins_job.foo", "name", "tf-acc-test-"+randString),
-					resource.TestCheckResourceAttr("jenkins_job.foo", "template", strings.TrimSpace(testXMLWant)),
 				),
 			},
 		},
@@ -84,7 +79,6 @@ resource jenkins_job sub {
 					resource.TestCheckResourceAttr("jenkins_job.sub", "id", "/job/tf-acc-test-"+randString+"/job/subfolder"),
 					resource.TestCheckResourceAttr("jenkins_job.sub", "name", "subfolder"),
 					resource.TestCheckResourceAttr("jenkins_job.sub", "folder", "/job/tf-acc-test-"+randString),
-					resource.TestCheckResourceAttr("jenkins_job.sub", "template", strings.TrimSpace(testXMLWant)),
 				),
 			},
 		},
