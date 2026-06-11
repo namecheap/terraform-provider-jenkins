@@ -63,6 +63,40 @@ func TestAccJenkinsCredentialSSH_basic(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsCredentialSSH_ignoreChanges(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialSSHDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_credential_ssh foo {
+				  name = "test-ssh-ignore"
+				  username = "test-user"
+				  privatekey = "initial-private-key"
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_ssh.foo", "id", "/test-ssh-ignore"),
+			},
+			{
+				// Update description while ignoring privatekey; key must not be overwritten.
+				Config: `
+				resource jenkins_credential_ssh foo {
+				  name = "test-ssh-ignore"
+				  username = "test-user"
+				  description = "updated"
+				  privatekey = "initial-private-key"
+
+				  lifecycle {
+				    ignore_changes = [privatekey]
+				  }
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_ssh.foo", "description", "updated"),
+			},
+		},
+	})
+}
+
 func TestAccJenkinsCredentialSSH_folder(t *testing.T) {
 	var cred jenkins.SSHCredentials
 	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
