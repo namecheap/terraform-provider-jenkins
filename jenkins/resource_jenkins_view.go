@@ -111,8 +111,8 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	assigedProjects := data.AssignedProjects.Elements()
-	for _, project := range assigedProjects {
+	assignedProjects := data.AssignedProjects.Elements()
+	for _, project := range assignedProjects {
 		projectName := strings.Trim(project.String(), "\"")
 		_, err := view.AddJob(ctx, projectName)
 		if err != nil {
