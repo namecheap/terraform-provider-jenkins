@@ -26,14 +26,6 @@ Get the attributes of an Azure Service Principal credential within Jenkins.
 
 ### Read-Only
 
-- `authentication_endpoint` (String) Override the Azure Active Directory endpoint for the selected Azure environment.
-- `azure_environment_name` (String) The Azure Cloud environment name. Allowed values are "Azure", "Azure China", "Azure Germany", "Azure US Government".
-- `client_id` (String) The client id (application id) of the Azure Service Principal.
 - `description` (String) A human readable description of the credentials being stored.
-- `graph_endpoint` (String) Override the Azure graph endpoint URL for the selected Azure environment.
 - `id` (String) The full canonical job path, e.g. `/job/job-name`
-- `resource_manager_endpoint` (String) Override the Azure resource manager endpoint URL for the selected Azure environment.
 - `scope` (String) The visibility of the credentials to Jenkins agents. This will be either "GLOBAL" or "SYSTEM".
-- `service_management_url` (String) Override the Azure management endpoint URL for the selected Azure environment.
-- `subscription_id` (String) The Azure subscription id mapped to the Azure Service Principal.
-- `tenant` (String) The Azure Tenant ID of the Azure Service Principal.
