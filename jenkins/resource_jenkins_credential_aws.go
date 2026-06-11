@@ -43,7 +43,7 @@ type credentialAwsResource struct {
 var _ resource.ResourceWithConfigure = &credentialAwsResource{}
 var _ resource.ResourceWithImportState = &credentialAwsResource{}
 
-func newcredentialAwsResource() resource.Resource {
+func newCredentialAwsResource() resource.Resource {
 	return &credentialAwsResource{
 		resourceHelper: newResourceHelper(),
 	}

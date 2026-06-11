@@ -37,25 +37,3 @@ func TestValidateFolderName(t *testing.T) {
 		t.Error("expected error for backslash in folder path, got none")
 	}
 }
-
-func TestValidateCredentialScope(t *testing.T) {
-
-	input, ctyPath := "GLOBAL", make(cty.Path, 0)
-	actual := validateCredentialScope(input, ctyPath)
-	if actual.HasError() {
-		t.Errorf("Error, validation failed for input: %s", input)
-	}
-
-	input = "SYSTEM"
-	actual = validateCredentialScope(input, ctyPath)
-	if actual.HasError() {
-		t.Errorf("Error, validation failed for input: %s", input)
-	}
-
-	// Test if we fail when we should
-	input = "WRONG_INPUT"
-	actual = validateCredentialScope(input, ctyPath)
-	if !actual.HasError() {
-		t.Errorf("Error, negative validation failed for input: %s", input)
-	}
-}
