@@ -1,4 +1,4 @@
-module github.com/taiidani/terraform-provider-jenkins
+module github.com/namecheap/terraform-provider-jenkins-v2
 
 go 1.24.3
 
