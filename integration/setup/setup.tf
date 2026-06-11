@@ -12,9 +12,10 @@ resource "docker_image" "jenkins" {
 }
 
 resource "docker_container" "jenkins" {
-  name  = random_pet.name.id
-  image = docker_image.jenkins.image_id
-  wait  = true
+  name         = random_pet.name.id
+  image        = docker_image.jenkins.image_id
+  wait         = true
+  wait_timeout = 120
 
   env = [
     "JAVA_OPTS=-Djenkins.install.runSetupWizard=false",
@@ -23,6 +24,16 @@ resource "docker_container" "jenkins" {
   ports {
     internal = 8080
     ip       = "127.0.0.1"
+  }
+
+  # wait = true only proceeds once this healthcheck reports healthy,
+  # which confirms Jenkins is fully initialised and accepting API calls.
+  healthcheck {
+    test         = ["CMD-SHELL", "curl -sf http://localhost:8080/api/json"]
+    interval     = "4s"
+    timeout      = "3s"
+    start_period = "15s"
+    retries      = 30
   }
 }
 
