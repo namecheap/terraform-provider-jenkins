@@ -1,8 +1,8 @@
 terraform {
   required_providers {
     jenkins = {
-      source  = "taiidani/jenkins"
-      version = ">= 0.5.0"
+      source  = "namecheap/jenkins"
+      version = ">= 1.0.0"
     }
     random = {
       source  = "hashicorp/random"

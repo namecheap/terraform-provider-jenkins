@@ -1,38 +1,74 @@
-BINARY=terraform-provider-jenkins
-export COMPOSE_FILE=./integration/docker-compose.yml
+SHELL := /bin/bash
 
-default: build
+BINARY        := terraform-provider-jenkins
+GOBIN         := $(shell go env GOBIN)
+GOBIN         := $(if $(GOBIN),$(GOBIN),$(shell go env GOPATH)/bin)
+COMPOSE_FILE  := ./integration/docker-compose.yml
 
-# Builds the provider and adds it to your GOBIN folder.
-build:
+export COMPOSE_FILE
+
+.DEFAULT_GOAL := help
+
+.PHONY: help
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: build
+build: ## Compile and install binary to GOBIN (prints terraformrc dev_overrides snippet)
 	go install
-	@echo "Binary has been compiled to $(shell go env GOBIN)/${BINARY}"
-	@echo "In order to have Terraform pick this up you will need to add the following to your $$HOME/.terraformrc file:"
-	@echo "  provider_installation {"
-	@echo "    dev_overrides {"
-	@echo "      \"taiidani/jenkins\" = \"$(shell go env GOBIN)\""
-	@echo "    }"
-	@echo "    direct {}"
-	@echo "  }"
 	@echo ""
-	@echo "This should only be used during development. See https://www.terraform.io/docs/commands/cli-config.html#development-overrides-for-provider-developers for details."
+	@echo "Installed $(BINARY) to $(GOBIN)"
+	@echo "Add this to ~/.terraformrc to use the local build:"
+	@echo ""
+	@echo '  provider_installation {'
+	@echo '    dev_overrides {'
+	@echo '      "namecheap/jenkins" = "$(GOBIN)"'
+	@echo '    }'
+	@echo '    direct {}'
+	@echo '  }'
 
-# Formats TF files and generates documentation
-generate:
+.PHONY: generate
+generate: ## Regenerate docs and any code-gen artifacts
 	cd tools; go generate ./...
 
-# Executes all unit tests for the provider
-test:
+.PHONY: test
+test: ## Run unit tests
 	go test -cover ./...
 
-# Executes all acceptance tests for the provider
-testacc:
+.PHONY: test-cover
+test-cover: ## Run unit tests with a coverage report (used by CI)
+	go test -coverprofile=coverage.out -covermode=atomic ./...
+	go tool cover -func=coverage.out
+
+.PHONY: testacc
+testacc: ## Run acceptance tests against a local Docker Jenkins
 	@docker compose build
 	@docker compose up -d --force-recreate jenkins
-	@while [ "$$(docker inspect jenkins-provider-acc --format '{{ .State.Health.Status }}')" != "healthy" ]; do echo "Waiting for Jenkins to start..."; sleep 3; done
-	TF_ACC=1 JENKINS_URL="http://localhost:8080" JENKINS_USERNAME="admin" JENKINS_PASSWORD="admin" go test -v -cover ./...
+	@while [ "$$(docker inspect jenkins-provider-acc --format '{{ .State.Health.Status }}')" != "healthy" ]; do \
+		echo "Waiting for Jenkins to start..."; sleep 3; \
+	done
+	TF_ACC=1 JENKINS_URL="http://localhost:8080" JENKINS_USERNAME="admin" JENKINS_PASSWORD="admin" \
+		go test -v -cover ./...
 	@docker compose down
 
-# Cleans up any lingering items in your system created by this provider.
-clean:
-	rm -f "$(shell go env GOBIN)/$(BINARY)"
+.PHONY: lint
+lint: ## Run golangci-lint
+	golangci-lint run ./...
+
+.PHONY: fmt
+fmt: ## Auto-fix formatting issues
+	golangci-lint fmt ./...
+
+.PHONY: docs
+docs: ## Alias for generate (for compatibility with CI docs check)
+	$(MAKE) generate
+
+.PHONY: docs-validate
+docs-validate: ## Validate docs structure with tfplugindocs
+	@go install github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest
+	@PATH="$(GOBIN):$$PATH" tfplugindocs validate --provider-name "jenkins"
+
+.PHONY: clean
+clean: ## Remove compiled binary
+	rm -f "$(GOBIN)/$(BINARY)"

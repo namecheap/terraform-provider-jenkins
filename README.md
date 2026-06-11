@@ -1,6 +1,6 @@
 # Jenkins Terraform Provider
 
-[![test](https://github.com/taiidani/terraform-provider-jenkins/actions/workflows/test.yml/badge.svg)](https://github.com/taiidani/terraform-provider-jenkins/actions/workflows/test.yml)
+[![test](https://github.com/namecheap/terraform-provider-jenkins/actions/workflows/test.yml/badge.svg)](https://github.com/namecheap/terraform-provider-jenkins/actions/workflows/test.yml)
 
 - Website: https://www.terraform.io
 - [![Gitter chat](https://badges.gitter.im/hashicorp-terraform/Lobby.png)](https://gitter.im/hashicorp-terraform/Lobby)
@@ -17,7 +17,7 @@ This provider has been published to the Terraform Registry at https://registry.t
 > [!NOTE]
 > This repository is infrequently maintained, and only supported as free time allows. I am accepting Issues and Pull Requests but am seeking a full time replacement as maintainer. If you are interested in taking on this project I am open to it! In the meantime, please allow for 1-3 months of turnaround time on your contributions.
 
-The scope of the provider covers the entire (extendable) Jenkins API provided that the https://github.com/bndr/gojenkins client library supports it. I accept submissions for functionality outside of Jenkins Core but expect that the plugin(s) required are _clearly stated_ in the documentation. See [jenkins_credential_vault_approle](https://registry.terraform.io/providers/taiidani/jenkins/latest/docs/resources/credential_vault_approle) for an example of this. I can only support these extensions as much as my own ability to test them allows -- Your Mileage May Vary.
+The scope of the provider covers the entire (extendable) Jenkins API provided that the https://github.com/bndr/gojenkins client library supports it. I accept submissions for functionality outside of Jenkins Core but expect that the plugin(s) required are _clearly stated_ in the documentation. See [jenkins_credential_vault_approle](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/resources/credential_vault_approle) for an example of this. I can only support these extensions as much as my own ability to test them allows -- Your Mileage May Vary.
 
 ## Developing the Provider
 

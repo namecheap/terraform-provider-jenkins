@@ -1,40 +1,88 @@
-name: test
+name: CI
 
-on: [pull_request]
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - "docs/**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - "docs/**"
+
+permissions:
+  contents: read
 
 jobs:
   lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v3
-
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
+        with:
+          version: v2.11
 
   unit:
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
 
       - run: go mod download
 
-      - name: Test
-        run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
+      - name: Test with coverage
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
-      - uses: actions/upload-artifact@v5
+      - name: Check coverage threshold
+        # This provider relies heavily on acceptance tests for coverage.
+        # The threshold guards against removing unit tests entirely, not against
+        # a low total (the acceptance job reports ~67% when Jenkins is running).
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage: ${COVERAGE}%"
+          THRESHOLD=5.0
+          if [ "$(echo "${COVERAGE} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unit-coverage
-          path: coverage.txt
+          path: coverage.out
+          retention-days: 30
 
   acceptance:
+    name: Acceptance Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
 
       - run: go mod download
+
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
 
       - name: Set up services
         env:
@@ -42,62 +90,87 @@ jobs:
         run: |
           docker compose build
           docker compose up -d --force-recreate jenkins
-          while [ "$(docker inspect jenkins-provider-acc --format '{{ .State.Health.Status }}')" != "healthy" ]; do echo "Waiting for Jenkins to start..."; sleep 3; done
+          while [ "$(docker inspect jenkins-provider-acc --format '{{ .State.Health.Status }}')" != "healthy" ]; do
+            echo "Waiting for Jenkins to start..."
+            sleep 3
+          done
 
-      - name: Run Acceptance Tests
+      - name: Run acceptance tests
         env:
           TF_ACC: "1"
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
           JENKINS_PASSWORD: "admin"
-        run: go test -v -covermode=atomic -coverprofile=coverage.txt ./...
+        run: go test -v -covermode=atomic -coverprofile=coverage.out ./...
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: acceptance-coverage
-          path: coverage.txt
+          path: coverage.out
+          retention-days: 30
 
   integration:
+    name: Integration Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Build binary
         run: go install
 
       - name: Add terraformrc override
         run: |
-          cat << EOF > ~/.terraformrc
+          GOBIN_DIR=$(go env GOPATH)/bin
+          cat << TFRC > ~/.terraformrc
           provider_installation {
             dev_overrides {
-              "taiidani/jenkins" = "$(go env GOBIN)"
+              "namecheap/jenkins" = "$GOBIN_DIR"
             }
             direct {}
           }
-          EOF
+          TFRC
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
 
       - name: Init integration
         working-directory: integration/
-        run: terraform init
+        # namecheap/jenkins is not yet published on the Terraform Registry.
+        # terraform init installs kreuzwerker/docker and hashicorp/random before
+        # failing on the jenkins registry lookup; we tolerate that exit code so
+        # downstream steps can use the dev_override binary instead.
+        run: terraform init || true
 
       - name: Run integration
         working-directory: integration/
         run: terraform test
 
   docs:
+    name: Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
 
-      - name: Generate Docs
+      - name: Generate docs
         run: make generate
 
-      - name: Verify directory is clean
-        run: test -z "$(git status --porcelain)"
-
-      - name: Error message
-        if: failure()
+      - name: Verify docs are up-to-date
         run: |
-          echo ':warning: Generated docs differs from committed docs. Did you forget to run `make generate`?' >> $GITHUB_STEP_SUMMARY
+          if ! git diff --exit-code docs/; then
+            echo "::error::Documentation is out of sync. Run 'make generate' and commit the changes."
+            exit 1
+          fi
