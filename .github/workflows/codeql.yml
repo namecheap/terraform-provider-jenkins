@@ -1,20 +1,10 @@
-name: CodeQL
+name: CodeQL (scheduled)
 
+# Runs a weekly deep scan on main. PR/push scans are handled by the CI workflow.
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
-  pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
   schedule:
     - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 env:
   GIT_CONFIG_COUNT: '1'
@@ -23,22 +13,14 @@ env:
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (go)
     runs-on: ubuntu-latest
     permissions:
       security-events: write
       contents: read
       actions: read
-
-    strategy:
-      fail-fast: false
-      matrix:
-        language:
-          - go
-
     env:
       CODEQL_ACTION_FILE_COVERAGE_ON_PRS: true
-
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -52,7 +34,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
         with:
-          languages: ${{ matrix.language }}
+          languages: go
           queries: security-and-quality
 
       - name: Build
@@ -61,4 +43,4 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
         with:
-          category: "/language:${{ matrix.language }}"
+          category: "/language:go"
