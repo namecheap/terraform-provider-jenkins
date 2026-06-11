@@ -71,7 +71,7 @@ jobs:
           cat << EOF > ~/.terraformrc
           provider_installation {
             dev_overrides {
-              "taiidani/jenkins" = "$(go env GOBIN)"
+              "namecheap/jenkins-v2" = "$(go env GOBIN)"
             }
             direct {}
           }
