@@ -13,3 +13,7 @@ mise.local.toml
 # This binary appears when the user runs "go build".
 # It should not typically be built. "go install" is recommended instead.
 terraform-provider-jenkins
+
+# SSH key generated at test-runtime; never committed.
+integration/credentials/id_ed25519
+integration/credentials/id_ed25519.pub

@@ -1,31 +1,28 @@
 package jenkins
 
 import (
+	"reflect"
 	"testing"
 )
 
 func TestFormatFolderName(t *testing.T) {
 	inputSimple, inputFolder, inputNested, inputDuped := "job-name", "folder/job-name", "parent/child/job-name", "parent/job/child/job/job-name"
 
-	// Simple
 	actual := formatFolderName(inputSimple)
 	if actual != inputSimple {
 		t.Errorf("Expected %s but received %s", inputSimple, actual)
 	}
 
-	// Folder
 	actual = formatFolderName(inputFolder)
 	if actual != "folder/job/job-name" {
 		t.Errorf("Expected %s but received %s", inputFolder, actual)
 	}
 
-	// Nested
 	actual = formatFolderName(inputNested)
 	if actual != "parent/job/child/job/job-name" {
 		t.Errorf("Expected %s but received %s", inputNested, actual)
 	}
 
-	// Deduplicate
 	actual = formatFolderName(inputDuped)
 	if actual != "parent/job/child/job/job-name" {
 		t.Errorf("Expected %s but received %s", inputDuped, actual)
@@ -37,53 +34,80 @@ func TestFormatFolderID(t *testing.T) {
 	inputNested := []string{"folder-parent", "folder-id"}
 	inputDuped := []string{"folder-parent", "job", "folder-id"}
 
-	// Simple
 	actual := formatFolderID(inputSimple)
 	if actual != "/job/folder-id" {
 		t.Errorf("Expected /job/folder-id but received %s", actual)
 	}
 
-	// Nested
 	actual = formatFolderID(inputNested)
 	if actual != "/job/folder-parent/job/folder-id" {
 		t.Errorf("Expected /job/folder-parent/job/folder-id but received %s", actual)
 	}
 
-	// Deduplicate
 	actual = formatFolderID(inputDuped)
 	if actual != "/job/folder-parent/job/folder-id" {
 		t.Errorf("Expected /job/folder-parent/job/folder-id but received %s", actual)
 	}
 }
 
+func TestFormatFolderID_Empty(t *testing.T) {
+	if got := formatFolderID(nil); got != "" {
+		t.Errorf("formatFolderID(nil) = %q, want \"\"", got)
+	}
+	if got := formatFolderID([]string{}); got != "" {
+		t.Errorf("formatFolderID([]) = %q, want \"\"", got)
+	}
+}
+
 func TestParseCanonicalJobID(t *testing.T) {
 	inputSimple, inputFolder, inputNested := "job-name", "folder/job-name", "parent/child/job-name"
 
-	// Simple
 	actual, actualFolders := parseCanonicalJobID(inputSimple)
 	if actual != inputSimple || len(actualFolders) != 0 {
 		t.Errorf("Expected %s with empty folder array but received %s %s", inputSimple, actual, actualFolders)
 	}
 
-	// Folder
 	actual, actualFolders = parseCanonicalJobID(inputFolder)
 	if actual != inputSimple || len(actualFolders) != 1 || actualFolders[0] != "folder" {
 		t.Errorf("Expected %s with single folder array but received %s %s", inputSimple, actual, actualFolders)
 	}
 
-	// Nested
 	actual, actualFolders = parseCanonicalJobID(inputNested)
 	if actual != inputSimple || len(actualFolders) != 2 || actualFolders[0] != "parent" || actualFolders[1] != "child" {
 		t.Errorf("Expected %s with double folder array but received %s %s", inputSimple, actual, actualFolders)
 	}
 }
 
+func TestParseCanonicalJobID_Empty(t *testing.T) {
+	name, folders := parseCanonicalJobID("")
+	if name != "" || len(folders) != 0 {
+		t.Errorf("parseCanonicalJobID(\"\") = %q, %v, want \"\", nil", name, folders)
+	}
+}
+
+func TestExtractFolders(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{input: "", want: nil},
+		{input: "folder", want: []string{"folder"}},
+		{input: "/job/folder", want: []string{"folder"}},
+		{input: "/job/parent/job/child", want: []string{"parent", "child"}},
+		{input: "parent/job/child", want: []string{"parent", "child"}},
+	}
+	for _, tt := range tests {
+		got := extractFolders(tt.input)
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("extractFolders(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestTemplateDiff(t *testing.T) {
-	// Set up inputs
 	inputLeft := "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Case</root>"
 	inputRight := "<root>Test Case</root>"
 
-	// Set up Job
 	job := resourceJenkinsJob()
 	bag := job.TestResourceData()
 
@@ -91,7 +115,6 @@ func TestTemplateDiff(t *testing.T) {
 		t.Errorf("Expected %s to be considered equal to %s", inputLeft, inputRight)
 	}
 
-	// Now try invalid inputs
 	inputLeft = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Incorrect</root>"
 	if actual := templateDiff("", inputLeft, inputRight, bag); actual {
 		t.Errorf("Expected %s to be considered inequal to %s", inputLeft, inputRight)
@@ -123,6 +146,32 @@ func TestTemplateDiff_HTMLEntities(t *testing.T) {
 	inputRight = "<root>&apos;/&apos;</root>"
 	if actual := templateDiff("", inputLeft, inputRight, bag); !actual {
 		t.Errorf("Expected %s to be considered equal to %s", inputLeft, inputRight)
+	}
+}
+
+func TestTemplateDiff_PluginVersions(t *testing.T) {
+	job := resourceJenkinsJob()
+	bag := job.TestResourceData()
+
+	// Different plugin versions on identical content must be equal.
+	old := `<flow-definition plugin="workflow-job@2.25"><description>test</description></flow-definition>`
+	newVal := `<flow-definition plugin="workflow-job@1571.1580.v18e46842c125"><description>test</description></flow-definition>`
+	if !templateDiff("", old, newVal, bag) {
+		t.Errorf("different plugin versions should be equal after normalization: %q vs %q", old, newVal)
+	}
+
+	// Multiple plugin attributes with differing versions must also be equal.
+	old = `<a plugin="x@1"><b plugin="y@2">text</b></a>`
+	newVal = `<a plugin="x@99"><b plugin="y@100">text</b></a>`
+	if !templateDiff("", old, newVal, bag) {
+		t.Errorf("multiple plugin version differences should be equal")
+	}
+
+	// Content that differs beyond plugin versions must remain unequal.
+	old = `<flow-definition plugin="workflow-job@2.25"><description>old</description></flow-definition>`
+	newVal = `<flow-definition plugin="workflow-job@2.25"><description>new</description></flow-definition>`
+	if templateDiff("", old, newVal, bag) {
+		t.Errorf("different content should remain unequal after plugin stripping")
 	}
 }
 
