@@ -1,7 +1,6 @@
 package jenkins
 
 import (
-	"bytes"
 	"context"
 	"testing"
 
@@ -47,7 +46,7 @@ func TestNewJenkinsClient(t *testing.T) {
 	}
 
 	c = newJenkinsClient(&Config{
-		CACert: bytes.NewBufferString("certificate"),
+		CACert: []byte("certificate"),
 	})
 	if string(c.Requester.CACert) != "certificate" {
 		t.Errorf("Initialization did not extract certificate data")
