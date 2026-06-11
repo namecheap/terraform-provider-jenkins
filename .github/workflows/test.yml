@@ -33,7 +33,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          check-latest: true
       - name: golangci-lint
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
@@ -56,7 +55,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          check-latest: true
       - name: Initialize CodeQL
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
@@ -81,7 +79,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          check-latest: true
 
       - name: Test with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
@@ -131,7 +128,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          check-latest: true
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -155,7 +151,7 @@ jobs:
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
           JENKINS_PASSWORD: ${{ secrets.JENKINS_PASSWORD || 'admin' }}
-        run: go test -v -covermode=atomic -coverprofile=coverage.txt ./...
+        run: go test -v -covermode=atomic -coverprofile=coverage.txt -run "^TestAcc" ./...
 
       - name: Trust Codecov GPG key
         run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
@@ -186,7 +182,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          check-latest: true
 
       - name: Build binary
         run: go install
@@ -230,7 +225,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          check-latest: true
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
