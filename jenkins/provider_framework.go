@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -99,12 +100,22 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 	// Read the certificate
 	var err error
 	if caCert != "" {
-		config.CACert, err = os.Open(caCert)
+		f, err := os.Open(caCert)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Unable to open certificate file",
 				fmt.Sprintf("Unable to open certificate file %s: %s", caCert, err.Error()),
 			)
+			return
+		}
+		defer f.Close()
+		config.CACert, err = io.ReadAll(f)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to read certificate file",
+				fmt.Sprintf("Unable to read certificate file %s: %s", caCert, err.Error()),
+			)
+			return
 		}
 	}
 

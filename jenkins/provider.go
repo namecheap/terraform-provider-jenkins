@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"io"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -88,9 +89,14 @@ func configureProvider(ctx context.Context, d *schema.ResourceData) (interface{}
 	// Read the certificate
 	var err error
 	if caCert != "" {
-		config.CACert, err = os.Open(caCert)
+		f, err := os.Open(caCert)
 		if err != nil {
 			return nil, diag.Errorf("Unable to open certificate file %s: %s", caCert, err.Error())
+		}
+		defer f.Close()
+		config.CACert, err = io.ReadAll(f)
+		if err != nil {
+			return nil, diag.Errorf("Unable to read certificate file %s: %s", caCert, err.Error())
 		}
 	}
 
