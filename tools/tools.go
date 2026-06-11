@@ -11,8 +11,9 @@ import (
 )
 
 // Format Terraform code for use in documentation.
-// If you do not have Terraform installed, you can remove the formatting command, but it is suggested
-// to ensure the documentation is formatted properly.
 //go:generate terraform fmt -recursive ../examples/
 // Generate documentation.
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir ..
+// --provider-name jenkins is required because the repo is named terraform-provider-jenkins-v2;
+// without it tfplugindocs derives the name "jenkins-v2", which mismatches the
+// "jenkins_*" type prefix used in the provider schema.
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir .. --provider-name jenkins
