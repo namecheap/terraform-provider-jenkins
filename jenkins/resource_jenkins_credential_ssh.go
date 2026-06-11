@@ -28,6 +28,7 @@ type credentialSSHResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialSSHResource{}
+var _ resource.ResourceWithImportState = &credentialSSHResource{}
 
 func newCredentialSSHResource() resource.Resource {
 	return &credentialSSHResource{

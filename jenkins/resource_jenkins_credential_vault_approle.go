@@ -42,6 +42,7 @@ type credentialVaultAppRoleResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialVaultAppRoleResource{}
+var _ resource.ResourceWithImportState = &credentialVaultAppRoleResource{}
 
 func newCredentialVaultAppRoleResource() resource.Resource {
 	return &credentialVaultAppRoleResource{

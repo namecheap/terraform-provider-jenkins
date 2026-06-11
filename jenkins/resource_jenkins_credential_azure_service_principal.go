@@ -61,6 +61,7 @@ type credentialAzureServicePrincipalResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialAzureServicePrincipalResource{}
+var _ resource.ResourceWithImportState = &credentialAzureServicePrincipalResource{}
 
 func newCredentialAzureServicePrincipalResource() resource.Resource {
 	return &credentialAzureServicePrincipalResource{
