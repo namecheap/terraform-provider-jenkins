@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -27,6 +28,30 @@ func TestAccJenkinsView_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("jenkins_view.foo", "id", "tf-acc-test-"+randString),
 					resource.TestCheckResourceAttr("jenkins_view.foo", "name", "tf-acc-test-"+randString),
 				),
+			},
+			{
+				ResourceName:      "jenkins_view.foo",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccJenkinsView_folderUnsupported(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+				resource jenkins_view foo {
+				  name   = "tf-acc-test-%s"
+				  folder = "some-folder"
+				}`, randString),
+				ExpectError: regexp.MustCompile(`Folder-Scoped Views Not Supported`),
 			},
 		},
 	})
