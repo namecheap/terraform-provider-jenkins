@@ -182,6 +182,9 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Generate SSH key for credential tests
+        run: ssh-keygen -t ed25519 -N "" -f integration/credentials/id_ed25519
+
       - name: Init integration
         working-directory: integration/
         # terraform init fails on the jenkins registry lookup; we tolerate that exit code so
