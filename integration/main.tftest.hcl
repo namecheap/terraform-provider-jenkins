@@ -22,7 +22,6 @@ run "jobs" {
   }
 
   providers = {
-    random = random
   }
 
   assert {
