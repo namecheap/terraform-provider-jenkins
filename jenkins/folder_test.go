@@ -269,15 +269,57 @@ func Test_folder_Render(t *testing.T) {
 				return
 			}
 
-			strGot := strings.ReplaceAll(string(got), "\n", "")
-			strGot = strings.ReplaceAll(strGot, "  ", "\t")
-			strGot = strings.ReplaceAll(strGot, "\t", "")
-			want := strings.ReplaceAll(string(tt.want), "\n", "")
-			want = strings.ReplaceAll(want, "  ", "\t")
-			want = strings.ReplaceAll(want, "\t", "")
+			strGot := strings.ReplaceAll(string(got), "
+", "")
+			strGot = strings.ReplaceAll(strGot, "  ", "	")
+			strGot = strings.ReplaceAll(strGot, "	", "")
+			want := strings.ReplaceAll(string(tt.want), "
+", "")
+			want = strings.ReplaceAll(want, "  ", "	")
+			want = strings.ReplaceAll(want, "	", "")
 
 			if strGot != want {
 				t.Errorf("folder.Render() = %v, want %v", strGot, want)
+			}
+		})
+	}
+}
+func TestHandleXml(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "double-quote-1.1",
+			input: `<?xml version="1.1" encoding="UTF-8"?><root/>`,
+			want:  `<?xml version="1.0" encoding="UTF-8"?><root/>`,
+		},
+		{
+			name:  "single-quote-1.1",
+			input: `<?xml version='1.1' encoding='UTF-8'?><root/>`,
+			want:  `<?xml version='1.0' encoding='UTF-8'?><root/>`,
+		},
+		{
+			name:  "already-1.0-unchanged",
+			input: `<?xml version="1.0" encoding="UTF-8"?><root/>`,
+			want:  `<?xml version="1.0" encoding="UTF-8"?><root/>`,
+		},
+		{
+			name:  "no-declaration-unchanged",
+			input: `<root/>`,
+			want:  `<root/>`,
+		},
+		{
+			name:  "both-variants-in-one-string",
+			input: `<?xml version="1.1"?><?xml version='1.1'?><root/>`,
+			want:  `<?xml version="1.0"?><?xml version='1.0'?><root/>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(handleXml(tt.input)); got != tt.want {
+				t.Errorf("handleXml() = %q, want %q", got, tt.want)
 			}
 		})
 	}
