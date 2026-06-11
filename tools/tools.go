@@ -13,4 +13,7 @@ import (
 // Format Terraform code for use in documentation.
 //go:generate terraform fmt -recursive ../examples/
 // Generate documentation.
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir ..
+// --provider-name jenkins is explicit even though tfplugindocs would auto-derive
+// "jenkins" from the binary name (terraform-provider-jenkins). Keeping it prevents
+// any future rename from silently changing page titles in the generated docs.
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir .. --provider-name jenkins
