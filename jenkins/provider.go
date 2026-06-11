@@ -41,6 +41,11 @@ func Provider() *schema.Provider {
 				Optional:    true, // Needs to be optional to be able to run terraform validate without providing credentials
 				Description: "The password to authenticate to Jenkins. If you are using the GitHub OAuth authentication method, enter your Personal Access Token here.",
 			},
+			"insecure": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Disables TLS certificate verification. Set to true only for non-production Jenkins instances with self-signed certificates when `ca_cert` cannot be used.",
+			},
 		},
 
 		DataSourcesMap: map[string]*schema.Resource{},
@@ -83,6 +88,7 @@ func configureProvider(ctx context.Context, d *schema.ResourceData) (interface{}
 		ServerURL: serverURL,
 		Username:  username,
 		Password:  password,
+		Insecure:  d.Get("insecure").(bool),
 	}
 
 	// Read the certificate

@@ -54,6 +54,13 @@ func TestNewJenkinsClient(t *testing.T) {
 	if c.Requester.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when CACert is set")
 	}
+
+	c = newJenkinsClient(&Config{
+		Insecure: true,
+	})
+	if c.Requester.Client == http.DefaultClient {
+		t.Error("Expected custom HTTP client when Insecure is set")
+	}
 }
 
 func TestJenkinsAdapter_Credentials(t *testing.T) {

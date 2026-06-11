@@ -30,6 +30,7 @@ Jenkins uses a user/password challenge for authentication. It requires a usernam
 ### Optional
 
 - `ca_cert` (String) The path to the Jenkins self-signed certificate. It may be required in order to authenticate to your Jenkins instance.
+- `insecure` (Boolean) Disables TLS certificate verification. Set to true only for non-production Jenkins instances with self-signed certificates when `ca_cert` cannot be used.
 - `password` (String) The password to authenticate to Jenkins. If you are using the GitHub OAuth authentication method, enter your Personal Access Token here.
 - `server_url` (String) The URL of the Jenkins server to connect to. It should be fully qualified (e.g. `https://...`) and point to the root of the Jenkins server location.
 - `username` (String) The username to authenticate to Jenkins.
