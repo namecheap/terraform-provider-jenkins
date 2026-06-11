@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -165,7 +164,7 @@ func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.
 	cred := VaultAppRoleCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), "404") {
+		if isNotFound(err) {
 			// Job does not exist
 			resp.State.RemoveResource(ctx)
 			return

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -169,7 +168,7 @@ func (r *credentialAwsResource) Read(ctx context.Context, req resource.ReadReque
 	cred := credentialAws{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "404") {
+		if isNotFound(err) {
 			// Job does not exist
 			resp.State.RemoveResource(ctx)
 			return
