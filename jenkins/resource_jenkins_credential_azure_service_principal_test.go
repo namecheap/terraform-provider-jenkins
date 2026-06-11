@@ -46,6 +46,44 @@ func TestAccJenkinsCredentialAzureServicePrincipal_basic(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsCredentialAzureServicePrincipal_ignoreChanges(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialAzureServicePrincipalDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_credential_azure_service_principal foo {
+				  name = "test-azure-sp-ignore"
+				  subscription_id = "sub-123"
+				  client_id = "client-123"
+				  client_secret = "initial-secret"
+				  tenant = "tenant-456"
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "id", "/test-azure-sp-ignore"),
+			},
+			{
+				// Update description while ignoring client_secret; secret must not be overwritten.
+				Config: `
+				resource jenkins_credential_azure_service_principal foo {
+				  name = "test-azure-sp-ignore"
+				  description = "updated"
+				  subscription_id = "sub-123"
+				  client_id = "client-123"
+				  client_secret = "initial-secret"
+				  tenant = "tenant-456"
+
+				  lifecycle {
+				    ignore_changes = [client_secret]
+				  }
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "description", "updated"),
+			},
+		},
+	})
+}
+
 func TestAccJenkinsCredentialAzureServicePrincipal_folder(t *testing.T) {
 	var cred AzureServicePrincipalCredentials
 	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)

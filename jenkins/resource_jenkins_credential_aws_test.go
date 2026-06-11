@@ -174,6 +174,40 @@ func TestAccJenkinscredentialAws_folder_with_iam_role_arn(t *testing.T) {
 	})
 }
 
+func TestAccJenkinscredentialAws_ignoreChanges(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinscredentialAwsDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_credential_aws foo {
+				  name = "test-aws-cred-ignore"
+				  access_key = "foo"
+				  secret_key = "initial-secret"
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_aws.foo", "id", "/test-aws-cred-ignore"),
+			},
+			{
+				// Update description while ignoring secret_key; key must not be overwritten.
+				Config: `
+				resource jenkins_credential_aws foo {
+				  name = "test-aws-cred-ignore"
+				  description = "updated"
+				  access_key = "foo"
+				  secret_key = "initial-secret"
+
+				  lifecycle {
+				    ignore_changes = [secret_key]
+				  }
+				}`,
+				Check: resource.TestCheckResourceAttr("jenkins_credential_aws.foo", "description", "updated"),
+			},
+		},
+	})
+}
+
 func TestAccJenkinscredentialAws_folder(t *testing.T) {
 	var cred credentialAws
 	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
