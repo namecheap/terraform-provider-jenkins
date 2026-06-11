@@ -101,3 +101,10 @@ func templateDiff(k, old, new string, d *schema.ResourceData) bool {
 func generateCredentialID(folder, name string) string {
 	return fmt.Sprintf("%s/%s", folder, name)
 }
+
+// isNotFound reports whether err represents an HTTP 404 response.
+// gojenkins formats credential errors as "invalid response code 404" and job
+// errors as the bare string "404"; strings.Contains handles both forms.
+func isNotFound(err error) bool {
+	return strings.Contains(err.Error(), "404")
+}
