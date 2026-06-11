@@ -3,7 +3,7 @@ resource "random_pet" "name" {
 }
 
 resource "docker_image" "jenkins" {
-  name = "jenkins"
+  name = "jenkins:terraformtest"
 
   build {
     context = "."
