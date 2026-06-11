@@ -24,12 +24,17 @@ func TestValidateJobName(t *testing.T) {
 }
 
 func TestValidateFolderName(t *testing.T) {
+	ctyPath := make(cty.Path, 0)
 
-	input, ctyPath := "folder_name", make(cty.Path, 0)
-	actual := validateFolderName(input, ctyPath)
+	for _, input := range []string{"folder_name", "parent/child", "a/b/c"} {
+		if actual := validateFolderName(input, ctyPath); actual.HasError() {
+			t.Errorf("unexpected error for valid input %q", input)
+		}
+	}
 
-	if actual.HasError() {
-		t.Errorf("Error, validation failed for input: %s", input)
+	// backslashes are not valid Jenkins path separators
+	if actual := validateFolderName(`parent\child`, ctyPath); !actual.HasError() {
+		t.Error("expected error for backslash in folder path, got none")
 	}
 }
 
