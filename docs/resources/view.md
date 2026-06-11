@@ -25,7 +25,7 @@ Manages a view within Jenkins.
 ### Optional
 
 - `assigned_projects` (List of String) The list of projects assigned to the view. For example, the name of a folder.
-- `folder` (String) The folder namespace to store the resource in. If not set will default to global Jenkins.
+- `folder` (String) The folder namespace to store the resource in. **Note:** the gojenkins client does not support folder-scoped views; setting this attribute will cause an error on apply.
 
 ### Read-Only
 

@@ -54,6 +54,10 @@ Manages a view within Jenkins.
 				Computed:            true,
 				MarkdownDescription: "The unique name of this view.",
 			},
+			"folder": schema.StringAttribute{
+				MarkdownDescription: "The folder namespace to store the resource in. **Note:** the gojenkins client does not support folder-scoped views; setting this attribute will cause an error on apply.",
+				Optional:            true,
+			},
 			"assigned_projects": schema.ListAttribute{
 				MarkdownDescription: "The list of projects assigned to the view. For example, the name of a folder.",
 				Optional:            true,
