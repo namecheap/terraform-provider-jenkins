@@ -46,6 +46,10 @@ func (p *JenkinsProvider) Schema(ctx context.Context, req provider.SchemaRequest
 				Optional:    true, // Needs to be optional to be able to run terraform validate without providing credentials
 				Description: "The password to authenticate to Jenkins. If you are using the GitHub OAuth authentication method, enter your Personal Access Token here.",
 			},
+			"insecure": schema.BoolAttribute{
+				Optional:    true,
+				Description: "Disables TLS certificate verification. Set to true only for non-production Jenkins instances with self-signed certificates when `ca_cert` cannot be used.",
+			},
 		},
 	}
 }
@@ -55,6 +59,7 @@ type JenkinsProviderModel struct {
 	CACert    types.String `tfsdk:"ca_cert"`
 	Username  types.String `tfsdk:"username"`
 	Password  types.String `tfsdk:"password"`
+	Insecure  types.Bool   `tfsdk:"insecure"`
 }
 
 // Configure satisfies the provider.Provider interface for JenkinsProvider.
@@ -94,6 +99,7 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 		ServerURL: serverURL,
 		Username:  username,
 		Password:  password,
+		Insecure:  data.Insecure.ValueBool(),
 	}
 
 	// Read the certificate

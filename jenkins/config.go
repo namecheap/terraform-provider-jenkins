@@ -30,17 +30,22 @@ type Config struct {
 	CACert    []byte
 	Username  string
 	Password  string
+	Insecure  bool
 }
 
 func newJenkinsClient(c *Config) *jenkinsAdapter {
 	var httpClient *http.Client
-	if len(c.CACert) > 0 {
+	tlsCfg := &tls.Config{}
+	if c.Insecure {
+		tlsCfg.InsecureSkipVerify = true //nolint:gosec // user-opted-in skip
+	} else if len(c.CACert) > 0 {
 		certPool := x509.NewCertPool()
 		certPool.AppendCertsFromPEM(c.CACert)
+		tlsCfg.RootCAs = certPool
+	}
+	if c.Insecure || len(c.CACert) > 0 {
 		httpClient = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{RootCAs: certPool},
-			},
+			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 		}
 	}
 	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
