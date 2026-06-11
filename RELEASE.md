@@ -7,54 +7,45 @@ This document is the one-time runbook for setting up and performing releases to
 
 ## Prerequisites (one-time setup)
 
-### 1. Generate a GPG signing key
+### 1. Reuse the existing GPG signing key from terraform-provider-spaceship
 
-The Terraform Registry requires all releases to be GPG-signed.
-Run this **once**, on a trusted machine, and store the output securely.
+The `namecheap` organisation already has a GPG signing key registered on the
+Terraform Registry (key ID `D48A102B93ABB761`, "Namecheap Cloud Platform (for
+terraform registry) <squid@namecheap.com>"). **Do not generate a new key** —
+the same key and secrets are reused here.
 
-```bash
-gpg --batch --gen-key <<GPGEOF
-Key-Type: RSA
-Key-Length: 4096
-Subkey-Type: RSA
-Subkey-Length: 4096
-Name-Real: Namecheap Terraform Provider
-Name-Email: sre@namecheap.com
-Expire-Date: 0
-Passphrase: <choose-a-strong-passphrase>
-GPGEOF
-
-FINGERPRINT=$(gpg --list-keys --with-colons sre@namecheap.com | awk -F: '/^fpr/{print $10; exit}')
-echo "Fingerprint: $FINGERPRINT"
-
-# Export public key — paste into Terraform Registry (step 3)
-gpg --export --armor "$FINGERPRINT" > terraform-signing-public.gpg
-
-# Export private key — add to GitHub secrets as GPG_PRIVATE_KEY (step 2)
-gpg --export-secret-keys --armor "$FINGERPRINT" > terraform-signing-private.gpg
-```
-
-Store both files and the passphrase in the team secrets vault before proceeding.
-**Do not commit either file.**
+Retrieve the `GPG_PRIVATE_KEY` and `PASSPHRASE` values from the
+`namecheap/terraform-provider-spaceship` repository (Settings → Secrets and
+variables → Actions) and add them to this repository.
 
 ### 2. Add GitHub repository secrets
 
 Go to **Settings → Secrets and variables → Actions** in this repository and add:
 
-| Secret name       | Value                                                        |
-|-------------------|--------------------------------------------------------------|
-| `GPG_PRIVATE_KEY` | Full contents of `terraform-signing-private.gpg`            |
-| `PASSPHRASE`      | The passphrase used when generating the key                  |
+| Secret name       | Value                                                                              |
+|-------------------|------------------------------------------------------------------------------------|
+| `GPG_PRIVATE_KEY` | Same value as `GPG_PRIVATE_KEY` in `namecheap/terraform-provider-spaceship`        |
+| `PASSPHRASE`      | Same value as `PASSPHRASE` in `namecheap/terraform-provider-spaceship`             |
+
+> **Note:** GitHub secrets are write-only and cannot be read back through the
+> UI or API. Export the values from the secrets vault / 1Password / wherever
+> they were stored when the Spaceship provider was first set up.
 
 ### 3. Connect to Terraform Registry
 
-1. Open [registry.terraform.io](https://registry.terraform.io) and sign in with the **namecheap** GitHub organisation account (requires Owner or Admin permission on the org).
-2. Navigate to the organisation dropdown → **GPG Keys** → **Add a Key**.
-3. Paste the full contents of `terraform-signing-public.gpg` and save.
-4. Click **Publish → Provider** and select `terraform-provider-jenkins-v2`.
-5. The Registry installs a webhook automatically. Verify it appears under **Settings → Webhooks**.
+The `namecheap` organisation GPG key (`D48A102B93ABB761`) is already registered
+at [registry.terraform.io](https://registry.terraform.io) — no need to add
+another key. You only need to publish the provider:
 
-The provider will show "No versions published yet" until the first release tag is pushed.
+1. Open [registry.terraform.io](https://registry.terraform.io) and sign in with
+   the **namecheap** GitHub organisation account (requires Owner or Admin
+   permission on the org).
+2. Click **Publish → Provider** and select `terraform-provider-jenkins-v2`.
+3. The Registry installs a webhook automatically. Verify it appears under
+   **Settings → Webhooks** in this repository.
+
+The provider will show "No versions published yet" until the first release tag
+is pushed.
 
 ---
 
