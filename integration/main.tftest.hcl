@@ -69,7 +69,6 @@ run "credentials" {
 
   providers = {
     random = random
-    tls    = tls
   }
 
   assert {
