@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bndr/gojenkins"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
@@ -28,6 +29,7 @@ type ViewResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &ViewResource{}
+var _ resource.ResourceWithImportState = &ViewResource{}
 
 func newViewResource() resource.Resource {
 	return &ViewResource{
@@ -84,22 +86,15 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	// Validate that the folder exists
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
+	if data.Folder.ValueString() != "" {
 		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
+			"Folder-Scoped Views Not Supported",
+			"The gojenkins client does not support folder-scoped views. Remove the 'folder' attribute from this resource.",
 		)
-
 		return
 	}
 
-	view, err := cm.J.CreateView(ctx, data.Name.ValueString(), gojenkins.LIST_VIEW)
+	view, err := r.client.CreateView(ctx, data.Name.ValueString(), gojenkins.LIST_VIEW)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create Resource",
@@ -121,7 +116,7 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 				fmt.Sprintf("Error adding %q to Jenkins view %q: %s", projectName, data.Name.ValueString(), err),
 			)
 
-			_, err := cm.J.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
+			_, err := r.client.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Unable to Delete Resource",
@@ -158,13 +153,10 @@ func (r *ViewResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	view, err := cm.J.GetView(ctx, data.ID.ValueString())
+	view, err := r.client.GetView(ctx, data.ID.ValueString())
 	if err != nil {
-		if strings.HasSuffix(err.Error(), "404") {
-			// Job does not exist
+		if isNotFound(err) {
+			// View does not exist
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -218,10 +210,7 @@ func (r *ViewResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	_, err := cm.J.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
+	_, err := r.client.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Delete Resource",
@@ -232,4 +221,9 @@ func (r *ViewResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 
 		return
 	}
+}
+
+// ImportState is called when performing import operations of existing resources.
+func (r *ViewResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
