@@ -199,9 +199,11 @@ func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data credentialVaultAppRoleResourceModel
+	var state credentialVaultAppRoleResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -218,8 +220,9 @@ func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resourc
 		RoleID:      data.RoleID.ValueString(),
 	}
 
-	// Only enforce the password if it is non-empty
-	if data.SecretID.ValueString() != "" {
+	// Only send the secret_id if it changed; omitting it leaves the Jenkins-stored
+	// value untouched, which is correct when lifecycle.ignore_changes = [secret_id].
+	if !data.SecretID.Equal(state.SecretID) {
 		cred.SecretID = data.SecretID.ValueString()
 	}
 

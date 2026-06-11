@@ -203,9 +203,11 @@ func (r *credentialAwsResource) Read(ctx context.Context, req resource.ReadReque
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialAwsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data credentialAwsResourceModel
+	var state credentialAwsResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -222,8 +224,9 @@ func (r *credentialAwsResource) Update(ctx context.Context, req resource.UpdateR
 		IamMfaSerialNumber: data.IamMfaSerialNumber.ValueString(),
 	}
 
-	// Only enforce the password if it is non-empty
-	if data.SecretKey.ValueString() != "" {
+	// Only send the secret_key if it changed; omitting it leaves the Jenkins-stored
+	// value untouched, which is correct when lifecycle.ignore_changes = [secret_key].
+	if !data.SecretKey.Equal(state.SecretKey) {
 		cred.SecretKey = data.SecretKey.ValueString()
 	}
 
