@@ -128,7 +128,7 @@ jobs:
           TF_ACC: "1"
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
-          JENKINS_PASSWORD: "admin"
+          JENKINS_PASSWORD: ${{ secrets.JENKINS_PASSWORD }}
         run: go test -v -covermode=atomic -coverprofile=coverage.txt ./...
 
       - name: Trust Codecov GPG key
