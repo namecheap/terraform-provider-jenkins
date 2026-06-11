@@ -27,6 +27,7 @@ type credentialSecretTextResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialSecretTextResource{}
+var _ resource.ResourceWithImportState = &credentialSecretTextResource{}
 
 func newCredentialSecretTextResource() resource.Resource {
 	return &credentialSecretTextResource{

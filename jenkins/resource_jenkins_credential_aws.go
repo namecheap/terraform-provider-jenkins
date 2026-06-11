@@ -42,6 +42,7 @@ type credentialAwsResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialAwsResource{}
+var _ resource.ResourceWithImportState = &credentialAwsResource{}
 
 func newcredentialAwsResource() resource.Resource {
 	return &credentialAwsResource{

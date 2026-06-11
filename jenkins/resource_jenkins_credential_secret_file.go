@@ -28,6 +28,7 @@ type credentialSecretFileResource struct {
 
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialSecretFileResource{}
+var _ resource.ResourceWithImportState = &credentialSecretFileResource{}
 
 func newCredentialSecretFileResource() resource.Resource {
 	return &credentialSecretFileResource{
