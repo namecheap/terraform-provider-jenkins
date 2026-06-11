@@ -1,8 +1,8 @@
 terraform {
   required_providers {
     jenkins = {
-      source  = "taiidani/jenkins"
-      version = "~> 0.5"
+      source  = "namecheap/jenkins-v2"
+      version = "~> 1.0"
     }
     docker = {
       source  = "kreuzwerker/docker"
