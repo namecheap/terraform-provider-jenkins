@@ -3,7 +3,6 @@ package jenkins
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -148,7 +147,7 @@ func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadReque
 	cred := jenkins.SSHCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), "404") {
+		if isNotFound(err) {
 			// Job does not exist
 			resp.State.RemoveResource(ctx)
 			return
