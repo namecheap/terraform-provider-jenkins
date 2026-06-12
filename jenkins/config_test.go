@@ -88,6 +88,42 @@ func TestNewJenkinsClient_UserAgent(t *testing.T) {
 	}
 }
 
+func TestDoDeleteRoundTripper_converts302ToSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/credentials/", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	transport := &doDeleteRoundTripper{base: http.DefaultTransport}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/doDelete", nil)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestDoDeleteRoundTripper_passesThrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/other/", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	transport := &doDeleteRoundTripper{base: http.DefaultTransport}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/other", nil)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("StatusCode = %d, want 302 (passthrough for non-doDelete)", resp.StatusCode)
+	}
+}
+
 func TestJenkinsAdapter_Credentials(t *testing.T) {
 	c := newJenkinsClient(&Config{})
 	cm := c.Credentials()
