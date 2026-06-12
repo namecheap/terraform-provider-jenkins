@@ -52,14 +52,20 @@ func TestNewJenkinsClient(t *testing.T) {
 	})
 	// When CACert is provided, a custom http.Client (not http.DefaultClient) must be used
 	// so the TLS config with the CA cert pool is active.
-	if c.Requester.Client == http.DefaultClient {
+	// gojenkins v1.2.0 stores Requester as a JenkinsRequester interface; type-assert to
+	// the concrete *jenkins.Requester to inspect the underlying http.Client.
+	if r, ok := c.Requester.(*jenkins.Requester); !ok {
+		t.Error("Expected Requester to be *jenkins.Requester")
+	} else if r.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when CACert is set")
 	}
 
 	c = newJenkinsClient(&Config{
 		Insecure: true,
 	})
-	if c.Requester.Client == http.DefaultClient {
+	if r, ok := c.Requester.(*jenkins.Requester); !ok {
+		t.Error("Expected Requester to be *jenkins.Requester")
+	} else if r.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when Insecure is set")
 	}
 }
@@ -79,6 +85,46 @@ func TestNewJenkinsClient_UserAgent(t *testing.T) {
 
 	if got != "terraform-provider-jenkins my-org" {
 		t.Errorf("User-Agent = %q, want %q", got, "terraform-provider-jenkins my-org")
+	}
+}
+
+func TestJenkinsPostRedirectTransport_POST302becomesOK(t *testing.T) {
+	for _, path := range []string{"/doDelete", "/createView", "/addJobToView"} {
+		t.Run(path, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/", http.StatusFound)
+			}))
+			defer srv.Close()
+
+			transport := &jenkinsPostRedirectTransport{base: http.DefaultTransport}
+			req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+path, nil)
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatalf("RoundTrip() error = %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("POST 302 on %s: StatusCode = %d, want 200", path, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestJenkinsPostRedirectTransport_GET302passesThrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	transport := &jenkinsPostRedirectTransport{base: http.DefaultTransport}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/any", nil)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("GET 302 should pass through: StatusCode = %d, want 302", resp.StatusCode)
 	}
 }
 

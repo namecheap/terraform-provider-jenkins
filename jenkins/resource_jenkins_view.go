@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -100,14 +101,20 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	view, err := r.client.CreateView(ctx, data.Name.ValueString(), gojenkins.LIST_VIEW)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create Resource",
-			"An unexpected error occurred while creating the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
+		// gojenkins v1.2.0 CreateView calls GetView immediately after the POST.
+		// That internal GET can fail transiently (Jenkins indexing the new view).
+		// Retry once after a short delay before giving up.
+		time.Sleep(time.Second)
+		view, err = r.client.GetView(ctx, data.Name.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to Create Resource",
+				"An unexpected error occurred while creating the resource. "+
+					"Please report this issue to the provider developers.\n\n"+
+					"Error: "+err.Error(),
+			)
+			return
+		}
 	}
 
 	assignedProjects := data.AssignedProjects.Elements()

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -47,6 +48,28 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return t.inner.RoundTrip(req)
 }
 
+// jenkinsPostRedirectTransport converts HTTP 302 responses to POST requests into
+// 200+{} responses. Jenkins uses 302 redirects as success signals for state-changing
+// operations (createView, addJobToView, doDelete, etc.). gojenkins v1.2.0's
+// ReadJSONResponse now returns JSON decode errors, breaking the old behaviour where
+// HTML redirect pages were silently ignored.
+type jenkinsPostRedirectTransport struct {
+	base http.RoundTripper
+}
+
+func (t *jenkinsPostRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	if resp.StatusCode == http.StatusFound && req.Method == http.MethodPost {
+		_ = resp.Body.Close()
+		resp.StatusCode = http.StatusOK
+		resp.Body = io.NopCloser(strings.NewReader("{}"))
+	}
+	return resp, nil
+}
+
 func newJenkinsClient(c *Config) *jenkinsAdapter {
 	transport := http.RoundTripper(http.DefaultTransport)
 	tlsCfg := &tls.Config{}
@@ -63,10 +86,7 @@ func newJenkinsClient(c *Config) *jenkinsAdapter {
 	if c.UserAgent != "" {
 		transport = &userAgentTransport{inner: transport, userAgent: c.UserAgent}
 	}
-	var httpClient *http.Client
-	if transport != http.DefaultTransport {
-		httpClient = &http.Client{Transport: transport}
-	}
+	httpClient := &http.Client{Transport: &jenkinsPostRedirectTransport{base: transport}}
 	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
 	return &jenkinsAdapter{Jenkins: client}
 }
