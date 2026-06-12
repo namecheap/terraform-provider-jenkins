@@ -88,39 +88,43 @@ func TestNewJenkinsClient_UserAgent(t *testing.T) {
 	}
 }
 
-func TestDoDeleteRoundTripper_converts302ToSuccess(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/credentials/", http.StatusFound)
-	}))
-	defer srv.Close()
+func TestJenkinsPostRedirectTransport_POST302becomesOK(t *testing.T) {
+	for _, path := range []string{"/doDelete", "/createView", "/addJobToView"} {
+		t.Run(path, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/", http.StatusFound)
+			}))
+			defer srv.Close()
 
-	transport := &doDeleteRoundTripper{base: http.DefaultTransport}
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/doDelete", nil)
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("RoundTrip() error = %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
+			transport := &jenkinsPostRedirectTransport{base: http.DefaultTransport}
+			req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+path, nil)
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatalf("RoundTrip() error = %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("POST 302 on %s: StatusCode = %d, want 200", path, resp.StatusCode)
+			}
+		})
 	}
 }
 
-func TestDoDeleteRoundTripper_passesThrough(t *testing.T) {
+func TestJenkinsPostRedirectTransport_GET302passesThrough(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/other/", http.StatusFound)
+		http.Redirect(w, r, "/", http.StatusFound)
 	}))
 	defer srv.Close()
 
-	transport := &doDeleteRoundTripper{base: http.DefaultTransport}
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/other", nil)
+	transport := &jenkinsPostRedirectTransport{base: http.DefaultTransport}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/any", nil)
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("RoundTrip() error = %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusFound {
-		t.Errorf("StatusCode = %d, want 302 (passthrough for non-doDelete)", resp.StatusCode)
+		t.Errorf("GET 302 should pass through: StatusCode = %d, want 302", resp.StatusCode)
 	}
 }
 
