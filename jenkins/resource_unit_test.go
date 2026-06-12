@@ -55,15 +55,32 @@ func TestResourceHelperSchema(t *testing.T) {
 func TestResourceHelperSchema_noOverwrite(t *testing.T) {
 	r := newResourceHelper()
 
-	custom := schema.StringAttribute{MarkdownDescription: "custom id"}
+	custom := schema.StringAttribute{
+		MarkdownDescription: "custom id",
+		Optional:            true,
+		Computed:            true,
+	}
 	s := r.schema(map[string]schema.Attribute{"id": custom})
 
 	got, ok := s["id"]
 	if !ok {
 		t.Fatal("schema() removed custom id attribute")
 	}
-	if got.(schema.StringAttribute).MarkdownDescription != "custom id" {
-		t.Error("schema() overwrote custom id attribute")
+	gotAttr, ok := got.(schema.StringAttribute)
+	if !ok {
+		t.Fatalf("schema() attribute \"id\" has unexpected type %T", got)
+	}
+	if gotAttr.MarkdownDescription != "custom id" {
+		t.Error("schema() overwrote custom id MarkdownDescription")
+	}
+	if !gotAttr.Optional {
+		t.Error("schema() overwrote custom id Optional")
+	}
+	if !gotAttr.Computed {
+		t.Error("schema() overwrote custom id Computed")
+	}
+	if gotAttr.Required {
+		t.Error("schema() overwrote custom id Required")
 	}
 }
 
@@ -141,5 +158,21 @@ func TestResourceHelperImportState_invalidID(t *testing.T) {
 	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "no-slash"}, resp)
 	if !resp.Diagnostics.HasError() {
 		t.Error("ImportState() with ID missing slash should return an error")
+	}
+}
+
+func TestResourceHelperImportState_validID(t *testing.T) {
+	r := newResourceHelper()
+	resp := &resource.ImportStateResponse{}
+	// ImportState panics when writing to a nil-schema state (zero ImportStateResponse).
+	// Recover to isolate and verify only the input-validation path.
+	func() {
+		defer func() { _ = recover() }()
+		r.ImportState(context.Background(), resource.ImportStateRequest{ID: "folder/name"}, resp)
+	}()
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "Unexpected Import Identifier" {
+			t.Errorf("ImportState() with valid ID should pass input validation, got: %s", d.Detail())
+		}
 	}
 }
