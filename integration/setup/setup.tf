@@ -27,15 +27,16 @@ resource "docker_container" "jenkins" {
   }
 
   # wait = true only proceeds once this healthcheck reports healthy.
-  # Querying /view/all/api/json (not just /api/json) ensures the view subsystem
-  # is fully initialised — the lighter /api/json endpoint can return 200 while
-  # Jenkins is still loading plugins, causing createView to return HTML.
+  # The && sleep 5 gives Jenkins a 5-second stabilisation window after its view
+  # API becomes available. Without this buffer, terraform test starts resource
+  # creation immediately after healthy, and the first createView POST can race
+  # against Jenkins finishing its plugin initialisation.
   healthcheck {
-    test         = ["CMD-SHELL", "curl -sf http://localhost:8080/view/all/api/json"]
-    interval     = "4s"
-    timeout      = "3s"
+    test         = ["CMD-SHELL", "curl -sf http://localhost:8080/view/all/api/json && sleep 5"]
+    interval     = "10s"
+    timeout      = "8s"
     start_period = "15s"
-    retries      = 30
+    retries      = 15
   }
 }
 
