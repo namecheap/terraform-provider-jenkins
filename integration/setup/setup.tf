@@ -26,10 +26,12 @@ resource "docker_container" "jenkins" {
     ip       = "127.0.0.1"
   }
 
-  # wait = true only proceeds once this healthcheck reports healthy,
-  # which confirms Jenkins is fully initialised and accepting API calls.
+  # wait = true only proceeds once this healthcheck reports healthy.
+  # Querying /view/all/api/json (not just /api/json) ensures the view subsystem
+  # is fully initialised — the lighter /api/json endpoint can return 200 while
+  # Jenkins is still loading plugins, causing createView to return HTML.
   healthcheck {
-    test         = ["CMD-SHELL", "curl -sf http://localhost:8080/api/json"]
+    test         = ["CMD-SHELL", "curl -sf http://localhost:8080/view/all/api/json"]
     interval     = "4s"
     timeout      = "3s"
     start_period = "15s"
