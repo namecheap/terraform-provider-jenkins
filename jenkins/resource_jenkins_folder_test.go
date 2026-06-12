@@ -93,6 +93,40 @@ func TestAccJenkinsFolder_nested(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsFolder_withSecurity(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsFolderDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+				resource jenkins_folder foo {
+				  name        = "tf-acc-test-%s"
+				  description = "Terraform acceptance tests %s"
+				  security {
+				    inheritance_strategy = "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"
+				    permissions = [
+				      "hudson.model.Item.Discover:anonymous",
+				    ]
+				  }
+				}`, randString, randString),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("jenkins_folder.foo", "id", "/job/tf-acc-test-"+randString),
+					resource.TestCheckResourceAttr("jenkins_folder.foo", "security.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("jenkins_folder.foo", "security.*", map[string]string{
+						"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
+						"permissions.#":        "1",
+						"permissions.0":        "hudson.model.Item.Discover:anonymous",
+					}),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckJenkinsFolderDestroy(s *terraform.State) error {
 	ctx := context.Background()
 

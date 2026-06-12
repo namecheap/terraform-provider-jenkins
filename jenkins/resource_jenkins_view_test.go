@@ -57,6 +57,34 @@ func TestAccJenkinsView_folderUnsupported(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsView_withAssignedProjects(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsViewDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+				resource jenkins_folder project {
+				  name = "tf-acc-test-%s"
+				}
+
+				resource jenkins_view foo {
+				  name              = "tf-acc-view-%s"
+				  assigned_projects = [jenkins_folder.project.name]
+				}`, randString, randString),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("jenkins_view.foo", "id", "tf-acc-view-"+randString),
+					resource.TestCheckResourceAttr("jenkins_view.foo", "assigned_projects.#", "1"),
+					resource.TestCheckResourceAttr("jenkins_view.foo", "assigned_projects.0", "tf-acc-test-"+randString),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckJenkinsViewDestroy(s *terraform.State) error {
 	ctx := context.Background()
 
