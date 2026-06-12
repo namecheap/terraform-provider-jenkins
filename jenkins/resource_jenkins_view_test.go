@@ -93,7 +93,7 @@ func testAccCheckJenkinsViewDestroy(s *terraform.State) error {
 			continue
 		}
 
-		_, err := testAccClient.GetJob(ctx, rs.Primary.ID)
+		_, err := testAccClient.GetView(ctx, rs.Primary.ID)
 		if err == nil {
 			return fmt.Errorf("View %s still exists", rs.Primary.ID)
 		}

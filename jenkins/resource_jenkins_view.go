@@ -3,7 +3,6 @@ package jenkins
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/bndr/gojenkins"
@@ -14,6 +13,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
+
+const createViewRetryDelay = time.Second
 
 type ViewResourceModel struct {
 	ID               types.String `tfsdk:"id"`
@@ -104,7 +105,7 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 		// gojenkins v1.2.0 CreateView calls GetView immediately after the POST.
 		// That internal GET can fail transiently (Jenkins indexing the new view).
 		// Retry once after a short delay before giving up.
-		time.Sleep(time.Second)
+		time.Sleep(createViewRetryDelay)
 		view, err = r.client.GetView(ctx, data.Name.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError(
@@ -119,7 +120,15 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	assignedProjects := data.AssignedProjects.Elements()
 	for _, project := range assignedProjects {
-		projectName := strings.Trim(project.String(), "\"")
+		projectStr, ok := project.(types.String)
+		if !ok || projectStr.IsNull() || projectStr.IsUnknown() {
+			resp.Diagnostics.AddError(
+				"Unable to Assign View Projects",
+				"assigned_projects must contain known string values.",
+			)
+			return
+		}
+		projectName := projectStr.ValueString()
 		_, err := view.AddJob(ctx, projectName)
 		if err != nil {
 			resp.Diagnostics.AddError(
