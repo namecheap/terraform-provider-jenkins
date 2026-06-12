@@ -52,14 +52,20 @@ func TestNewJenkinsClient(t *testing.T) {
 	})
 	// When CACert is provided, a custom http.Client (not http.DefaultClient) must be used
 	// so the TLS config with the CA cert pool is active.
-	if c.Requester.Client == http.DefaultClient {
+	// gojenkins v1.2.0 stores Requester as a JenkinsRequester interface; type-assert to
+	// the concrete *jenkins.Requester to inspect the underlying http.Client.
+	if r, ok := c.Requester.(*jenkins.Requester); !ok {
+		t.Error("Expected Requester to be *jenkins.Requester")
+	} else if r.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when CACert is set")
 	}
 
 	c = newJenkinsClient(&Config{
 		Insecure: true,
 	})
-	if c.Requester.Client == http.DefaultClient {
+	if r, ok := c.Requester.(*jenkins.Requester); !ok {
+		t.Error("Expected Requester to be *jenkins.Requester")
+	} else if r.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when Insecure is set")
 	}
 }
