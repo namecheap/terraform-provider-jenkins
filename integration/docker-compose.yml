@@ -1,5 +1,9 @@
 services:
   jenkins:
+    # Naming the image lets CI pre-build it with buildx layer caching and have
+    # `docker compose up` reuse it instead of rebuilding. Local runs build it
+    # the same way when the image is absent.
+    image: terraform-provider-jenkins-acc:latest
     build:
       context: .
       dockerfile: Dockerfile
