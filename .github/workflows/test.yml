@@ -14,6 +14,13 @@ on:
       - "LICENSE"
       - "docs/**"
 
+# Cancel an in-progress PR run when a new commit is pushed to the same branch,
+# so superseded runs stop consuming runners. Main/release runs are never
+# cancelled (each commit there gets its own run).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -152,15 +159,13 @@ jobs:
           cache-from: type=gha,scope=jenkins-acc
           cache-to: type=gha,mode=max,scope=jenkins-acc
 
-      - name: Set up services
+      - name: Start Jenkins
         env:
           COMPOSE_FILE: ./integration/docker-compose.yml
-        run: |
-          docker compose up -d --force-recreate jenkins
-          while [ "$(docker inspect jenkins-provider-acc --format '{{ .State.Health.Status }}')" != "healthy" ]; do
-            echo "Waiting for Jenkins to start..."
-            sleep 3
-          done
+        # Start the container detached and DON'T block here. Jenkins boots
+        # (~10-13s) while the next step compiles the test binary, so the boot
+        # is hidden under work that has to happen anyway.
+        run: docker compose up -d --force-recreate jenkins
 
       - name: Run acceptance tests
         env:
@@ -168,7 +173,15 @@ jobs:
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
           JENKINS_PASSWORD: ${{ secrets.JENKINS_PASSWORD || 'admin' }}
-        run: go test -v -covermode=atomic -coverprofile=coverage.txt -run "^TestAcc" ./...
+        run: |
+          # Warm the build cache (compile only, run no tests) while Jenkins
+          # boots in the background. This overlaps the container startup with
+          # compilation instead of waiting for it serially. -covermode=atomic
+          # matches the real run's build flags so its compile is a cache hit.
+          go test -covermode=atomic -run='^$' ./... >/dev/null
+          # By now Jenkins is almost certainly healthy; confirm before running.
+          timeout 120 bash -c 'until [ "$(docker inspect jenkins-provider-acc --format "{{ .State.Health.Status }}")" = "healthy" ]; do sleep 2; done'
+          go test -v -covermode=atomic -coverprofile=coverage.txt -run "^TestAcc" ./...
 
       - name: Trust Codecov GPG key
         run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
