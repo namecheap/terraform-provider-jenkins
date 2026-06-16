@@ -4,8 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 func TestResourceHelperSchema(t *testing.T) {
@@ -162,17 +166,46 @@ func TestResourceHelperImportState_invalidID(t *testing.T) {
 }
 
 func TestResourceHelperImportState_validID(t *testing.T) {
+	ctx := context.Background()
 	r := newResourceHelper()
-	resp := &resource.ImportStateResponse{}
-	// ImportState panics when writing to a nil-schema state (zero ImportStateResponse).
-	// Recover to isolate and verify only the input-validation path.
-	func() {
-		defer func() { _ = recover() }()
-		r.ImportState(context.Background(), resource.ImportStateRequest{ID: "folder/name"}, resp)
-	}()
-	for _, d := range resp.Diagnostics {
-		if d.Summary() == "Unexpected Import Identifier" {
-			t.Errorf("ImportState() with valid ID should pass input validation, got: %s", d.Detail())
+
+	// ImportState writes the "name", "domain", "folder" and "id" attributes, so
+	// build the state from the credential schema (the only one that defines all
+	// of them) and seed Raw with a known all-null object. Without a real schema
+	// and a non-null object value, State.SetAttribute would panic.
+	s := schema.Schema{Attributes: r.schemaCredential(map[string]schema.Attribute{})}
+	objType := s.Type().TerraformType(ctx).(tftypes.Object)
+	attrs := make(map[string]tftypes.Value, len(objType.AttributeTypes))
+	for name, typ := range objType.AttributeTypes {
+		attrs[name] = tftypes.NewValue(typ, nil)
+	}
+	resp := &resource.ImportStateResponse{
+		State: tfsdk.State{
+			Schema: s,
+			Raw:    tftypes.NewValue(objType, attrs),
+		},
+	}
+
+	r.ImportState(ctx, resource.ImportStateRequest{ID: "my-folder/my-domain/my-name"}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("ImportState(%q) returned error diagnostics: %v", "my-folder/my-domain/my-name", resp.Diagnostics)
+	}
+
+	want := map[string]string{
+		"folder": "my-folder",
+		"domain": "my-domain",
+		"name":   "my-name",
+		"id":     generateCredentialID("my-folder", "my-name"),
+	}
+	for attr, wantVal := range want {
+		var got types.String
+		if diags := resp.State.GetAttribute(ctx, path.Root(attr), &got); diags.HasError() {
+			t.Errorf("GetAttribute(%q) returned diagnostics: %v", attr, diags)
+			continue
+		}
+		if got.ValueString() != wantVal {
+			t.Errorf("ImportState(%q) set %q = %q, want %q", "my-folder/my-domain/my-name", attr, got.ValueString(), wantVal)
 		}
 	}
 }
