@@ -14,6 +14,13 @@ on:
       - "LICENSE"
       - "docs/**"
 
+# Cancel an in-progress PR run when a new commit is pushed to the same branch,
+# so superseded runs stop consuming runners. Main/release runs are never
+# cancelled (each commit there gets its own run).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -40,32 +47,11 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
 
-  codeql:
-    name: CodeQL
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      contents: read
-      actions: read
-    env:
-      CODEQL_ACTION_FILE_COVERAGE_ON_PRS: true
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
-        with:
-          languages: go
-          queries: security-and-quality
-      - name: Build
-        run: go build .
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
-        with:
-          category: "/language:go"
+  # NOTE: per-PR CodeQL (Go) is provided by the org-enforced default-setup
+  # scan ("Analyze (go)", the required status check). A second advanced CodeQL
+  # job here uploaded to the same /language:go category, overwriting it for no
+  # benefit (GitHub advises against running default + advanced setup together).
+  # Extended security-and-quality queries still run weekly via codeql.yml.
 
   unit:
     name: Unit Tests
@@ -124,43 +110,50 @@ jobs:
       id-token: write  # required for Codecov OIDC tokenless upload
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_wrapper: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Build Jenkins image (gha-cached)
-        # build-push-action injects the GitHub Actions cache credentials into
-        # BuildKit so type=gha actually reads/writes the cache. A raw
-        # `docker buildx build` in a run step does not get them, so its
-        # jenkins-plugin-cli layer rebuilds every run and the cache silently
-        # no-ops. load:true loads the image so `docker compose up` reuses it
-        # instead of rebuilding.
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Cache Jenkins acceptance image
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          context: integration
-          load: true
-          tags: terraform-provider-jenkins-acc:latest
-          cache-from: type=gha,scope=jenkins-acc
-          cache-to: type=gha,mode=max,scope=jenkins-acc
+          path: /tmp/jenkins-acc-image.tar
+          key: jenkins-acc-image-${{ hashFiles('integration/Dockerfile') }}
 
-      - name: Set up services
+      - name: Build or load Jenkins image
         env:
           COMPOSE_FILE: ./integration/docker-compose.yml
+        # On a cache hit, load the prebuilt image tarball (~5s) — no buildx
+        # container to spin up, no base-image pull, no plugin download. On a
+        # miss, build it once and save the tarball for later runs. Keyed on the
+        # Dockerfile so the cache invalidates only when the image changes. This
+        # is faster than buildx+gha cache for this small image, whose win was
+        # eaten by the ~11s buildx-container setup.
         run: |
-          docker compose up -d --force-recreate jenkins
-          while [ "$(docker inspect jenkins-provider-acc --format '{{ .State.Health.Status }}')" != "healthy" ]; do
-            echo "Waiting for Jenkins to start..."
-            sleep 3
-          done
+          if [ -f /tmp/jenkins-acc-image.tar ]; then
+            docker load -i /tmp/jenkins-acc-image.tar
+          else
+            docker compose build jenkins
+            docker save -o /tmp/jenkins-acc-image.tar terraform-provider-jenkins-acc:latest
+          fi
+
+      - name: Start Jenkins
+        env:
+          COMPOSE_FILE: ./integration/docker-compose.yml
+        # Start the container detached and DON'T block here. Jenkins boots
+        # (~10-13s) in the background while the next steps install Go and
+        # compile the tests, so the boot is hidden under work that has to
+        # happen anyway instead of being a serial wait.
+        run: docker compose up -d --force-recreate jenkins
+
+      # Install Go and restore module/build caches AFTER Jenkins has started,
+      # so its boot overlaps this step and the warm compile below.
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Run acceptance tests
         env:
@@ -168,7 +161,15 @@ jobs:
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
           JENKINS_PASSWORD: ${{ secrets.JENKINS_PASSWORD || 'admin' }}
-        run: go test -v -covermode=atomic -coverprofile=coverage.txt -run "^TestAcc" ./...
+        run: |
+          # Warm the build cache (compile only, run no tests) while Jenkins
+          # boots in the background. This overlaps the container startup with
+          # compilation instead of waiting for it serially. -covermode=atomic
+          # matches the real run's build flags so its compile is a cache hit.
+          go test -covermode=atomic -run='^$' ./... >/dev/null
+          # By now Jenkins is almost certainly healthy; confirm before running.
+          timeout 120 bash -c 'until [ "$(docker inspect jenkins-provider-acc --format "{{ .State.Health.Status }}")" = "healthy" ]; do sleep 2; done'
+          go test -v -covermode=atomic -coverprofile=coverage.txt -run "^TestAcc" ./...
 
       - name: Trust Codecov GPG key
         run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
