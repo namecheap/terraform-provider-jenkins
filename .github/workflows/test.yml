@@ -137,23 +137,28 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Build Jenkins image (gha-cached)
-        # build-push-action injects the GitHub Actions cache credentials into
-        # BuildKit so type=gha actually reads/writes the cache. A raw
-        # `docker buildx build` in a run step does not get them, so its
-        # jenkins-plugin-cli layer rebuilds every run and the cache silently
-        # no-ops. load:true loads the image so `docker compose up` reuses it
-        # instead of rebuilding.
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Cache Jenkins acceptance image
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          context: integration
-          load: true
-          tags: terraform-provider-jenkins-acc:latest
-          cache-from: type=gha,scope=jenkins-acc
-          cache-to: type=gha,mode=max,scope=jenkins-acc
+          path: /tmp/jenkins-acc-image.tar
+          key: jenkins-acc-image-${{ hashFiles('integration/Dockerfile') }}
+
+      - name: Build or load Jenkins image
+        env:
+          COMPOSE_FILE: ./integration/docker-compose.yml
+        # On a cache hit, load the prebuilt image tarball (~5s) — no buildx
+        # container to spin up, no base-image pull, no plugin download. On a
+        # miss, build it once and save the tarball for later runs. Keyed on the
+        # Dockerfile so the cache invalidates only when the image changes. This
+        # is faster than buildx+gha cache for this small image, whose win was
+        # eaten by the ~11s buildx-container setup.
+        run: |
+          if [ -f /tmp/jenkins-acc-image.tar ]; then
+            docker load -i /tmp/jenkins-acc-image.tar
+          else
+            docker compose build jenkins
+            docker save -o /tmp/jenkins-acc-image.tar terraform-provider-jenkins-acc:latest
+          fi
 
       - name: Start Jenkins
         env:
