@@ -131,10 +131,6 @@ jobs:
       id-token: write  # required for Codecov OIDC tokenless upload
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -163,9 +159,17 @@ jobs:
         env:
           COMPOSE_FILE: ./integration/docker-compose.yml
         # Start the container detached and DON'T block here. Jenkins boots
-        # (~10-13s) while the next step compiles the test binary, so the boot
-        # is hidden under work that has to happen anyway.
+        # (~10-13s) in the background while the next steps install Go and
+        # compile the tests, so the boot is hidden under work that has to
+        # happen anyway instead of being a serial wait.
         run: docker compose up -d --force-recreate jenkins
+
+      # Install Go and restore module/build caches AFTER Jenkins has started,
+      # so its boot overlaps this step and the warm compile below.
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Run acceptance tests
         env:
