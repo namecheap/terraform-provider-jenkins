@@ -197,6 +197,7 @@ func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.D
 		newCredentialSecretTextDataSource,
 		newCredentialSecretFileDataSource,
 		newCredentialSSHDataSource,
+		newCredentialCertificateDataSource,
 		newCredentialAzureServicePrincipalDataSource,
 		newViewDataSource,
 		newJobDataSource,
@@ -217,6 +218,7 @@ func (p *JenkinsProvider) Resources(ctx context.Context) []func() resource.Resou
 		newCredentialUsernameResource,
 		newCredentialVaultAppRoleResource,
 		newCredentialAwsResource,
+		newCredentialCertificateResource,
 		newViewResource,
 		newNodeResource,
 	}
