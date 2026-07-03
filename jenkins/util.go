@@ -87,6 +87,11 @@ var (
 	// rePlugin matches plugin="..." version attributes, which Jenkins rewrites on every
 	// read; stripping them prevents a version bump from registering as configuration drift.
 	rePlugin = regexp.MustCompile(` plugin="[^"]*"`)
+	// reDisabledElement matches the top-level <disabled> element that every Jenkins
+	// config.xml carries. It is stripped from both sides of a template comparison
+	// only when the resource's "disabled" attribute is managed, so that toggling a
+	// job via the enable/disable API does not register as template drift.
+	reDisabledElement = regexp.MustCompile(`<disabled>[^<]*</disabled>`)
 )
 
 // normalizeJobXML applies the string-level normalizations that have historically
@@ -156,21 +161,39 @@ func canonicalizeXML(s string) (string, bool) {
 	return buf.String(), true
 }
 
-func templateDiff(k, old, new string, d *schema.ResourceData) bool {
-	equal := normalizeJobXML(old) == normalizeJobXML(new)
-	if !equal {
-		// Fall back to canonical XML comparison, which additionally ignores
-		// attribute ordering, empty-element syntax, and formatting whitespace.
-		// Re-applying normalizeJobXML to the canonical output keeps this a strict
-		// superset of the string comparison above: it can only remove phantom
-		// diffs, never introduce them. Malformed XML fails to canonicalize and
-		// falls through to the string result.
-		if co, ok := canonicalizeXML(old); ok {
-			if cn, ok := canonicalizeXML(new); ok {
-				equal = normalizeJobXML(co) == normalizeJobXML(cn)
-			}
+// templatesEqual reports whether two job templates are equivalent, ignoring the
+// XML declaration, plugin version annotations, HTML-entity encoding, and spaces
+// (string normalization), and additionally attribute ordering, empty-element
+// syntax, and formatting whitespace (canonical XML comparison). The canonical
+// path is a strict superset of the string path — it can only remove phantom
+// diffs, never introduce them — and malformed XML falls back to the string
+// result. Child element order and text content are always significant.
+func templatesEqual(old, new string) bool {
+	if normalizeJobXML(old) == normalizeJobXML(new) {
+		return true
+	}
+	if co, ok := canonicalizeXML(old); ok {
+		if cn, ok := canonicalizeXML(new); ok {
+			return normalizeJobXML(co) == normalizeJobXML(cn)
 		}
 	}
+	return false
+}
+
+func templateDiff(k, old, new string, d *schema.ResourceData) bool {
+	// When the "disabled" attribute manages the job's enabled state, the
+	// enable/disable API rewrites the template's <disabled> element out of band,
+	// so ignore that element to prevent it from registering as template drift.
+	// GetRawConfig is not populated inside a DiffSuppressFunc, so managed state is
+	// detected via GetOk (true only when disabled is set to true). When the
+	// attribute is unset, the template's <disabled> value diffs normally,
+	// preserving pre-existing behavior.
+	if v, ok := d.GetOk("disabled"); ok && v.(bool) {
+		old = reDisabledElement.ReplaceAllString(old, "")
+		new = reDisabledElement.ReplaceAllString(new, "")
+	}
+
+	equal := templatesEqual(old, new)
 
 	// SECURITY: the job/folder XML can contain inlined secrets (for example
 	// credentials embedded in job configuration), so log only whether it changed

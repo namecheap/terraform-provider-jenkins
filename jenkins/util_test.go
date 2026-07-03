@@ -10,6 +10,7 @@ import (
 	gojenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func TestFormatFolderName(t *testing.T) {
@@ -208,6 +209,126 @@ func TestTemplateDiff_CanonicalXML(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReDisabledElement(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`<project><disabled>true</disabled></project>`, `<project></project>`},
+		{`<project><disabled>false</disabled></project>`, `<project></project>`},
+		{`<project><x/></project>`, `<project><x/></project>`},
+	}
+	for _, c := range cases {
+		if got := reDisabledElement.ReplaceAllString(c.in, ""); got != c.want {
+			t.Errorf("strip(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestTemplateDiff_DisabledManaged exercises the real Resource.Diff path to
+// confirm that CustomizeDiff clears a template diff caused solely by the
+// <disabled> element when the disabled attribute is managed. GetRawConfig reads
+// from InstanceState.RawConfig (see schemaMap.Diff), which the plugin protocol
+// populates from the config; the test sets it directly to mirror that.
+func TestTemplateDiff_DisabledManaged(t *testing.T) {
+	r := resourceJenkinsJob()
+
+	// rawConfig builds a cty config object matching the resource's implied type.
+	// disabled is a *bool so the unmanaged case can send a null.
+	rawConfig := func(template string, disabled *bool) cty.Value {
+		d := cty.NullVal(cty.Bool)
+		if disabled != nil {
+			d = cty.BoolVal(*disabled)
+		}
+		return cty.ObjectVal(map[string]cty.Value{
+			"id":       cty.NullVal(cty.String),
+			"name":     cty.StringVal("x"),
+			"folder":   cty.NullVal(cty.String),
+			"template": cty.StringVal(template),
+			"disabled": d,
+		})
+	}
+	yes := true
+
+	t.Run("managed suppresses disabled-only change", func(t *testing.T) {
+		state := &terraform.InstanceState{
+			ID: "/job/x",
+			Attributes: map[string]string{
+				"id":       "/job/x",
+				"name":     "x",
+				"template": `<project><disabled>true</disabled></project>`,
+				"disabled": "true",
+			},
+			RawConfig: rawConfig(`<project><disabled>false</disabled></project>`, &yes),
+		}
+		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
+			"name":     "x",
+			"template": `<project><disabled>false</disabled></project>`,
+			"disabled": true,
+		})
+		diff, err := r.Diff(context.Background(), state, rc, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff != nil {
+			if d, ok := diff.Attributes["template"]; ok {
+				t.Errorf("expected template diff to be suppressed, got %+v", d)
+			}
+		}
+	})
+
+	t.Run("managed keeps a non-disabled change", func(t *testing.T) {
+		state := &terraform.InstanceState{
+			ID: "/job/x",
+			Attributes: map[string]string{
+				"id":       "/job/x",
+				"name":     "x",
+				"template": `<project><disabled>true</disabled></project>`,
+				"disabled": "true",
+			},
+			RawConfig: rawConfig(`<project><disabled>false</disabled><x/></project>`, &yes),
+		}
+		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
+			"name":     "x",
+			"template": `<project><disabled>false</disabled><x/></project>`,
+			"disabled": true,
+		})
+		diff, err := r.Diff(context.Background(), state, rc, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff == nil {
+			t.Fatal("expected a template diff for a real change, got none")
+		}
+		if _, ok := diff.Attributes["template"]; !ok {
+			t.Errorf("expected a non-<disabled> template change to remain visible")
+		}
+	})
+
+	t.Run("unmanaged keeps disabled change", func(t *testing.T) {
+		state := &terraform.InstanceState{
+			ID: "/job/x",
+			Attributes: map[string]string{
+				"id":       "/job/x",
+				"name":     "x",
+				"template": `<project><disabled>true</disabled></project>`,
+			},
+			RawConfig: rawConfig(`<project><disabled>false</disabled></project>`, nil),
+		}
+		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
+			"name":     "x",
+			"template": `<project><disabled>false</disabled></project>`,
+		})
+		diff, err := r.Diff(context.Background(), state, rc, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff == nil {
+			t.Fatal("expected a template diff when disabled is unmanaged, got none")
+		}
+		if _, ok := diff.Attributes["template"]; !ok {
+			t.Errorf("expected template change to remain visible when disabled is unmanaged")
+		}
+	})
 }
 
 func TestValidateJobXML(t *testing.T) {
