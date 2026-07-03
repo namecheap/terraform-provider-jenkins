@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	jenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/go-retryablehttp"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type jenkinsClient interface {
@@ -59,6 +64,86 @@ type Config struct {
 	Password  string
 	Insecure  bool
 	UserAgent string
+
+	// RequestTimeout bounds each provider HTTP operation, including any retries.
+	// The zero value means no timeout (the historical behaviour).
+	RequestTimeout time.Duration
+	// RetryMax is the number of additional attempts made for a failed idempotent
+	// request. Zero disables retries.
+	RetryMax int
+	// RetryWaitMin and RetryWaitMax bound the exponential backoff between retries.
+	RetryWaitMin time.Duration
+	RetryWaitMax time.Duration
+}
+
+// Resilience defaults and the environment variables that override the matching
+// provider attributes. These are applied by the provider Configure functions so
+// the framework and SDKv2 entry points behave identically.
+const (
+	envRequestTimeout = "JENKINS_REQUEST_TIMEOUT"
+	envRetryMax       = "JENKINS_RETRY_MAX"
+	envRetryWaitMin   = "JENKINS_RETRY_WAIT_MIN"
+	envRetryWaitMax   = "JENKINS_RETRY_WAIT_MAX"
+
+	// defaultRetryMax retries a failed idempotent request four times by default,
+	// smoothing over brief controller unavailability (proxy 502/504, 429, or a
+	// restart) without masking a genuine outage.
+	defaultRetryMax = 4
+
+	// maxErrorBodyExcerpt bounds how many bytes of a failed response body are
+	// echoed into an error diagnostic, so a large proxy error page does not
+	// flood the Terraform output.
+	maxErrorBodyExcerpt = 512
+)
+
+// defaultRetryWaitMin and defaultRetryWaitMax bound the exponential backoff
+// between retry attempts when not overridden.
+var (
+	defaultRetryWaitMin = 1 * time.Second
+	defaultRetryWaitMax = 30 * time.Second
+)
+
+// resolveDuration returns the duration parsed from attr when it is non-empty,
+// else from the named environment variable when set, else def. An unparseable
+// value yields an error identifying the source.
+func resolveDuration(attr, envKey string, def time.Duration) (time.Duration, error) {
+	if attr != "" {
+		d, err := time.ParseDuration(attr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q: %w", attr, err)
+		}
+		return d, nil
+	}
+	if v := os.Getenv(envKey); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q in %s: %w", v, envKey, err)
+		}
+		return d, nil
+	}
+	return def, nil
+}
+
+// resolveRetryMax returns the retry count: attrVal when attrSet is true, else
+// JENKINS_RETRY_MAX when set, else defaultRetryMax. Negative values are rejected.
+func resolveRetryMax(attrVal int, attrSet bool) (int, error) {
+	if attrSet {
+		if attrVal < 0 {
+			return 0, fmt.Errorf("retry_max must be >= 0, got %d", attrVal)
+		}
+		return attrVal, nil
+	}
+	if v := os.Getenv(envRetryMax); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("invalid integer %q in %s: %w", v, envRetryMax, err)
+		}
+		if n < 0 {
+			return 0, fmt.Errorf("%s must be >= 0, got %d", envRetryMax, n)
+		}
+		return n, nil
+	}
+	return defaultRetryMax, nil
 }
 
 // userAgentTransport injects a User-Agent header on every outbound request.
@@ -95,7 +180,91 @@ func (t *jenkinsPostRedirectTransport) RoundTrip(req *http.Request) (*http.Respo
 	return resp, nil
 }
 
+// idempotentMethods lists the HTTP methods that are safe to transparently retry:
+// repeating them has the same effect as a single successful call. POST and PATCH
+// are excluded because Jenkins drives its state-changing operations (createView,
+// doDelete, config submission) over POST, and replaying those could duplicate or
+// corrupt state.
+var idempotentMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodOptions: true,
+	http.MethodPut:     true,
+	http.MethodDelete:  true,
+	http.MethodTrace:   true,
+}
+
+// retryRoutingTransport sends idempotent requests through the retrying transport
+// and every other request straight to the direct transport, guaranteeing that
+// non-idempotent requests (notably POST) are issued exactly once.
+type retryRoutingTransport struct {
+	retrying http.RoundTripper
+	direct   http.RoundTripper
+}
+
+func (t *retryRoutingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if idempotentMethods[req.Method] {
+		return t.retrying.RoundTrip(req)
+	}
+	return t.direct.RoundTrip(req)
+}
+
+// enrichErrorHandler is the retryablehttp.ErrorHandler invoked once retries are
+// exhausted. gojenkins surfaces a failed request as a bare status string; this
+// rebuilds the error with the request method, URL, final status code, and a
+// truncated response body so CI failures are diagnosable.
+func enrichErrorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("jenkins API request failed after %d attempt(s): %w", numTries, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	method, reqURL := "", ""
+	if resp.Request != nil {
+		method = resp.Request.Method
+		reqURL = resp.Request.URL.String()
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyExcerpt))
+	excerpt := strings.TrimSpace(string(body))
+	if excerpt == "" {
+		excerpt = "(empty response body)"
+	}
+	return nil, fmt.Errorf(
+		"jenkins API request failed after %d attempt(s): %s %s: status %d: %s",
+		numTries, method, reqURL, resp.StatusCode, excerpt,
+	)
+}
+
+// retryLogHook emits a DEBUG line via terraform-plugin-log on each retry (the
+// initial attempt, retryNum 0, is not logged). The request context carries the
+// provider's tflog configuration, so these lines appear under TF_LOG=DEBUG.
+func retryLogHook(_ retryablehttp.Logger, req *http.Request, retryNum int) {
+	if retryNum == 0 {
+		return
+	}
+	tflog.Debug(req.Context(), "retrying Jenkins API request", map[string]interface{}{
+		"method":  req.Method,
+		"url":     req.URL.String(),
+		"attempt": retryNum + 1,
+	})
+}
+
 func newJenkinsClient(c *Config) (*jenkinsAdapter, error) {
+	httpClient, err := newHTTPClient(c)
+	if err != nil {
+		return nil, err
+	}
+	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
+	return &jenkinsAdapter{Jenkins: client}, nil
+}
+
+// newHTTPClient assembles the *http.Client used to talk to Jenkins. From the
+// wire outward the layers are: the base transport (TLS trust or an opted-in
+// insecure skip), a User-Agent injector, the POST-302→200 redirect shim, then
+// automatic retries for idempotent requests, and finally an optional
+// per-operation request timeout. It is separated from newJenkinsClient so the
+// retry and timeout behaviour can be unit-tested with httptest.
+func newHTTPClient(c *Config) (*http.Client, error) {
 	transport := http.RoundTripper(http.DefaultTransport)
 	tlsCfg := &tls.Config{}
 	if c.Insecure {
@@ -113,9 +282,31 @@ func newJenkinsClient(c *Config) (*jenkinsAdapter, error) {
 	if c.UserAgent != "" {
 		transport = &userAgentTransport{inner: transport, userAgent: c.UserAgent}
 	}
-	httpClient := &http.Client{Transport: &jenkinsPostRedirectTransport{base: transport}}
-	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
-	return &jenkinsAdapter{Jenkins: client}, nil
+	transport = &jenkinsPostRedirectTransport{base: transport}
+
+	retryMax := c.RetryMax
+	if retryMax < 0 {
+		retryMax = 0
+	}
+	retryClient := retryablehttp.NewClient()
+	retryClient.HTTPClient = &http.Client{Transport: transport}
+	retryClient.RetryMax = retryMax
+	retryClient.RetryWaitMin = c.RetryWaitMin
+	retryClient.RetryWaitMax = c.RetryWaitMax
+	retryClient.CheckRetry = retryablehttp.DefaultRetryPolicy
+	retryClient.ErrorHandler = enrichErrorHandler
+	retryClient.RequestLogHook = retryLogHook
+	// Silence retryablehttp's own stderr logger; retries are reported through
+	// tflog via retryLogHook instead.
+	retryClient.Logger = nil
+
+	return &http.Client{
+		Transport: &retryRoutingTransport{
+			retrying: &retryablehttp.RoundTripper{Client: retryClient},
+			direct:   transport,
+		},
+		Timeout: c.RequestTimeout,
+	}, nil
 }
 
 func (j *jenkinsAdapter) Credentials() *jenkins.CredentialsManager {

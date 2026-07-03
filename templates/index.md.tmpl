@@ -16,4 +16,10 @@ The Jenkins provider is used to interact with the Jenkins API. The provider need
 
 Jenkins uses a user/password challenge for authentication. It requires a username & password for determining identity and permissions. This method also supports Jenkins' various authentication plugins, such as GitHub OAuth (through the use of Personal Access Tokens).
 
+## Resilience and timeouts
+
+The provider automatically retries transient Jenkins failures. Retries apply **only to idempotent requests** (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) that fail with a connection error, HTTP `429`, or a `5xx` status (except `501`). `POST` requests — which Jenkins uses for state-changing operations such as creating a view or deleting a job — are issued exactly once and never retried, so a partially applied change is never silently duplicated.
+
+Retry and timeout behaviour is configured with the `retry_max`, `retry_wait_min`, `retry_wait_max`, and `request_timeout` arguments (or their `JENKINS_*` environment-variable equivalents). Retries use exponential backoff between `retry_wait_min` and `retry_wait_max`, and honour a `Retry-After` response header when present. `request_timeout` bounds each operation including its retries and defaults to no timeout. When a request ultimately fails, the error diagnostic includes the request method, URL, final status code, and a truncated response body. Set `TF_LOG=DEBUG` to see a log line for each retry.
+
 {{ .SchemaMarkdown | trimspace }}

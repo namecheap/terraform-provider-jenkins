@@ -51,16 +51,36 @@ func (p *JenkinsProvider) Schema(ctx context.Context, req provider.SchemaRequest
 				Optional:    true,
 				Description: "Disables TLS certificate verification. Set to true only for non-production Jenkins instances with self-signed certificates when `ca_cert` cannot be used.",
 			},
+			"request_timeout": schema.StringAttribute{
+				Optional:    true,
+				Description: "Maximum duration for each Jenkins API operation, including retries, as a Go duration string (e.g. `30s`, `2m`). Overridable via `JENKINS_REQUEST_TIMEOUT`. Defaults to no timeout.",
+			},
+			"retry_max": schema.Int64Attribute{
+				Optional:    true,
+				Description: "Number of times to retry a failed idempotent request (GET/HEAD/OPTIONS/PUT/DELETE) on connection errors, HTTP 429, or 5xx responses. POST requests are never retried. Overridable via `JENKINS_RETRY_MAX`. Defaults to `4`; set to `0` to disable retries.",
+			},
+			"retry_wait_min": schema.StringAttribute{
+				Optional:    true,
+				Description: "Minimum wait between retries as a Go duration string (e.g. `1s`). Overridable via `JENKINS_RETRY_WAIT_MIN`. Defaults to `1s`.",
+			},
+			"retry_wait_max": schema.StringAttribute{
+				Optional:    true,
+				Description: "Maximum wait between retries as a Go duration string (e.g. `30s`). Overridable via `JENKINS_RETRY_WAIT_MAX`. Defaults to `30s`.",
+			},
 		},
 	}
 }
 
 type JenkinsProviderModel struct {
-	ServerURL types.String `tfsdk:"server_url"`
-	CACert    types.String `tfsdk:"ca_cert"`
-	Username  types.String `tfsdk:"username"`
-	Password  types.String `tfsdk:"password"`
-	Insecure  types.Bool   `tfsdk:"insecure"`
+	ServerURL      types.String `tfsdk:"server_url"`
+	CACert         types.String `tfsdk:"ca_cert"`
+	Username       types.String `tfsdk:"username"`
+	Password       types.String `tfsdk:"password"`
+	Insecure       types.Bool   `tfsdk:"insecure"`
+	RequestTimeout types.String `tfsdk:"request_timeout"`
+	RetryMax       types.Int64  `tfsdk:"retry_max"`
+	RetryWaitMin   types.String `tfsdk:"retry_wait_min"`
+	RetryWaitMax   types.String `tfsdk:"retry_wait_max"`
 }
 
 // Configure satisfies the provider.Provider interface for JenkinsProvider.
@@ -105,17 +125,41 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 		userAgent = userAgent + " " + extra
 	}
 
+	requestTimeout, err := resolveDuration(data.RequestTimeout.ValueString(), envRequestTimeout, 0)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid request_timeout", err.Error())
+		return
+	}
+	retryWaitMin, err := resolveDuration(data.RetryWaitMin.ValueString(), envRetryWaitMin, defaultRetryWaitMin)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid retry_wait_min", err.Error())
+		return
+	}
+	retryWaitMax, err := resolveDuration(data.RetryWaitMax.ValueString(), envRetryWaitMax, defaultRetryWaitMax)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid retry_wait_max", err.Error())
+		return
+	}
+	retryMax, err := resolveRetryMax(int(data.RetryMax.ValueInt64()), !data.RetryMax.IsNull())
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid retry_max", err.Error())
+		return
+	}
+
 	config := Config{
-		ServerURL: serverURL,
-		Username:  username,
-		Password:  password,
-		Insecure:  data.Insecure.ValueBool(),
-		UserAgent: userAgent,
+		ServerURL:      serverURL,
+		Username:       username,
+		Password:       password,
+		Insecure:       data.Insecure.ValueBool(),
+		UserAgent:      userAgent,
+		RequestTimeout: requestTimeout,
+		RetryMax:       retryMax,
+		RetryWaitMin:   retryWaitMin,
+		RetryWaitMax:   retryWaitMax,
 	}
 
 	// Read the certificate
 	if caCert != "" {
-		var err error
 		config.CACert, err = os.ReadFile(caCert)
 		if err != nil {
 			resp.Diagnostics.AddError(
