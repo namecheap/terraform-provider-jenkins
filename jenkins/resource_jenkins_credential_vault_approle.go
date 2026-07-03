@@ -24,16 +24,18 @@ type VaultAppRoleCredentials struct {
 }
 
 type credentialVaultAppRoleResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Folder      types.String `tfsdk:"folder"`
-	Description types.String `tfsdk:"description"`
-	Domain      types.String `tfsdk:"domain"`
-	Scope       types.String `tfsdk:"scope"`
-	Namespace   types.String `tfsdk:"namespace"`
-	Path        types.String `tfsdk:"path"`
-	RoleID      types.String `tfsdk:"role_id"`
-	SecretID    types.String `tfsdk:"secret_id"`
+	ID                types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	Folder            types.String `tfsdk:"folder"`
+	Description       types.String `tfsdk:"description"`
+	Domain            types.String `tfsdk:"domain"`
+	Scope             types.String `tfsdk:"scope"`
+	Namespace         types.String `tfsdk:"namespace"`
+	Path              types.String `tfsdk:"path"`
+	RoleID            types.String `tfsdk:"role_id"`
+	SecretID          types.String `tfsdk:"secret_id"`
+	SecretIDWo        types.String `tfsdk:"secret_id_wo"`
+	SecretIDWoVersion types.String `tfsdk:"secret_id_wo_version"`
 }
 
 type credentialVaultAppRoleResource struct {
@@ -43,6 +45,7 @@ type credentialVaultAppRoleResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialVaultAppRoleResource{}
 var _ resource.ResourceWithImportState = &credentialVaultAppRoleResource{}
+var _ resource.ResourceWithConfigValidators = &credentialVaultAppRoleResource{}
 
 func newCredentialVaultAppRoleResource() resource.Resource {
 	return &credentialVaultAppRoleResource{
@@ -64,7 +67,7 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 ~> The "secret_id" property may leave plain-text secret id in your state file. If using the property to manage the secret id in Terraform, ensure that your state file is properly secured and encrypted at rest.
 
 ~> The Jenkins installation that uses this resource is expected to have the [Hashicorp Vault Plugin](https://plugins.jenkins.io/hashicorp-vault-plugin/) installed in their system.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"namespace": schema.StringAttribute{
 				MarkdownDescription: "The Vault namespace of the approle credential.",
 				Optional:            true,
@@ -86,8 +89,13 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 				Optional:            true,
 				Sensitive:           true,
 			},
-		}),
+		}, "secret_id", "The secret_id to be associated with the credentials.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialVaultAppRoleResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return optionalWriteOnlySecretConfigValidators("secret_id")
 }
 
 // Create is called when the provider must create a new resource. Config
@@ -108,6 +116,14 @@ func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resourc
 		return
 	}
 
+	secretID := data.SecretID.ValueString()
+	if secretIDWo := r.readWriteOnly(ctx, req.Config, "secret_id_wo", &resp.Diagnostics); !secretIDWo.IsNull() {
+		secretID = secretIDWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := VaultAppRoleCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
@@ -115,7 +131,7 @@ func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resourc
 		Namespace:   data.Namespace.ValueString(),
 		Path:        data.Path.ValueString(),
 		RoleID:      data.RoleID.ValueString(),
-		SecretID:    data.SecretID.ValueString(),
+		SecretID:    secretID,
 	}
 
 	err := cm.Add(ctx, data.Domain.ValueString(), cred)
@@ -211,10 +227,19 @@ func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resourc
 		RoleID:      data.RoleID.ValueString(),
 	}
 
-	// Only send the secret_id if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [secret_id].
-	if !data.SecretID.Equal(state.SecretID) {
+	// Send the secret_id only when it should change; omitting it leaves the
+	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
+	// Write-only: re-send when the version trigger changed. Plain: re-send when
+	// the value changed.
+	if secretIDWo := r.readWriteOnly(ctx, req.Config, "secret_id_wo", &resp.Diagnostics); !secretIDWo.IsNull() {
+		if !data.SecretIDWoVersion.Equal(state.SecretIDWoVersion) {
+			cred.SecretID = secretIDWo.ValueString()
+		}
+	} else if !data.SecretID.Equal(state.SecretID) {
 		cred.SecretID = data.SecretID.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)

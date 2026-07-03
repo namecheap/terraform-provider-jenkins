@@ -31,6 +31,8 @@ type credentialAwsResourceModel struct {
 	Scope              types.String `tfsdk:"scope"`
 	AccessKey          types.String `tfsdk:"access_key"`
 	SecretKey          types.String `tfsdk:"secret_key"`
+	SecretKeyWo        types.String `tfsdk:"secret_key_wo"`
+	SecretKeyWoVersion types.String `tfsdk:"secret_key_wo_version"`
 	IamRoleArn         types.String `tfsdk:"iam_role_arn"`
 	IamMfaSerialNumber types.String `tfsdk:"iam_mfa_serial_number"`
 }
@@ -42,6 +44,7 @@ type credentialAwsResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialAwsResource{}
 var _ resource.ResourceWithImportState = &credentialAwsResource{}
+var _ resource.ResourceWithConfigValidators = &credentialAwsResource{}
 
 func newCredentialAwsResource() resource.Resource {
 	return &credentialAwsResource{
@@ -63,7 +66,7 @@ Manages an AWS credential within Jenkins.
 ~> The "secret_key" property may leave plain-text secret id in your state file. If using the property to manage the secret id in Terraform, ensure that your state file is properly secured and encrypted at rest.
 
 ~> The Jenkins installation that uses this resource is expected to have the [AWS Credentials Plugin](https://plugins.jenkins.io/aws-credentials/) installed in their system.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"access_key": schema.StringAttribute{
 				MarkdownDescription: "An AWS access key ID. This is the public part of the key pair used to authenticate with AWS services.",
 				Optional:            true,
@@ -90,8 +93,13 @@ Manages an AWS credential within Jenkins.
 				Computed:            true,
 				Default:             stringdefault.StaticString(""),
 			},
-		}),
+		}, "secret_key", "An AWS secret access key. This is the private part of the key pair used to authenticate with AWS services.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialAwsResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return optionalWriteOnlySecretConfigValidators("secret_key")
 }
 
 // Create is called when the provider must create a new resource. Config
@@ -112,12 +120,20 @@ func (r *credentialAwsResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
+	secretKey := data.SecretKey.ValueString()
+	if secretKeyWo := r.readWriteOnly(ctx, req.Config, "secret_key_wo", &resp.Diagnostics); !secretKeyWo.IsNull() {
+		secretKey = secretKeyWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := credentialAws{
 		ID:                 data.Name.ValueString(),
 		Scope:              data.Scope.ValueString(),
 		Description:        data.Description.ValueString(),
 		AccessKey:          data.AccessKey.ValueString(),
-		SecretKey:          data.SecretKey.ValueString(),
+		SecretKey:          secretKey,
 		IamRoleArn:         data.IamRoleArn.ValueString(),
 		IamMfaSerialNumber: data.IamMfaSerialNumber.ValueString(),
 	}
@@ -215,10 +231,19 @@ func (r *credentialAwsResource) Update(ctx context.Context, req resource.UpdateR
 		IamMfaSerialNumber: data.IamMfaSerialNumber.ValueString(),
 	}
 
-	// Only send the secret_key if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [secret_key].
-	if !data.SecretKey.Equal(state.SecretKey) {
+	// Send the secret_key only when it should change; omitting it leaves the
+	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
+	// Write-only: re-send when the version trigger changed. Plain: re-send when
+	// the value changed.
+	if secretKeyWo := r.readWriteOnly(ctx, req.Config, "secret_key_wo", &resp.Diagnostics); !secretKeyWo.IsNull() {
+		if !data.SecretKeyWoVersion.Equal(state.SecretKeyWoVersion) {
+			cred.SecretKey = secretKeyWo.ValueString()
+		}
+	} else if !data.SecretKey.Equal(state.SecretKey) {
 		cred.SecretKey = data.SecretKey.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)

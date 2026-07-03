@@ -11,14 +11,16 @@ import (
 )
 
 type credentialSecretFileResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Folder      types.String `tfsdk:"folder"`
-	Description types.String `tfsdk:"description"`
-	Domain      types.String `tfsdk:"domain"`
-	Scope       types.String `tfsdk:"scope"`
-	Filename    types.String `tfsdk:"filename"`
-	SecretBytes types.String `tfsdk:"secretbytes"`
+	ID                   types.String `tfsdk:"id"`
+	Name                 types.String `tfsdk:"name"`
+	Folder               types.String `tfsdk:"folder"`
+	Description          types.String `tfsdk:"description"`
+	Domain               types.String `tfsdk:"domain"`
+	Scope                types.String `tfsdk:"scope"`
+	Filename             types.String `tfsdk:"filename"`
+	SecretBytes          types.String `tfsdk:"secretbytes"`
+	SecretBytesWo        types.String `tfsdk:"secretbytes_wo"`
+	SecretBytesWoVersion types.String `tfsdk:"secretbytes_wo_version"`
 }
 
 type credentialSecretFileResource struct {
@@ -28,6 +30,7 @@ type credentialSecretFileResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialSecretFileResource{}
 var _ resource.ResourceWithImportState = &credentialSecretFileResource{}
+var _ resource.ResourceWithConfigValidators = &credentialSecretFileResource{}
 
 func newCredentialSecretFileResource() resource.Resource {
 	return &credentialSecretFileResource{
@@ -45,18 +48,23 @@ func (r *credentialSecretFileResource) Schema(_ context.Context, _ resource.Sche
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `
 Manages a secret file credential within Jenkins. This secret file may then be referenced within jobs that are created.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"filename": schema.StringAttribute{
 				MarkdownDescription: "The secret file filename on jenkins server side.",
 				Required:            true,
 			},
 			"secretbytes": schema.StringAttribute{
 				MarkdownDescription: "The secret file, base64 encoded content. It can be sourced directly from local file with filebase64(path) TF function or given directly.",
-				Required:            true,
+				Optional:            true,
 				Sensitive:           true,
 			},
-		}),
+		}, "secretbytes", "The secret file, base64 encoded content.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialSecretFileResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return writeOnlySecretConfigValidators("secretbytes")
 }
 
 // Create is called when the provider must create a new resource. Config
@@ -77,12 +85,20 @@ func (r *credentialSecretFileResource) Create(ctx context.Context, req resource.
 		return
 	}
 
+	secretBytes := data.SecretBytes.ValueString()
+	if secretBytesWo := r.readWriteOnly(ctx, req.Config, "secretbytes_wo", &resp.Diagnostics); !secretBytesWo.IsNull() {
+		secretBytes = secretBytesWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := jenkins.FileCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
 		Description: data.Description.ValueString(),
 		Filename:    data.Filename.ValueString(),
-		SecretBytes: data.SecretBytes.ValueString(),
+		SecretBytes: secretBytes,
 	}
 
 	err := cm.Add(ctx, data.Domain.ValueString(), cred)
@@ -175,10 +191,19 @@ func (r *credentialSecretFileResource) Update(ctx context.Context, req resource.
 		Filename:    data.Filename.ValueString(),
 	}
 
-	// Only send the secret bytes if they changed; omitting them leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [secretbytes].
-	if !data.SecretBytes.Equal(state.SecretBytes) {
+	// Send the secret bytes only when they should change; omitting them leaves the
+	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
+	// Write-only: re-send when the version trigger changed. Plain: re-send when
+	// the value changed.
+	if secretBytesWo := r.readWriteOnly(ctx, req.Config, "secretbytes_wo", &resp.Diagnostics); !secretBytesWo.IsNull() {
+		if !data.SecretBytesWoVersion.Equal(state.SecretBytesWoVersion) {
+			cred.SecretBytes = secretBytesWo.ValueString()
+		}
+	} else if !data.SecretBytes.Equal(state.SecretBytes) {
 		cred.SecretBytes = data.SecretBytes.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)

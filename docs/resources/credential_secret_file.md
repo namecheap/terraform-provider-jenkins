@@ -27,14 +27,18 @@ resource "jenkins_credential_secret_file" "example" {
 
 - `filename` (String) The secret file filename on jenkins server side.
 - `name` (String) The name of the resource being created. This maps to the ID property within Jenkins, and cannot be changed once set.
-- `secretbytes` (String, Sensitive) The secret file, base64 encoded content. It can be sourced directly from local file with filebase64(path) TF function or given directly.
 
 ### Optional
+
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
 
 - `description` (String) A human readable description of the credentials being stored.
 - `domain` (String) The domain store to place the credentials into. If not set will default to the global credentials store.
 - `folder` (String) The folder namespace to store the resource in. If not set will default to global Jenkins.
 - `scope` (String) The visibility of the credentials to Jenkins agents. This must be set to either "GLOBAL" or "SYSTEM". If not set will default to "GLOBAL".
+- `secretbytes` (String, Sensitive) The secret file, base64 encoded content. It can be sourced directly from local file with filebase64(path) TF function or given directly.
+- `secretbytes_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The secret file, base64 encoded content. Write-only: the value is used only during apply and is **never stored in Terraform state or plan**. Requires Terraform >= 1.11, conflicts with `secretbytes`, and must be paired with `secretbytes_wo_version`.
+- `secretbytes_wo_version` (String) Version identifier for `secretbytes_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `secretbytes_wo` to Jenkins. Required when `secretbytes_wo` is set.
 
 ### Read-Only
 

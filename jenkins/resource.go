@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	jenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -16,6 +17,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
@@ -114,6 +117,58 @@ func (r *resourceHelper) ImportState(ctx context.Context, req resource.ImportSta
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("folder"), folder)...)
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), generateCredentialID(folder, name))...)
+}
+
+// addWriteOnlySecret adds the write-only companion pair for a secret attribute
+// named `name` to the given attribute map: `<name>_wo` (write-only, never stored
+// in state) and `<name>_wo_version` (a rotation trigger). Terraform cannot detect
+// changes to a write-only value — it is absent from state — so bumping the
+// version is how a user signals that the secret should be re-sent to Jenkins.
+// Requires Terraform >= 1.11.
+func addWriteOnlySecret(attrs map[string]schema.Attribute, name, desc string) map[string]schema.Attribute {
+	attrs[name+"_wo"] = schema.StringAttribute{
+		MarkdownDescription: desc + " Write-only: the value is used only during apply and is **never stored in Terraform state or plan**. " +
+			"Requires Terraform >= 1.11, conflicts with `" + name + "`, and must be paired with `" + name + "_wo_version`.",
+		Optional:  true,
+		Sensitive: true,
+		WriteOnly: true,
+	}
+	attrs[name+"_wo_version"] = schema.StringAttribute{
+		MarkdownDescription: "Version identifier for `" + name + "_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; " +
+			"change this value (e.g. after rotating the secret) to have Terraform re-send `" + name + "_wo` to Jenkins. Required when `" + name + "_wo` is set.",
+		Optional: true,
+	}
+	return attrs
+}
+
+// writeOnlySecretConfigValidators returns the resource-level validators for a
+// required secret: exactly one of the plain or write-only attribute must be set,
+// and the write-only attribute is always paired with its version trigger.
+func writeOnlySecretConfigValidators(name string) []resource.ConfigValidator {
+	return []resource.ConfigValidator{
+		resourcevalidator.ExactlyOneOf(path.MatchRoot(name), path.MatchRoot(name+"_wo")),
+		resourcevalidator.RequiredTogether(path.MatchRoot(name+"_wo"), path.MatchRoot(name+"_wo_version")),
+	}
+}
+
+// optionalWriteOnlySecretConfigValidators returns the resource-level validators for
+// an optional secret that may be omitted entirely (leaving it unmanaged): at most
+// one of the plain or write-only attribute may be set, and the write-only attribute
+// is always paired with its version trigger.
+func optionalWriteOnlySecretConfigValidators(name string) []resource.ConfigValidator {
+	return []resource.ConfigValidator{
+		resourcevalidator.Conflicting(path.MatchRoot(name), path.MatchRoot(name+"_wo")),
+		resourcevalidator.RequiredTogether(path.MatchRoot(name+"_wo"), path.MatchRoot(name+"_wo_version")),
+	}
+}
+
+// readWriteOnly fetches a write-only string attribute from the config. Write-only
+// values are absent from plan and state, so they must be read from the config
+// during Create/Update; they are available there on every apply.
+func (r *resourceHelper) readWriteOnly(ctx context.Context, config tfsdk.Config, attr string, diags *diag.Diagnostics) types.String {
+	var v types.String
+	diags.Append(config.GetAttribute(ctx, path.Root(attr), &v)...)
+	return v
 }
 
 func (r *resourceHelper) schema(s map[string]schema.Attribute) map[string]schema.Attribute {

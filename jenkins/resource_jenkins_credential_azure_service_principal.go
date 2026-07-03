@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -46,6 +47,8 @@ type credentialAzureServicePrincipalResourceModel struct {
 	SubscriptionId          types.String `tfsdk:"subscription_id"`
 	ClientId                types.String `tfsdk:"client_id"`
 	ClientSecret            types.String `tfsdk:"client_secret"`
+	ClientSecretWo          types.String `tfsdk:"client_secret_wo"`
+	ClientSecretWoVersion   types.String `tfsdk:"client_secret_wo_version"`
 	CertificateId           types.String `tfsdk:"certificate_id"`
 	Tenant                  types.String `tfsdk:"tenant"`
 	AzureEnvironmentName    types.String `tfsdk:"azure_environment_name"`
@@ -62,6 +65,7 @@ type credentialAzureServicePrincipalResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialAzureServicePrincipalResource{}
 var _ resource.ResourceWithImportState = &credentialAzureServicePrincipalResource{}
+var _ resource.ResourceWithConfigValidators = &credentialAzureServicePrincipalResource{}
 
 func newCredentialAzureServicePrincipalResource() resource.Resource {
 	return &credentialAzureServicePrincipalResource{
@@ -83,7 +87,7 @@ Manages an Azure Service Principal credential within Jenkins. This credential ma
 ~> The "client_secret" property may leave plain-text secret id in your state file. If using the property to manage the secret id in Terraform, ensure that your state file is properly secured and encrypted at rest.
 
 ~> The Jenkins installation that uses this resource is expected to have the [Azure Credentials Plugin](https://plugins.jenkins.io/azure-credentials/) installed in their system.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"subscription_id": schema.StringAttribute{
 				MarkdownDescription: "The Azure subscription id mapped to the Azure Service Principal.",
 				Required:            true,
@@ -93,20 +97,14 @@ Manages an Azure Service Principal credential within Jenkins. This credential ma
 				Required:            true,
 			},
 			"client_secret": schema.StringAttribute{
-				MarkdownDescription: "The client secret of the Azure Service Principal. Cannot be used with `certificate_id`. Has to be specified, if `certificate_id` is not specified.",
+				MarkdownDescription: "The client secret of the Azure Service Principal. Cannot be used with `certificate_id` or `client_secret_wo`. Has to be specified, if neither `certificate_id` nor `client_secret_wo` is specified.",
 				Sensitive:           true,
 				Optional:            true,
-				Validators: []validator.String{
-					stringvalidator.ExactlyOneOf(path.MatchRoot("client_secret"), path.MatchRoot("certificate_id")),
-				},
 			},
 			"certificate_id": schema.StringAttribute{
-				MarkdownDescription: "The certificate reference of the Azure Service Principal, pointing to a Jenkins certificate credential. Cannot be used with `client_secret`. Has to be specified, if `client_secret` is not specified.",
+				MarkdownDescription: "The certificate reference of the Azure Service Principal, pointing to a Jenkins certificate credential. Cannot be used with `client_secret` or `client_secret_wo`. Has to be specified, if neither `client_secret` nor `client_secret_wo` is specified.",
 				Sensitive:           true,
 				Optional:            true,
-				Validators: []validator.String{
-					stringvalidator.ExactlyOneOf(path.MatchRoot("client_secret"), path.MatchRoot("certificate_id")),
-				},
 			},
 			"tenant": schema.StringAttribute{
 				MarkdownDescription: "The Azure Tenant ID of the Azure Service Principal.",
@@ -145,7 +143,24 @@ Manages an Azure Service Principal credential within Jenkins. This credential ma
 				Computed:            true,
 				Default:             stringdefault.StaticString(""),
 			},
-		}),
+		}, "client_secret", "The client secret of the Azure Service Principal.")),
+	}
+}
+
+// ConfigValidators enforces that exactly one of client_secret, client_secret_wo,
+// or certificate_id is set, and that the write-only secret is paired with its
+// version trigger.
+func (r *credentialAzureServicePrincipalResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return []resource.ConfigValidator{
+		resourcevalidator.ExactlyOneOf(
+			path.MatchRoot("client_secret"),
+			path.MatchRoot("client_secret_wo"),
+			path.MatchRoot("certificate_id"),
+		),
+		resourcevalidator.RequiredTogether(
+			path.MatchRoot("client_secret_wo"),
+			path.MatchRoot("client_secret_wo_version"),
+		),
 	}
 }
 
@@ -167,10 +182,18 @@ func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, re
 		return
 	}
 
+	clientSecret := data.ClientSecret.ValueString()
+	if clientSecretWo := r.readWriteOnly(ctx, req.Config, "client_secret_wo", &resp.Diagnostics); !clientSecretWo.IsNull() {
+		clientSecret = clientSecretWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	credData := AzureServicePrincipalCredentialsData{
 		SubscriptionId:          data.SubscriptionId.ValueString(),
 		ClientId:                data.ClientId.ValueString(),
-		ClientSecret:            data.ClientSecret.ValueString(),
+		ClientSecret:            clientSecret,
 		CertificateId:           data.CertificateId.ValueString(),
 		Tenant:                  data.Tenant.ValueString(),
 		AzureEnvironmentName:    data.AzureEnvironmentName.ValueString(),
@@ -270,6 +293,18 @@ func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, re
 	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := buildAzureServicePrincipalUpdate(data, state)
+
+	// When the client secret is supplied write-only it is absent from plan/state
+	// (so the builder's plain-value comparison never sends it); re-send it from
+	// config only when its version trigger changed.
+	if clientSecretWo := r.readWriteOnly(ctx, req.Config, "client_secret_wo", &resp.Diagnostics); !clientSecretWo.IsNull() {
+		if !data.ClientSecretWoVersion.Equal(state.ClientSecretWoVersion) {
+			cred.Data.ClientSecret = clientSecretWo.ValueString()
+		}
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
 	if err != nil {

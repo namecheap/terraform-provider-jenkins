@@ -11,15 +11,17 @@ import (
 )
 
 type credentialSSHResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Folder      types.String `tfsdk:"folder"`
-	Description types.String `tfsdk:"description"`
-	Domain      types.String `tfsdk:"domain"`
-	Scope       types.String `tfsdk:"scope"`
-	Username    types.String `tfsdk:"username"`
-	PrivateKey  types.String `tfsdk:"privatekey"`
-	Passphrase  types.String `tfsdk:"passphrase"`
+	ID                  types.String `tfsdk:"id"`
+	Name                types.String `tfsdk:"name"`
+	Folder              types.String `tfsdk:"folder"`
+	Description         types.String `tfsdk:"description"`
+	Domain              types.String `tfsdk:"domain"`
+	Scope               types.String `tfsdk:"scope"`
+	Username            types.String `tfsdk:"username"`
+	PrivateKey          types.String `tfsdk:"privatekey"`
+	PrivateKeyWo        types.String `tfsdk:"privatekey_wo"`
+	PrivateKeyWoVersion types.String `tfsdk:"privatekey_wo_version"`
+	Passphrase          types.String `tfsdk:"passphrase"`
 }
 
 type credentialSSHResource struct {
@@ -29,6 +31,7 @@ type credentialSSHResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialSSHResource{}
 var _ resource.ResourceWithImportState = &credentialSSHResource{}
+var _ resource.ResourceWithConfigValidators = &credentialSSHResource{}
 
 func newCredentialSSHResource() resource.Resource {
 	return &credentialSSHResource{
@@ -48,14 +51,14 @@ func (r *credentialSSHResource) Schema(_ context.Context, _ resource.SchemaReque
 Manages a SSH credential within Jenkins. This SSH credential may then be referenced within jobs that are created.
 
 ~> The "passphrase" and "privatekey" properties may leave plain-text values in your state file. Ensure that your state file is properly secured and encrypted at rest.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"username": schema.StringAttribute{
 				MarkdownDescription: "Username",
 				Required:            true,
 			},
 			"privatekey": schema.StringAttribute{
 				MarkdownDescription: "Private SSH key, can be given as string or read from file with 'file()' terraform function.",
-				Required:            true,
+				Optional:            true,
 				Sensitive:           true,
 			},
 			"passphrase": schema.StringAttribute{
@@ -63,8 +66,13 @@ Manages a SSH credential within Jenkins. This SSH credential may then be referen
 				Optional:            true,
 				Sensitive:           true,
 			},
-		}),
+		}, "privatekey", "Private SSH key, can be given as string or read from file with 'file()' terraform function.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialSSHResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return writeOnlySecretConfigValidators("privatekey")
 }
 
 // Create is called when the provider must create a new resource. Config
@@ -85,6 +93,14 @@ func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
+	privateKey := data.PrivateKey.ValueString()
+	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "privatekey_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
+		privateKey = privateKeyWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := jenkins.SSHCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
@@ -92,7 +108,7 @@ func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateR
 		Username:    data.Username.ValueString(),
 		PrivateKeySource: &jenkins.PrivateKey{
 			Class: jenkins.KeySourceDirectEntryType,
-			Value: data.PrivateKey.ValueString(),
+			Value: privateKey,
 		},
 	}
 
@@ -184,6 +200,18 @@ func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateR
 
 	cm := r.credentialManager(data.Folder.ValueString())
 
+	// The private key is always re-sent on update (its source must be supplied).
+	// With a write-only key the value is read from config, where it is available
+	// on every apply; a plan/update is only triggered when privatekey_wo_version
+	// (or another attribute) changes.
+	privateKey := data.PrivateKey.ValueString()
+	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "privatekey_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
+		privateKey = privateKeyWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := jenkins.SSHCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
@@ -191,7 +219,7 @@ func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateR
 		Username:    data.Username.ValueString(),
 		PrivateKeySource: &jenkins.PrivateKey{
 			Class: jenkins.KeySourceDirectEntryType,
-			Value: data.PrivateKey.ValueString(),
+			Value: privateKey,
 		},
 	}
 

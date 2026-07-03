@@ -40,10 +40,14 @@ resource "jenkins_credential_azure_service_principal" "foo" {
 
 ### Optional
 
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
+
 - `authentication_endpoint` (String) Override the Azure Active Directory endpoint for the selected Azure environment.
 - `azure_environment_name` (String) The Azure Cloud enviroment name. Allowed values are "Azure", "Azure China", "Azure Germany", "Azure US Government".
-- `certificate_id` (String, Sensitive) The certificate reference of the Azure Service Principal, pointing to a Jenkins certificate credential. Cannot be used with `client_secret`. Has to be specified, if `client_secret` is not specified.
-- `client_secret` (String, Sensitive) The client secret of the Azure Service Principal. Cannot be used with `certificate_id`. Has to be specified, if `certificate_id` is not specified.
+- `certificate_id` (String, Sensitive) The certificate reference of the Azure Service Principal, pointing to a Jenkins certificate credential. Cannot be used with `client_secret` or `client_secret_wo`. Has to be specified, if neither `client_secret` nor `client_secret_wo` is specified.
+- `client_secret` (String, Sensitive) The client secret of the Azure Service Principal. Cannot be used with `certificate_id` or `client_secret_wo`. Has to be specified, if neither `certificate_id` nor `client_secret_wo` is specified.
+- `client_secret_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The client secret of the Azure Service Principal. Write-only: the value is used only during apply and is **never stored in Terraform state or plan**. Requires Terraform >= 1.11, conflicts with `client_secret`, and must be paired with `client_secret_wo_version`.
+- `client_secret_wo_version` (String) Version identifier for `client_secret_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `client_secret_wo` to Jenkins. Required when `client_secret_wo` is set.
 - `description` (String) A human readable description of the credentials being stored.
 - `domain` (String) The domain store to place the credentials into. If not set will default to the global credentials store.
 - `folder` (String) The folder namespace to store the resource in. If not set will default to global Jenkins.

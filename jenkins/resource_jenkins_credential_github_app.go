@@ -23,14 +23,16 @@ type GitHubAppCredentials struct {
 }
 
 type credentialGitHubAppResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Folder      types.String `tfsdk:"folder"`
-	Description types.String `tfsdk:"description"`
-	Domain      types.String `tfsdk:"domain"`
-	Scope       types.String `tfsdk:"scope"`
-	AppID       types.String `tfsdk:"app_id"`
-	PrivateKey  types.String `tfsdk:"private_key"`
+	ID                  types.String `tfsdk:"id"`
+	Name                types.String `tfsdk:"name"`
+	Folder              types.String `tfsdk:"folder"`
+	Description         types.String `tfsdk:"description"`
+	Domain              types.String `tfsdk:"domain"`
+	Scope               types.String `tfsdk:"scope"`
+	AppID               types.String `tfsdk:"app_id"`
+	PrivateKey          types.String `tfsdk:"private_key"`
+	PrivateKeyWo        types.String `tfsdk:"private_key_wo"`
+	PrivateKeyWoVersion types.String `tfsdk:"private_key_wo_version"`
 }
 
 type credentialGitHubAppResource struct {
@@ -40,6 +42,7 @@ type credentialGitHubAppResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialGitHubAppResource{}
 var _ resource.ResourceWithImportState = &credentialGitHubAppResource{}
+var _ resource.ResourceWithConfigValidators = &credentialGitHubAppResource{}
 
 func newCredentialGitHubAppResource() resource.Resource {
 	return &credentialGitHubAppResource{
@@ -61,18 +64,23 @@ Manages a GitHub App credential within Jenkins. This credential may then be refe
 ~> The "private_key" property may leave a plain-text private key in your state file. If using the property to manage the private key in Terraform, ensure that your state file is properly secured and encrypted at rest.
 
 ~> The Jenkins installation that uses this resource is expected to have the [GitHub Branch Source Plugin](https://plugins.jenkins.io/github-branch-source/) installed.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"app_id": schema.StringAttribute{
 				MarkdownDescription: "The numeric GitHub App ID.",
 				Required:            true,
 			},
 			"private_key": schema.StringAttribute{
 				MarkdownDescription: "The RSA private key in PKCS#1 PEM format for the GitHub App.",
-				Required:            true,
+				Optional:            true,
 				Sensitive:           true,
 			},
-		}),
+		}, "private_key", "The RSA private key in PKCS#1 PEM format for the GitHub App.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialGitHubAppResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return writeOnlySecretConfigValidators("private_key")
 }
 
 // Create is called when the provider must create a new resource.
@@ -90,12 +98,20 @@ func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
+	privateKey := data.PrivateKey.ValueString()
+	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "private_key_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
+		privateKey = privateKeyWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := GitHubAppCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
 		Description: data.Description.ValueString(),
 		AppID:       data.AppID.ValueString(),
-		PrivateKey:  data.PrivateKey.ValueString(),
+		PrivateKey:  privateKey,
 	}
 
 	err := cm.Add(ctx, data.Domain.ValueString(), cred)
@@ -179,8 +195,19 @@ func (r *credentialGitHubAppResource) Update(ctx context.Context, req resource.U
 
 	// Only send private_key if it changed; omitting it leaves the Jenkins-stored
 	// value untouched, which is correct when lifecycle.ignore_changes = [private_key].
-	if !data.PrivateKey.Equal(state.PrivateKey) {
+	// Send the private_key only when it should change; omitting it leaves the
+	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
+	// Write-only: re-send when the version trigger changed. Plain: re-send when
+	// the value changed.
+	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "private_key_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
+		if !data.PrivateKeyWoVersion.Equal(state.PrivateKeyWoVersion) {
+			cred.PrivateKey = privateKeyWo.ValueString()
+		}
+	} else if !data.PrivateKey.Equal(state.PrivateKey) {
 		cred.PrivateKey = data.PrivateKey.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
