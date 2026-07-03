@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/bndr/gojenkins"
@@ -136,7 +137,7 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 				fmt.Sprintf("Error adding %q to Jenkins view %q: %s", projectName, data.Name.ValueString(), err),
 			)
 
-			_, err := r.client.PostRequest(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
+			_, err := r.client.PostRequest(ctx, "/view/"+url.PathEscape(data.Name.ValueString())+"/doDelete", nil, nil, nil)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Unable to Delete Resource",
@@ -233,7 +234,7 @@ func (r *ViewResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	_, err := r.client.PostRequest(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
+	_, err := r.client.PostRequest(ctx, "/view/"+url.PathEscape(data.Name.ValueString())+"/doDelete", nil, nil, nil)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Delete Resource",
