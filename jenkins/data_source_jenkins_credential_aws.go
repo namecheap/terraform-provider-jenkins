@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialAwsDataSourceModel struct {
@@ -60,6 +61,7 @@ func (d *credentialAwsDataSource) Schema(ctx context.Context, req datasource.Sch
 }
 
 func (d *credentialAwsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "credentialAwsDataSource.Read")
 	var data credentialAwsDataSourceModel
 
 	// Read Terraform configuration data into the model

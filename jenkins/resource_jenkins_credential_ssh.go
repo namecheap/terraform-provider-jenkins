@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSSHResourceModel struct {
@@ -70,6 +71,7 @@ Manages a SSH credential within Jenkins. This SSH credential may then be referen
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialSSHResource.Create")
 	var data credentialSSHResourceModel
 
 	// Read Terraform plan data into the model
@@ -123,6 +125,7 @@ func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateR
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialSSHResource.Read")
 	var data credentialSSHResourceModel
 
 	// Read Terraform plan data into the model
@@ -168,6 +171,7 @@ func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadReque
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialSSHResource.Update")
 	var data credentialSSHResourceModel
 	var state credentialSSHResourceModel
 

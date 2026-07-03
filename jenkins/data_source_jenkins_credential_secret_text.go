@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSecretTextDataSourceModel struct {
@@ -44,6 +45,7 @@ func (d *credentialSecretTextDataSource) Schema(_ context.Context, _ datasource.
 }
 
 func (d *credentialSecretTextDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "credentialSecretTextDataSource.Read")
 	var data credentialSecretTextDataSourceModel
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)

@@ -6,6 +6,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type pluginDataSourceModel struct {
@@ -72,6 +73,7 @@ func (d *pluginDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 }
 
 func (d *pluginDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "pluginDataSource.Read")
 	var data pluginDataSourceModel
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)

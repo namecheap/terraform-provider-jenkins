@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // GitHubAppCredentials represents a Jenkins GitHub App credential.
@@ -76,6 +77,7 @@ Manages a GitHub App credential within Jenkins. This credential may then be refe
 
 // Create is called when the provider must create a new resource.
 func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialGitHubAppResource.Create")
 	var data credentialGitHubAppResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -115,6 +117,7 @@ func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.C
 
 // Read is called when the provider must read resource values in order to update state.
 func (r *credentialGitHubAppResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialGitHubAppResource.Read")
 	var data credentialGitHubAppResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -155,6 +158,7 @@ func (r *credentialGitHubAppResource) Read(ctx context.Context, req resource.Rea
 
 // Update is called to update the state of the resource.
 func (r *credentialGitHubAppResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialGitHubAppResource.Update")
 	var data credentialGitHubAppResourceModel
 	var state credentialGitHubAppResourceModel
 

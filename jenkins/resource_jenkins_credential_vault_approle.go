@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // VaultAppRoleCredentials struct representing credential for storing Vault AppRole role id and secret id
@@ -93,6 +94,7 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleResource.Create")
 	var data credentialVaultAppRoleResourceModel
 
 	// Read Terraform plan data into the model
@@ -140,6 +142,7 @@ func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resourc
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleResource.Read")
 	var data credentialVaultAppRoleResourceModel
 
 	// Read Terraform plan data into the model
@@ -186,6 +189,7 @@ func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleResource.Update")
 	var data credentialVaultAppRoleResourceModel
 	var state credentialVaultAppRoleResourceModel
 

@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // AzureServicePrincipalCredentials struct representing credential for storing Azure service credentials
@@ -152,6 +153,7 @@ Manages an Azure Service Principal credential within Jenkins. This credential ma
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalResource.Create")
 	var data credentialAzureServicePrincipalResourceModel
 
 	// Read Terraform plan data into the model
@@ -209,6 +211,7 @@ func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, re
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalResource.Read")
 	var data credentialAzureServicePrincipalResourceModel
 
 	// Read Terraform plan data into the model
@@ -253,6 +256,7 @@ func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req 
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalResource.Update")
 	var data credentialAzureServicePrincipalResourceModel
 	var state credentialAzureServicePrincipalResourceModel
 
