@@ -3,12 +3,12 @@ package jenkins
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // VaultAppRoleCredentials struct representing credential for storing Vault AppRole role id and secret id
@@ -94,6 +94,7 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleResource.Create")
 	var data credentialVaultAppRoleResourceModel
 
 	// Read Terraform plan data into the model
@@ -102,18 +103,8 @@ func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resourc
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	// Validate that the folder exists
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
-		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
+	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
+	if cm == nil {
 		return
 	}
 
@@ -151,6 +142,7 @@ func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resourc
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleResource.Read")
 	var data credentialVaultAppRoleResourceModel
 
 	// Read Terraform plan data into the model
@@ -159,8 +151,7 @@ func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := VaultAppRoleCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
@@ -198,6 +189,7 @@ func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleResource.Update")
 	var data credentialVaultAppRoleResourceModel
 	var state credentialVaultAppRoleResourceModel
 
@@ -208,8 +200,7 @@ func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resourc
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := VaultAppRoleCredentials{
 		ID:          data.Name.ValueString(),
@@ -257,18 +248,5 @@ func (r *credentialVaultAppRoleResource) Delete(ctx context.Context, req resourc
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	err := cm.Delete(ctx, data.Domain.ValueString(), data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Delete Resource",
-			"An unexpected error occurred while deleting the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
+	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }

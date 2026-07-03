@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,7 +16,14 @@ type mockJenkinsClient struct {
 	mockGetJob            func(ctx context.Context, id string, parentIDs ...string) (*jenkins.Job, error)
 	mockGetFolder         func(ctx context.Context, id string, parentIDs ...string) (*jenkins.Folder, error)
 	mockGetView           func(ctx context.Context, name string) (*jenkins.View, error)
+	mockGetPlugin         func(ctx context.Context, name string) (*jenkins.Plugin, error)
+	mockCreateView        func(ctx context.Context, name string, viewType string) (*jenkins.View, error)
+	mockPostRequest       func(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error)
 }
+
+// mockJenkinsClient implements the full framework client surface so it can be
+// injected into framework resources and data sources under test.
+var _ frameworkClient = (*mockJenkinsClient)(nil)
 
 func (m *mockJenkinsClient) CreateJobInFolder(ctx context.Context, config string, jobName string, parentIDs ...string) (*jenkins.Job, error) {
 	return m.mockCreateJobInFolder(ctx, config, jobName, parentIDs...)
@@ -39,6 +47,18 @@ func (m *mockJenkinsClient) GetFolder(ctx context.Context, id string, parentIDs 
 
 func (m *mockJenkinsClient) GetView(ctx context.Context, name string) (*jenkins.View, error) {
 	return m.mockGetView(ctx, name)
+}
+
+func (m *mockJenkinsClient) GetPlugin(ctx context.Context, name string) (*jenkins.Plugin, error) {
+	return m.mockGetPlugin(ctx, name)
+}
+
+func (m *mockJenkinsClient) CreateView(ctx context.Context, name string, viewType string) (*jenkins.View, error) {
+	return m.mockCreateView(ctx, name, viewType)
+}
+
+func (m *mockJenkinsClient) PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
+	return m.mockPostRequest(ctx, endpoint, payload, responseStruct, querystring)
 }
 
 // testCACertPEM is a self-signed certificate used only to exercise the CACert

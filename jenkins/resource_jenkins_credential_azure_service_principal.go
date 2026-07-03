@@ -3,7 +3,6 @@ package jenkins
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -12,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // AzureServicePrincipalCredentials struct representing credential for storing Azure service credentials
@@ -153,6 +153,7 @@ Manages an Azure Service Principal credential within Jenkins. This credential ma
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalResource.Create")
 	var data credentialAzureServicePrincipalResourceModel
 
 	// Read Terraform plan data into the model
@@ -161,18 +162,8 @@ func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	// Validate that the folder exists
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
-		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
+	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
+	if cm == nil {
 		return
 	}
 
@@ -220,6 +211,7 @@ func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, re
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalResource.Read")
 	var data credentialAzureServicePrincipalResourceModel
 
 	// Read Terraform plan data into the model
@@ -228,8 +220,7 @@ func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req 
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := AzureServicePrincipalCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
@@ -265,6 +256,7 @@ func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req 
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalResource.Update")
 	var data credentialAzureServicePrincipalResourceModel
 	var state credentialAzureServicePrincipalResourceModel
 
@@ -275,8 +267,7 @@ func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := buildAzureServicePrincipalUpdate(data, state)
 
@@ -311,20 +302,7 @@ func (r *credentialAzureServicePrincipalResource) Delete(ctx context.Context, re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	err := cm.Delete(ctx, data.Domain.ValueString(), data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Delete Resource",
-			"An unexpected error occurred while deleting the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
+	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }
 
 // buildAzureServicePrincipalUpdate maps the planned model (data) and the prior

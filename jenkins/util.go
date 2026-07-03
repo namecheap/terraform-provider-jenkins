@@ -98,8 +98,10 @@ func templateDiff(k, old, new string, d *schema.ResourceData) bool {
 	old = normalize(old)
 	new = normalize(new)
 
-	log.Printf("[DEBUG] jenkins::diff - Old: %q", old)
-	log.Printf("[DEBUG] jenkins::diff - New: %q", new)
+	// SECURITY: the normalized job/folder XML can contain inlined secrets (for
+	// example credentials embedded in job configuration), so log only its length
+	// and whether it changed — never its content.
+	log.Printf("[DEBUG] jenkins::diff - old_len=%d new_len=%d equal=%t", len(old), len(new), old == new)
 	return old == new
 }
 
@@ -109,7 +111,9 @@ func generateCredentialID(folder, name string) string {
 
 // isNotFound reports whether err represents an HTTP 404 response.
 // gojenkins formats credential errors as "invalid response code 404" and job
-// errors as the bare string "404"; strings.Contains handles both forms.
+// errors as the bare string "404"; strings.Contains handles both forms. This is
+// the single 404 matcher used by every resource path so the SDKv2 and framework
+// providers cannot silently diverge. It is nil-safe: a nil error is not a 404.
 func isNotFound(err error) bool {
-	return strings.Contains(err.Error(), "404")
+	return err != nil && strings.Contains(err.Error(), "404")
 }
