@@ -11,13 +11,15 @@ import (
 )
 
 type credentialSecretTextResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Folder      types.String `tfsdk:"folder"`
-	Description types.String `tfsdk:"description"`
-	Domain      types.String `tfsdk:"domain"`
-	Scope       types.String `tfsdk:"scope"`
-	Secret      types.String `tfsdk:"secret"`
+	ID              types.String `tfsdk:"id"`
+	Name            types.String `tfsdk:"name"`
+	Folder          types.String `tfsdk:"folder"`
+	Description     types.String `tfsdk:"description"`
+	Domain          types.String `tfsdk:"domain"`
+	Scope           types.String `tfsdk:"scope"`
+	Secret          types.String `tfsdk:"secret"`
+	SecretWo        types.String `tfsdk:"secret_wo"`
+	SecretWoVersion types.String `tfsdk:"secret_wo_version"`
 }
 
 type credentialSecretTextResource struct {
@@ -27,6 +29,7 @@ type credentialSecretTextResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialSecretTextResource{}
 var _ resource.ResourceWithImportState = &credentialSecretTextResource{}
+var _ resource.ResourceWithConfigValidators = &credentialSecretTextResource{}
 
 func newCredentialSecretTextResource() resource.Resource {
 	return &credentialSecretTextResource{
@@ -44,14 +47,19 @@ func (r *credentialSecretTextResource) Schema(_ context.Context, _ resource.Sche
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `
 Manages a secret text credential within Jenkins. This secret text may then be referenced within jobs that are created.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"secret": schema.StringAttribute{
 				MarkdownDescription: "The secret text to be associated with the credentials.",
-				Required:            true,
+				Optional:            true,
 				Sensitive:           true,
 			},
-		}),
+		}, "secret", "The secret text to be associated with the credentials.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialSecretTextResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return writeOnlySecretConfigValidators("secret")
 }
 
 // Create is called when the provider must create a new resource. Config
@@ -72,11 +80,19 @@ func (r *credentialSecretTextResource) Create(ctx context.Context, req resource.
 		return
 	}
 
+	secret := data.Secret.ValueString()
+	if secretWo := r.readWriteOnly(ctx, req.Config, "secret_wo", &resp.Diagnostics); !secretWo.IsNull() {
+		secret = secretWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := jenkins.StringCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
 		Description: data.Description.ValueString(),
-		Secret:      data.Secret.ValueString(),
+		Secret:      secret,
 	}
 
 	err := cm.Add(ctx, data.Domain.ValueString(), cred)
@@ -167,10 +183,19 @@ func (r *credentialSecretTextResource) Update(ctx context.Context, req resource.
 		Description: data.Description.ValueString(),
 	}
 
-	// Only send the secret if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [secret].
-	if !data.Secret.Equal(state.Secret) {
+	// Send the secret only when it should change; omitting it leaves the
+	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
+	// Write-only: re-send when the version trigger changed. Plain: re-send when
+	// the value changed.
+	if secretWo := r.readWriteOnly(ctx, req.Config, "secret_wo", &resp.Diagnostics); !secretWo.IsNull() {
+		if !data.SecretWoVersion.Equal(state.SecretWoVersion) {
+			cred.Secret = secretWo.ValueString()
+		}
+	} else if !data.Secret.Equal(state.Secret) {
 		cred.Secret = data.Secret.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)

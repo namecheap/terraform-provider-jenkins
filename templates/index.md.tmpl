@@ -22,4 +22,32 @@ The provider automatically retries transient Jenkins failures. Retries apply **o
 
 Retry and timeout behaviour is configured with the `retry_max`, `retry_wait_min`, `retry_wait_max`, and `request_timeout` arguments (or their `JENKINS_*` environment-variable equivalents). Retries use exponential backoff between `retry_wait_min` and `retry_wait_max`, and honour a `Retry-After` response header when present. `request_timeout` bounds each operation including its retries and defaults to no timeout. When a request ultimately fails, the error diagnostic includes the request method, URL, final status code, and a truncated response body. Set `TF_LOG=DEBUG` to see a log line for each retry.
 
+## Secrets hygiene
+
+By default every credential resource stores its secret material (passwords, secret
+text, SSH private keys, AWS secret keys, Azure client secrets, Vault AppRole
+`secret_id`, GitHub App private keys, secret-file content) in **plaintext in
+Terraform state**. Anyone with access to the state backend can read it.
+
+To keep secrets out of state, use the **write-only** variant of the secret
+argument (Terraform >= 1.11). Each credential resource exposes a `<secret>_wo`
+attribute alongside the plain one; its value is used during apply but never written
+to state or plan. Pair it with `<secret>_wo_version` — because Terraform cannot see
+a write-only value change, bumping the version is how you tell Terraform to re-send
+a rotated secret:
+
+` + "```terraform" + `
+resource "jenkins_credential_secret_text" "example" {
+  name              = "my-secret"
+  secret_wo         = var.my_secret # never stored in state
+  secret_wo_version = "1"           # bump to rotate
+}
+` + "```" + `
+
+The plain and write-only forms are mutually exclusive. The plain `<secret>`
+attributes remain supported for backward compatibility, but the write-only form is
+recommended for any security-sensitive deployment. Even with write-only secrets,
+non-secret attributes are still stored in state; secure and encrypt your state
+backend regardless.
+
 {{ .SchemaMarkdown | trimspace }}

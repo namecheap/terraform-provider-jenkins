@@ -11,14 +11,16 @@ import (
 )
 
 type credentialUsernameResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Folder      types.String `tfsdk:"folder"`
-	Description types.String `tfsdk:"description"`
-	Domain      types.String `tfsdk:"domain"`
-	Scope       types.String `tfsdk:"scope"`
-	Username    types.String `tfsdk:"username"`
-	Password    types.String `tfsdk:"password"`
+	ID                types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	Folder            types.String `tfsdk:"folder"`
+	Description       types.String `tfsdk:"description"`
+	Domain            types.String `tfsdk:"domain"`
+	Scope             types.String `tfsdk:"scope"`
+	Username          types.String `tfsdk:"username"`
+	Password          types.String `tfsdk:"password"`
+	PasswordWo        types.String `tfsdk:"password_wo"`
+	PasswordWoVersion types.String `tfsdk:"password_wo_version"`
 }
 
 type credentialUsernameResource struct {
@@ -28,6 +30,7 @@ type credentialUsernameResource struct {
 // Ensure the implementation satisfies the desired interfaces.
 var _ resource.ResourceWithConfigure = &credentialUsernameResource{}
 var _ resource.ResourceWithImportState = &credentialUsernameResource{}
+var _ resource.ResourceWithConfigValidators = &credentialUsernameResource{}
 
 func newCredentialUsernameResource() resource.Resource {
 	return &credentialUsernameResource{
@@ -47,7 +50,7 @@ func (r *credentialUsernameResource) Schema(_ context.Context, _ resource.Schema
 Manages a username credential within Jenkins. This username may then be referenced within jobs that are created.
 
 ~> The "password" property may leave plain-text passwords in your state file. If using the property to manage the password in Terraform, ensure that your state file is properly secured and encrypted at rest.`,
-		Attributes: r.schemaCredential(map[string]schema.Attribute{
+		Attributes: r.schemaCredential(addWriteOnlySecret(map[string]schema.Attribute{
 			"username": schema.StringAttribute{
 				MarkdownDescription: "The username to be associated with the credentials.",
 				Required:            true,
@@ -57,8 +60,13 @@ Manages a username credential within Jenkins. This username may then be referenc
 				Optional:            true,
 				Sensitive:           true,
 			},
-		}),
+		}, "password", "The password to be associated with the credentials.")),
 	}
+}
+
+// ConfigValidators enforces the plain/write-only secret constraints.
+func (r *credentialUsernameResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return optionalWriteOnlySecretConfigValidators("password")
 }
 
 // Create is called when the provider must create a new resource. Config
@@ -79,12 +87,20 @@ func (r *credentialUsernameResource) Create(ctx context.Context, req resource.Cr
 		return
 	}
 
+	password := data.Password.ValueString()
+	if passwordWo := r.readWriteOnly(ctx, req.Config, "password_wo", &resp.Diagnostics); !passwordWo.IsNull() {
+		password = passwordWo.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	cred := jenkins.UsernameCredentials{
 		ID:          data.Name.ValueString(),
 		Scope:       data.Scope.ValueString(),
 		Description: data.Description.ValueString(),
 		Username:    data.Username.ValueString(),
-		Password:    data.Password.ValueString(),
+		Password:    password,
 	}
 
 	err := cm.Add(ctx, data.Domain.ValueString(), cred)
@@ -176,10 +192,19 @@ func (r *credentialUsernameResource) Update(ctx context.Context, req resource.Up
 		Username:    data.Username.ValueString(),
 	}
 
-	// Only send the password if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [password].
-	if !data.Password.Equal(state.Password) {
+	// Send the password only when it should change; omitting it leaves the
+	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
+	// Write-only: re-send when the version trigger changed. Plain: re-send when
+	// the value changed.
+	if passwordWo := r.readWriteOnly(ctx, req.Config, "password_wo", &resp.Diagnostics); !passwordWo.IsNull() {
+		if !data.PasswordWoVersion.Equal(state.PasswordWoVersion) {
+			cred.Password = passwordWo.ValueString()
+		}
+	} else if !data.Password.Equal(state.Password) {
 		cred.Password = data.Password.ValueString()
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
