@@ -2,9 +2,12 @@ package jenkins
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -12,38 +15,85 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// templateSemanticEqualityModifier suppresses a plan diff on the job template
-// when the prior and proposed XML are semantically equal (Jenkins rewrites the
-// XML it stores). It is the framework equivalent of the SDKv2 templateDiff
-// DiffSuppressFunc and shares its normaliser, so behaviour is identical across
-// the migration.
-type templateSemanticEqualityModifier struct{}
-
-func (m templateSemanticEqualityModifier) Description(_ context.Context) string {
-	return "Suppresses diffs between semantically-equal job configuration XML."
+// jobXMLType is a custom string type whose values compare by semantic XML
+// equality (via normalizeJobXML). It is the framework equivalent of the SDKv2
+// templateDiff DiffSuppressFunc: because Jenkins rewrites the config XML it
+// stores (declaration, plugin versions, whitespace, entity encoding), the stored
+// value differs textually from the user's config. StringSemanticEquals lets the
+// provider persist the Jenkins-canonical XML without a spurious diff and without
+// tripping the "inconsistent result after apply" check.
+type jobXMLType struct {
+	basetypes.StringType
 }
 
-func (m templateSemanticEqualityModifier) MarkdownDescription(ctx context.Context) string {
-	return m.Description(ctx)
+var _ basetypes.StringTypable = jobXMLType{}
+
+func (t jobXMLType) Equal(o attr.Type) bool {
+	other, ok := o.(jobXMLType)
+	if !ok {
+		return false
+	}
+	return t.StringType.Equal(other.StringType)
 }
 
-func (m templateSemanticEqualityModifier) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
-	if req.StateValue.IsNull() || req.PlanValue.IsUnknown() || req.PlanValue.IsNull() {
-		return
+func (t jobXMLType) String() string { return "jobXMLType" }
+
+func (t jobXMLType) ValueFromString(_ context.Context, in basetypes.StringValue) (basetypes.StringValuable, diag.Diagnostics) {
+	return jobXMLValue{StringValue: in}, nil
+}
+
+func (t jobXMLType) ValueFromTerraform(ctx context.Context, in tftypes.Value) (attr.Value, error) {
+	attrValue, err := t.StringType.ValueFromTerraform(ctx, in)
+	if err != nil {
+		return nil, err
 	}
-	if normalizeJobXML(req.StateValue.ValueString()) == normalizeJobXML(req.PlanValue.ValueString()) {
-		resp.PlanValue = req.StateValue
+	stringValue, ok := attrValue.(basetypes.StringValue)
+	if !ok {
+		return nil, fmt.Errorf("unexpected value type %T", attrValue)
 	}
+	return jobXMLValue{StringValue: stringValue}, nil
+}
+
+func (t jobXMLType) ValueType(_ context.Context) attr.Value { return jobXMLValue{} }
+
+type jobXMLValue struct {
+	basetypes.StringValue
+}
+
+var _ basetypes.StringValuableWithSemanticEquals = jobXMLValue{}
+
+func (v jobXMLValue) Type(_ context.Context) attr.Type { return jobXMLType{} }
+
+func (v jobXMLValue) Equal(o attr.Value) bool {
+	other, ok := o.(jobXMLValue)
+	if !ok {
+		return false
+	}
+	return v.StringValue.Equal(other.StringValue)
+}
+
+func (v jobXMLValue) StringSemanticEquals(_ context.Context, newValuable basetypes.StringValuable) (bool, diag.Diagnostics) {
+	newValue, ok := newValuable.(jobXMLValue)
+	if !ok {
+		return false, nil
+	}
+	return normalizeJobXML(v.ValueString()) == normalizeJobXML(newValue.ValueString()), nil
+}
+
+func newJobXMLValue(s string) jobXMLValue {
+	return jobXMLValue{StringValue: basetypes.NewStringValue(s)}
 }
 
 type jobResourceModel struct {
 	ID       types.String `tfsdk:"id"`
 	Name     types.String `tfsdk:"name"`
 	Folder   types.String `tfsdk:"folder"`
-	Template types.String `tfsdk:"template"`
+	Template jobXMLValue  `tfsdk:"template"`
 }
 
 type jobResource struct {
@@ -103,11 +153,9 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				},
 			},
 			"template": schema.StringAttribute{
+				CustomType:          jobXMLType{},
 				Required:            true,
 				MarkdownDescription: "The configuration file template, used to communicate with Jenkins.",
-				PlanModifiers: []planmodifier.String{
-					templateSemanticEqualityModifier{},
-				},
 			},
 		},
 	}
@@ -136,17 +184,10 @@ func (r *jobResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	// Set the computed id/folder from the created job, but keep template as the
-	// planned (config) value: the framework requires the applied value to equal
-	// the plan, and Jenkins reformats the XML it stores. Drift against the
-	// reformatted XML is reconciled by Read + the semantic-equality plan modifier.
-	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
-	if err != nil {
+	if err := r.refresh(ctx, &data, folders); err != nil {
 		resp.Diagnostics.AddError("Unable to Read Created Resource", err.Error())
 		return
 	}
-	data.ID = types.StringValue(job.Base)
-	data.Folder = types.StringValue(formatFolderID(folders))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -160,9 +201,7 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		return
 	}
 
-	folders := extractFolders(data.Folder.ValueString())
-	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
-	if err != nil {
+	if err := r.refresh(ctx, &data, extractFolders(data.Folder.ValueString())); err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
@@ -170,18 +209,6 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		resp.Diagnostics.AddError("Unable to Refresh Resource", err.Error())
 		return
 	}
-
-	config, err := job.GetConfig(ctx)
-	if err != nil {
-		resp.Diagnostics.AddError("Unable to Refresh Resource", err.Error())
-		return
-	}
-
-	// Read may store the Jenkins-reformatted XML; the plan modifier suppresses the
-	// resulting diff against the user's config on the next plan.
-	data.ID = types.StringValue(job.Base)
-	data.Folder = types.StringValue(formatFolderID(folders))
-	data.Template = types.StringValue(config)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -207,9 +234,10 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	// Keep template as the planned value (see Create); set computed id/folder.
-	data.ID = types.StringValue(job.Base)
-	data.Folder = types.StringValue(formatFolderID(folders))
+	if err := r.refresh(ctx, &data, folders); err != nil {
+		resp.Diagnostics.AddError("Unable to Read Updated Resource", err.Error())
+		return
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -233,4 +261,25 @@ func (r *jobResource) ImportState(ctx context.Context, req resource.ImportStateR
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("folder"), formatFolderID(folders))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
+
+// refresh populates data (id, folder, template) from Jenkins. template is set to
+// the Jenkins-canonical XML; the jobXMLType semantic equality reconciles it with
+// the user's configured value without a diff. Returns the underlying error (use
+// isNotFound) so Read can distinguish a deleted job.
+func (r *jobResource) refresh(ctx context.Context, data *jobResourceModel, folders []string) error {
+	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
+	if err != nil {
+		return err
+	}
+
+	config, err := job.GetConfig(ctx)
+	if err != nil {
+		return err
+	}
+
+	data.ID = types.StringValue(job.Base)
+	data.Folder = types.StringValue(formatFolderID(folders))
+	data.Template = newJobXMLValue(config)
+	return nil
 }

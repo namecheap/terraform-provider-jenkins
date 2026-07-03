@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -100,43 +98,39 @@ func testAccCheckJenkinsJobDestroy(s *terraform.State) error {
 	return nil
 }
 
-// TestJobTemplateSemanticEquality verifies the framework template plan modifier
-// suppresses a diff for semantically-equal (but textually different) XML — the
+// TestJobTemplateSemanticEquality verifies the jobXMLType custom string type
+// treats semantically-equal (but textually different) XML as equal — the
 // behaviour previously provided by the SDKv2 templateDiff DiffSuppressFunc — and
-// preserves a diff for a genuine change.
+// treats a genuine change as different.
 func TestJobTemplateSemanticEquality(t *testing.T) {
 	cases := []struct {
-		name         string
-		state        string
-		plan         string
-		wantSuppress bool
+		name      string
+		a         string
+		b         string
+		wantEqual bool
 	}{
 		{
-			name:         "reformatted equal",
-			state:        `<?xml version='1.1' encoding='UTF-8'?><project plugin="x@1.0"> <description>hi</description></project>`,
-			plan:         `<project plugin="x@2.0"><description>hi</description></project>`,
-			wantSuppress: true,
+			name:      "reformatted equal",
+			a:         `<?xml version='1.1' encoding='UTF-8'?><project plugin="x@1.0"> <description>hi</description></project>`,
+			b:         `<project plugin="x@2.0"><description>hi</description></project>`,
+			wantEqual: true,
 		},
 		{
-			name:         "genuine change",
-			state:        `<project><description>hi</description></project>`,
-			plan:         `<project><description>changed</description></project>`,
-			wantSuppress: false,
+			name:      "genuine change",
+			a:         `<project><description>hi</description></project>`,
+			b:         `<project><description>changed</description></project>`,
+			wantEqual: false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := planmodifier.StringRequest{
-				StateValue: types.StringValue(tc.state),
-				PlanValue:  types.StringValue(tc.plan),
+			equal, diags := newJobXMLValue(tc.a).StringSemanticEquals(context.Background(), newJobXMLValue(tc.b))
+			if diags.HasError() {
+				t.Fatalf("unexpected diags: %v", diags)
 			}
-			resp := &planmodifier.StringResponse{PlanValue: req.PlanValue}
-			templateSemanticEqualityModifier{}.PlanModifyString(context.Background(), req, resp)
-
-			suppressed := resp.PlanValue.Equal(req.StateValue)
-			if suppressed != tc.wantSuppress {
-				t.Errorf("suppressed = %v, want %v (plan=%q)", suppressed, tc.wantSuppress, resp.PlanValue.ValueString())
+			if equal != tc.wantEqual {
+				t.Errorf("StringSemanticEquals = %v, want %v", equal, tc.wantEqual)
 			}
 		})
 	}
