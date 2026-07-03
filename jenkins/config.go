@@ -1,6 +1,7 @@
 package jenkins
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -371,7 +372,24 @@ func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out int
 	if err != nil {
 		return err
 	}
-	return xml.Unmarshal(body, out)
+	// Jenkins emits its config.xml with an XML 1.1 declaration
+	// (<?xml version='1.1' ...?>), which Go's encoding/xml rejects ("unsupported
+	// version"). Strip the leading declaration before decoding; only child
+	// elements are read, so it is unnecessary.
+	return xml.Unmarshal(stripXMLDeclaration(body), out)
+}
+
+// stripXMLDeclaration removes a leading <?xml ... ?> processing instruction from
+// b, if present, so a document declared as XML 1.1 can be parsed by encoding/xml
+// (which supports only 1.0).
+func stripXMLDeclaration(b []byte) []byte {
+	trimmed := bytes.TrimSpace(b)
+	if bytes.HasPrefix(trimmed, []byte("<?xml")) {
+		if idx := bytes.Index(trimmed, []byte("?>")); idx != -1 {
+			return trimmed[idx+2:]
+		}
+	}
+	return b
 }
 
 // DeleteJobInFolder assists in running DeleteJob funcs, as DeleteJob is not folder aware
