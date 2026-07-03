@@ -44,6 +44,7 @@ func (p *JenkinsProvider) Schema(ctx context.Context, req provider.SchemaRequest
 			},
 			"password": schema.StringAttribute{
 				Optional:    true, // Needs to be optional to be able to run terraform validate without providing credentials
+				Sensitive:   true,
 				Description: "The password to authenticate to Jenkins. If you are using the GitHub OAuth authentication method, enter your Personal Access Token here.",
 			},
 			"insecure": schema.BoolAttribute{
