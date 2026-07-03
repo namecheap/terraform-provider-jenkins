@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"fmt"
 
 	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -71,18 +70,8 @@ func (r *credentialSecretFileResource) Create(ctx context.Context, req resource.
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	// Validate that the folder exists
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
-		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
+	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
+	if cm == nil {
 		return
 	}
 
@@ -126,8 +115,7 @@ func (r *credentialSecretFileResource) Read(ctx context.Context, req resource.Re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := jenkins.FileCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
@@ -174,8 +162,7 @@ func (r *credentialSecretFileResource) Update(ctx context.Context, req resource.
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := jenkins.FileCredentials{
 		ID:          data.Name.ValueString(),
@@ -221,18 +208,5 @@ func (r *credentialSecretFileResource) Delete(ctx context.Context, req resource.
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	err := cm.Delete(ctx, data.Domain.ValueString(), data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Delete Resource",
-			"An unexpected error occurred while deleting the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
+	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }

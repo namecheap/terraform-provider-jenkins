@@ -3,7 +3,6 @@ package jenkins
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -161,18 +160,8 @@ func (r *credentialAzureServicePrincipalResource) Create(ctx context.Context, re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	// Validate that the folder exists
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
-		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
+	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
+	if cm == nil {
 		return
 	}
 
@@ -228,8 +217,7 @@ func (r *credentialAzureServicePrincipalResource) Read(ctx context.Context, req 
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := AzureServicePrincipalCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
@@ -275,8 +263,7 @@ func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := buildAzureServicePrincipalUpdate(data, state)
 
@@ -311,20 +298,7 @@ func (r *credentialAzureServicePrincipalResource) Delete(ctx context.Context, re
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	err := cm.Delete(ctx, data.Domain.ValueString(), data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Delete Resource",
-			"An unexpected error occurred while deleting the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
+	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }
 
 // buildAzureServicePrincipalUpdate maps the planned model (data) and the prior
