@@ -202,6 +202,7 @@ func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.D
 		newJobDataSource,
 		newFolderDataSource,
 		newPluginDataSource,
+		newNodeDataSource,
 	}
 }
 
@@ -217,5 +218,6 @@ func (p *JenkinsProvider) Resources(ctx context.Context) []func() resource.Resou
 		newCredentialVaultAppRoleResource,
 		newCredentialAwsResource,
 		newViewResource,
+		newNodeResource,
 	}
 }

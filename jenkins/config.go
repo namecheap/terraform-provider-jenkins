@@ -1,12 +1,15 @@
 package jenkins
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -38,6 +41,15 @@ type frameworkClient interface {
 	// PostRequest wraps the underlying Requester.Post so callers do not reach through to
 	// the embedded gojenkins client's Requester field, which cannot be mocked.
 	PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error)
+
+	// Node operations back the jenkins_node resource and data source.
+	CreateNode(ctx context.Context, name string, numExecutors int, description string, remoteFS string, label string, options ...interface{}) (*jenkins.Node, error)
+	GetNode(ctx context.Context, name string) (*jenkins.Node, error)
+	DeleteNode(ctx context.Context, name string) (bool, error)
+	// GetNodeConfig fetches /computer/<name>/config.xml and XML-decodes it into out.
+	// Returned wrapped so callers depend on the interface rather than the embedded
+	// gojenkins Requester, whose Do() appends a trailing slash that breaks config.xml.
+	GetNodeConfig(ctx context.Context, name string, out interface{}) error
 }
 
 // Ensure the concrete adapter satisfies the framework client surface.
@@ -320,6 +332,64 @@ func (j *jenkinsAdapter) Credentials() *jenkins.CredentialsManager {
 // than reaching into the embedded gojenkins client's Requester field.
 func (j *jenkinsAdapter) PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	return j.Requester.Post(ctx, endpoint, payload, responseStruct, querystring)
+}
+
+// GetNodeConfig fetches /computer/<name>/config.xml and XML-decodes it into out.
+//
+// It issues the GET directly rather than via the gojenkins Requester because
+// Requester.Do appends a trailing slash to non-POST endpoints, turning
+// ".../config.xml" into ".../config.xml/" which Jenkins does not serve. The
+// request reuses the adapter's authenticated, retry-wrapped HTTP client.
+func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out interface{}) error {
+	r, ok := j.Requester.(*jenkins.Requester)
+	if !ok {
+		return fmt.Errorf("unexpected requester type %T", j.Requester)
+	}
+
+	endpoint := strings.TrimRight(r.Base, "/") + "/computer/" + url.PathEscape(name) + "/config.xml"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if r.BasicAuth != nil {
+		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
+	}
+
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("404 node %q not found", name)
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("unexpected status %d fetching config for node %q", resp.StatusCode, name)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	// Jenkins emits its config.xml with an XML 1.1 declaration
+	// (<?xml version='1.1' ...?>), which Go's encoding/xml rejects ("unsupported
+	// version"). Strip the leading declaration before decoding; only child
+	// elements are read, so it is unnecessary.
+	return xml.Unmarshal(stripXMLDeclaration(body), out)
+}
+
+// stripXMLDeclaration removes a leading <?xml ... ?> processing instruction from
+// b, if present, so a document declared as XML 1.1 can be parsed by encoding/xml
+// (which supports only 1.0).
+func stripXMLDeclaration(b []byte) []byte {
+	trimmed := bytes.TrimSpace(b)
+	if bytes.HasPrefix(trimmed, []byte("<?xml")) {
+		if idx := bytes.Index(trimmed, []byte("?>")); idx != -1 {
+			return trimmed[idx+2:]
+		}
+	}
+	return b
 }
 
 // DeleteJobInFolder assists in running DeleteJob funcs, as DeleteJob is not folder aware

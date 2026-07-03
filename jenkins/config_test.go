@@ -19,6 +19,10 @@ type mockJenkinsClient struct {
 	mockGetPlugin         func(ctx context.Context, name string) (*jenkins.Plugin, error)
 	mockCreateView        func(ctx context.Context, name string, viewType string) (*jenkins.View, error)
 	mockPostRequest       func(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error)
+	mockCreateNode        func(ctx context.Context, name string, numExecutors int, description string, remoteFS string, label string, options ...interface{}) (*jenkins.Node, error)
+	mockGetNode           func(ctx context.Context, name string) (*jenkins.Node, error)
+	mockDeleteNode        func(ctx context.Context, name string) (bool, error)
+	mockGetNodeConfig     func(ctx context.Context, name string, out interface{}) error
 }
 
 // mockJenkinsClient implements the full framework client surface so it can be
@@ -59,6 +63,22 @@ func (m *mockJenkinsClient) CreateView(ctx context.Context, name string, viewTyp
 
 func (m *mockJenkinsClient) PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	return m.mockPostRequest(ctx, endpoint, payload, responseStruct, querystring)
+}
+
+func (m *mockJenkinsClient) CreateNode(ctx context.Context, name string, numExecutors int, description string, remoteFS string, label string, options ...interface{}) (*jenkins.Node, error) {
+	return m.mockCreateNode(ctx, name, numExecutors, description, remoteFS, label, options...)
+}
+
+func (m *mockJenkinsClient) GetNode(ctx context.Context, name string) (*jenkins.Node, error) {
+	return m.mockGetNode(ctx, name)
+}
+
+func (m *mockJenkinsClient) DeleteNode(ctx context.Context, name string) (bool, error) {
+	return m.mockDeleteNode(ctx, name)
+}
+
+func (m *mockJenkinsClient) GetNodeConfig(ctx context.Context, name string, out interface{}) error {
+	return m.mockGetNodeConfig(ctx, name, out)
 }
 
 // testCACertPEM is a self-signed certificate used only to exercise the CACert
