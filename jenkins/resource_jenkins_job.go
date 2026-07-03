@@ -127,7 +127,8 @@ func (r *jobResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	if _, err := r.client.CreateJobInFolder(ctx, data.Template.ValueString(), data.Name.ValueString(), extractFolders(data.Folder.ValueString())...); err != nil {
+	folders := extractFolders(data.Folder.ValueString())
+	if _, err := r.client.CreateJobInFolder(ctx, data.Template.ValueString(), data.Name.ValueString(), folders...); err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create Resource",
 			"An unexpected error occurred while creating the job.\n\nError: "+err.Error(),
@@ -135,12 +136,17 @@ func (r *jobResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	// Fetch back the created job so the stored template matches what Jenkins
-	// persisted (the semantic-equality plan modifier suppresses the reformatting).
-	if err := r.refresh(ctx, &data); err != nil {
+	// Set the computed id/folder from the created job, but keep template as the
+	// planned (config) value: the framework requires the applied value to equal
+	// the plan, and Jenkins reformats the XML it stores. Drift against the
+	// reformatted XML is reconciled by Read + the semantic-equality plan modifier.
+	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to Read Created Resource", err.Error())
 		return
 	}
+	data.ID = types.StringValue(job.Base)
+	data.Folder = types.StringValue(formatFolderID(folders))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -154,7 +160,8 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		return
 	}
 
-	err := r.refresh(ctx, &data)
+	folders := extractFolders(data.Folder.ValueString())
+	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
 	if err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -163,6 +170,18 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		resp.Diagnostics.AddError("Unable to Refresh Resource", err.Error())
 		return
 	}
+
+	config, err := job.GetConfig(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to Refresh Resource", err.Error())
+		return
+	}
+
+	// Read may store the Jenkins-reformatted XML; the plan modifier suppresses the
+	// resulting diff against the user's config on the next plan.
+	data.ID = types.StringValue(job.Base)
+	data.Folder = types.StringValue(formatFolderID(folders))
+	data.Template = types.StringValue(config)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -176,7 +195,8 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	job, err := r.client.GetJob(ctx, data.Name.ValueString(), extractFolders(data.Folder.ValueString())...)
+	folders := extractFolders(data.Folder.ValueString())
+	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to Update Resource", "Could not find job "+data.Name.ValueString()+".\n\nError: "+err.Error())
 		return
@@ -187,10 +207,9 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	if err := r.refresh(ctx, &data); err != nil {
-		resp.Diagnostics.AddError("Unable to Read Updated Resource", err.Error())
-		return
-	}
+	// Keep template as the planned value (see Create); set computed id/folder.
+	data.ID = types.StringValue(job.Base)
+	data.Folder = types.StringValue(formatFolderID(folders))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -214,24 +233,4 @@ func (r *jobResource) ImportState(ctx context.Context, req resource.ImportStateR
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("folder"), formatFolderID(folders))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
-}
-
-// refresh populates data (template, id, folder) from Jenkins. It returns the
-// underlying error (use isNotFound) so Read can distinguish a deleted job.
-func (r *jobResource) refresh(ctx context.Context, data *jobResourceModel) error {
-	folders := extractFolders(data.Folder.ValueString())
-	job, err := r.client.GetJob(ctx, data.Name.ValueString(), folders...)
-	if err != nil {
-		return err
-	}
-
-	config, err := job.GetConfig(ctx)
-	if err != nil {
-		return err
-	}
-
-	data.ID = types.StringValue(job.Base)
-	data.Folder = types.StringValue(formatFolderID(folders))
-	data.Template = types.StringValue(config)
-	return nil
 }
