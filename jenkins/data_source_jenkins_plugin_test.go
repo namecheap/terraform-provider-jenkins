@@ -19,7 +19,9 @@ func TestIsNotFoundPlugin(t *testing.T) {
 }
 
 func TestJenkinsAdapter_GetPlugin(t *testing.T) {
+	var manifestFetches int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		manifestFetches++
 		resp := map[string]interface{}{
 			"plugins": []map[string]interface{}{
 				{"shortName": "git", "version": "5.2.0", "active": true, "enabled": true, "longName": "Git plugin", "url": "https://example.com"},
@@ -50,6 +52,11 @@ func TestJenkinsAdapter_GetPlugin(t *testing.T) {
 	}
 	if !isNotFound(err) {
 		t.Errorf("expected 404 error for nonexistent plugin, got: %v", err)
+	}
+
+	// The manifest must be fetched only once across multiple lookups.
+	if manifestFetches != 1 {
+		t.Errorf("plugin manifest fetched %d times, want 1 (results should be cached per adapter)", manifestFetches)
 	}
 }
 
