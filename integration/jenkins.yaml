@@ -1,13 +1,21 @@
 # Configuration as Code for the acceptance/integration Jenkins.
 #
-# The provider's RBAC resources (jenkins_role) require the Role-Based
-# Authorization Strategy to be the active strategy. Enabling it here — while
-# granting the "anonymous" and "authenticated" principals Overall/Administer —
-# activates the strategy's REST API without changing the effective access the
-# test suite has always relied on: every request (authenticated or not) still
-# has full control, so the existing acceptance and integration tests are
-# unaffected.
+# securityRealm: Jenkins' own user database with a fixed admin/admin account.
+# The provider authenticates as this admin in CI, and the jenkins_user resource
+# manages additional local accounts. Signup is disabled.
+#
+# authorizationStrategy: the Role-Based Authorization Strategy is required by the
+# jenkins_role resource. The "admin" user, the "authenticated" group, and
+# "anonymous" are all granted Overall/Administer so that effective access is
+# unchanged from the pre-realm setup and the existing acceptance/integration
+# tests are unaffected.
 jenkins:
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "admin"
   authorizationStrategy:
     roleBased:
       roles:
@@ -17,5 +25,6 @@ jenkins:
             permissions:
               - "Overall/Administer"
             entries:
+              - user: "admin"
               - user: "anonymous"
               - group: "authenticated"
