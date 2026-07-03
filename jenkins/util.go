@@ -6,12 +6,9 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // formatFolderName will format a folder name in the way that Jenkins expects, with "name/job/name" separators.
@@ -178,28 +175,6 @@ func templatesEqual(old, new string) bool {
 		}
 	}
 	return false
-}
-
-func templateDiff(k, old, new string, d *schema.ResourceData) bool {
-	// When the "disabled" attribute manages the job's enabled state, the
-	// enable/disable API rewrites the template's <disabled> element out of band,
-	// so ignore that element to prevent it from registering as template drift.
-	// GetRawConfig is not populated inside a DiffSuppressFunc, so managed state is
-	// detected via GetOk (true only when disabled is set to true). When the
-	// attribute is unset, the template's <disabled> value diffs normally,
-	// preserving pre-existing behavior.
-	if v, ok := d.GetOk("disabled"); ok && v.(bool) {
-		old = reDisabledElement.ReplaceAllString(old, "")
-		new = reDisabledElement.ReplaceAllString(new, "")
-	}
-
-	equal := templatesEqual(old, new)
-
-	// SECURITY: the job/folder XML can contain inlined secrets (for example
-	// credentials embedded in job configuration), so log only whether it changed
-	// — never its content.
-	log.Printf("[DEBUG] jenkins::diff - equal=%t", equal)
-	return equal
 }
 
 func generateCredentialID(folder, name string) string {

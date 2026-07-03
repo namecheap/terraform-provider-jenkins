@@ -2,253 +2,376 @@ package jenkins
 
 import (
 	"context"
-	"fmt"
-	"log"
+	"regexp"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-func resourceJenkinsFolder() *schema.Resource {
-	return &schema.Resource{
-		CreateContext: resourceJenkinsFolderCreate,
-		ReadContext:   resourceJenkinsFolderRead,
-		UpdateContext: resourceJenkinsFolderUpdate,
-		DeleteContext: resourceJenkinsFolderDelete,
-		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+const defaultFolderInheritanceStrategy = "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"
+
+// folderSecurityObjectType is the element type of the "security" set block. It
+// must match the block's nested attributes so the set can be (de)serialized.
+var folderSecurityObjectType = types.ObjectType{
+	AttrTypes: map[string]attr.Type{
+		"inheritance_strategy": types.StringType,
+		"permissions":          types.ListType{ElemType: types.StringType},
+	},
+}
+
+type folderResourceModel struct {
+	ID          types.String `tfsdk:"id"`
+	Name        types.String `tfsdk:"name"`
+	Folder      types.String `tfsdk:"folder"`
+	DisplayName types.String `tfsdk:"display_name"`
+	Description types.String `tfsdk:"description"`
+	Security    types.Set    `tfsdk:"security"`
+	Template    types.String `tfsdk:"template"`
+}
+
+type folderSecurityBlockModel struct {
+	InheritanceStrategy types.String `tfsdk:"inheritance_strategy"`
+	Permissions         types.List   `tfsdk:"permissions"`
+}
+
+type folderResource struct {
+	*resourceHelper
+}
+
+var _ resource.ResourceWithConfigure = &folderResource{}
+var _ resource.ResourceWithImportState = &folderResource{}
+
+func newFolderResource() resource.Resource {
+	return &folderResource{
+		resourceHelper: newResourceHelper(),
+	}
+}
+
+func (r *folderResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_folder"
+}
+
+func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages a folder within Jenkins, optionally nested inside another folder, with project-based security.",
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "The full canonical folder path, e.g. `/job/folder-name`.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"name": schema.StringAttribute{
+				Required:            true,
+				MarkdownDescription: "The unique name of the JenkinsCI folder.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(
+						regexp.MustCompile(`^[^/]*$`),
+						"must not include path characters. Please use the 'folder' property if specifying a folder within a subfolder",
+					),
+				},
+			},
+			"folder": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "The folder namespace that the folder will be added to as a subfolder.",
+				PlanModifiers: []planmodifier.String{
+					folderPlanModifier{},
+				},
+				Validators: []validator.String{
+					folderNameValidator{},
+				},
+			},
+			"display_name": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString(""),
+				MarkdownDescription: "The name of the folder to display in the UI.",
+			},
+			"description": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString(""),
+				MarkdownDescription: "The description of this folder's purpose.",
+			},
+			"template": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "The configuration file template, used to communicate with Jenkins.",
+			},
 		},
-		Schema: map[string]*schema.Schema{
-			"name": {
-				Type:             schema.TypeString,
-				Description:      "The unique name of the JenkinsCI folder.",
-				Required:         true,
-				ForceNew:         true,
-				ValidateDiagFunc: validateJobName,
-			},
-			"display_name": {
-				Type:        schema.TypeString,
-				Description: "The name of the folder to display in the UI.",
-				Optional:    true,
-			},
-			"folder": {
-				Type:             schema.TypeString,
-				Description:      "The folder namespace that the folder will be added to as a subfolder.",
-				Optional:         true,
-				ForceNew:         true,
-				ValidateDiagFunc: validateFolderName,
-			},
-			"description": {
-				Type:        schema.TypeString,
-				Description: "The description of this folder's purpose.",
-				Optional:    true,
-			},
-			"security": {
-				Type:        schema.TypeSet,
-				Description: "The Jenkins project-based security configuration.",
-				Optional:    true,
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
-						"inheritance_strategy": {
-							Type:        schema.TypeString,
-							Description: "The strategy for applying these permissions sets to existing inherited permissions.",
-							Optional:    true,
-							Default:     "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
+		Blocks: map[string]schema.Block{
+			"security": schema.SetNestedBlock{
+				MarkdownDescription: "The Jenkins project-based security configuration.",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"inheritance_strategy": schema.StringAttribute{
+							Optional:            true,
+							Computed:            true,
+							Default:             stringdefault.StaticString(defaultFolderInheritanceStrategy),
+							MarkdownDescription: "The strategy for applying these permissions sets to existing inherited permissions.",
 						},
-						"permissions": {
-							Type:        schema.TypeList,
-							Required:    true,
-							Description: "The Jenkins permissions sets that provide access to this folder.",
-							Elem: &schema.Schema{
-								Type: schema.TypeString,
-							},
+						"permissions": schema.ListAttribute{
+							Required:            true,
+							ElementType:         types.StringType,
+							MarkdownDescription: "The Jenkins permissions sets that provide access to this folder.",
 						},
 					},
 				},
 			},
-			"template": {
-				Type:        schema.TypeString,
-				Description: "The configuration file template, used to communicate with Jenkins.",
-				Computed:    true,
-			},
 		},
 	}
 }
 
-func resourceJenkinsFolderCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(jenkinsClient)
-	name := d.Get("name").(string)
-	folderName := d.Get("folder").(string)
+func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "folderResource.Create")
+	var data folderResourceModel
 
-	// Validate that the folder exists
-	if err := folderExists(ctx, client, folderName); err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::create - Could not find folder '%s': %w", folderName, err))
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	folderName := data.Folder.ValueString()
+	if err := folderExists(ctx, r.client, folderName); err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid Folder",
+			"Could not find folder '"+folderName+"'.\n\nError: "+err.Error(),
+		)
+		return
 	}
 
 	f := folder{
-		Description: d.Get("description").(string),
-		DisplayName: d.Get("display_name").(string),
+		Description: data.Description.ValueString(),
+		DisplayName: data.DisplayName.ValueString(),
 	}
-	f.Properties.Security = expandSecurity(d.Get("security").(*schema.Set).List())
+	f.Properties.Security = securityFromModel(ctx, data.Security, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	xml, err := f.Render()
 	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::create - Error binding config.xml template to %q: %w", name, err))
+		resp.Diagnostics.AddError("Unable to Render Folder Configuration", err.Error())
+		return
 	}
 
-	folders := extractFolders(folderName)
-	_, err = client.CreateJobInFolder(ctx, string(xml), name, folders...)
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::create - Error creating job for %q in folder %s: %w", name, folderName, err))
+	if _, err := r.client.CreateJobInFolder(ctx, string(xml), data.Name.ValueString(), extractFolders(folderName)...); err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Create Resource",
+			"An unexpected error occurred while creating the folder "+data.Name.ValueString()+".\n\nError: "+err.Error(),
+		)
+		return
 	}
 
-	log.Printf("[DEBUG] jenkins::create - job %q created in folder %s", name, folderName)
-	d.SetId(formatFolderName(folderName + "/" + name))
+	if found := r.populate(ctx, &data, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
+		resp.Diagnostics.AddError("Unable to Read Created Resource", "the folder was created but could not be read back")
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
-	return resourceJenkinsFolderRead(ctx, d, meta)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func resourceJenkinsFolderRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(jenkinsClient)
-	name, folders := parseCanonicalJobID(d.Id())
+func (r *folderResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "folderResource.Read")
+	var data folderResourceModel
 
-	log.Printf("[DEBUG] jenkins::read - Looking for job %q", name)
+	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
-	job, err := client.GetJob(ctx, name, folders...)
+	found := r.populate(ctx, &data, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if !found {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+func (r *folderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "folderResource.Update")
+	var data folderResourceModel
+
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	job, err := r.client.GetJob(ctx, data.Name.ValueString(), extractFolders(data.Folder.ValueString())...)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to Update Resource", "Could not find folder "+data.Name.ValueString()+".\n\nError: "+err.Error())
+		return
+	}
+
+	// Read the existing config so unmanaged elements (folderViews, healthMetrics,
+	// and any other properties) are preserved across the update.
+	config, err := job.GetConfig(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to Update Resource", "Could not read folder configuration.\n\nError: "+err.Error())
+		return
+	}
+
+	f, err := parseFolder(config)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to Parse Folder Configuration", err.Error())
+		return
+	}
+
+	f.Description = data.Description.ValueString()
+	f.DisplayName = data.DisplayName.ValueString()
+	f.Properties.Security = securityFromModel(ctx, data.Security, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	xml, err := f.Render()
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to Render Folder Configuration", err.Error())
+		return
+	}
+
+	if err := job.UpdateConfig(ctx, string(xml)); err != nil {
+		resp.Diagnostics.AddError("Unable to Update Resource", "An unexpected error occurred while updating the folder configuration.\n\nError: "+err.Error())
+		return
+	}
+
+	if found := r.populate(ctx, &data, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
+		resp.Diagnostics.AddError("Unable to Read Updated Resource", "the folder was updated but could not be read back")
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+func (r *folderResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	tflog.Debug(ctx, "folderResource.Delete")
+	var data folderResourceModel
+
+	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if _, err := r.client.DeleteJobInFolder(ctx, data.Name.ValueString(), extractFolders(data.Folder.ValueString())...); err != nil {
+		resp.Diagnostics.AddError("Unable to Delete Resource", err.Error())
+	}
+}
+
+func (r *folderResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	name, folders := parseCanonicalJobID(req.ID)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
+	if folder := formatFolderID(folders); folder != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("folder"), folder)...)
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
+
+// populate fetches the folder and its config.xml and fills data from them. It
+// returns false (without an error diagnostic) when the folder no longer exists,
+// so Read can drop it from state.
+func (r *folderResource) populate(ctx context.Context, data *folderResourceModel, diags *diag.Diagnostics) bool {
+	job, err := r.client.GetJob(ctx, data.Name.ValueString(), extractFolders(data.Folder.ValueString())...)
 	if err != nil {
 		if isNotFound(err) {
-			// Job does not exist
-			d.SetId("")
-			return nil
+			return false
 		}
-
-		return diag.FromErr(fmt.Errorf("jenkins::read - Job %q does not exist: %w", name, err))
+		diags.AddError("Unable to Refresh Resource", "Could not read folder "+data.Name.ValueString()+".\n\nError: "+err.Error())
+		return false
 	}
 
-	// Extract the raw XML configuration
 	config, err := job.GetConfig(ctx)
 	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::read - Job %q could not extract configuration: %v", job.Base, err))
+		diags.AddError("Unable to Refresh Resource", "Could not read folder configuration.\n\nError: "+err.Error())
+		return false
 	}
 
-	log.Printf("[DEBUG] jenkins::read - Job %q exists", job.Base)
-	d.SetId(job.Base)
-
-	if err := d.Set("template", config); err != nil {
-		return diag.FromErr(err)
-	}
-
-	// Next, parse the properties from the config
 	f, err := parseFolder(config)
 	if err != nil {
-		return diag.FromErr(err)
+		diags.AddError("Unable to Parse Folder Configuration", err.Error())
+		return false
 	}
 
-	if err := d.Set("name", name); err != nil {
-		return diag.FromErr(err)
-	}
-
-	if err := d.Set("display_name", f.DisplayName); err != nil {
-		return diag.FromErr(err)
-	}
-
-	if err := d.Set("folder", formatFolderID(folders)); err != nil {
-		return diag.FromErr(err)
-	}
-
-	if err := d.Set("description", f.Description); err != nil {
-		return diag.FromErr(err)
-	}
-
-	if err := d.Set("security", flattenSecurity(f.Properties.Security)); err != nil {
-		return diag.FromErr(err)
-	}
-
-	return nil
+	data.ID = types.StringValue(job.Base)
+	data.Template = types.StringValue(config)
+	data.DisplayName = types.StringValue(f.DisplayName)
+	data.Description = types.StringValue(f.Description)
+	data.Security = securityToSet(ctx, f.Properties.Security, diags)
+	return !diags.HasError()
 }
 
-func resourceJenkinsFolderUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(jenkinsClient)
-	name, folders := parseCanonicalJobID(d.Id())
-
-	// grab job by current name
-	job, err := client.GetJob(ctx, name, folders...)
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::update - Could not find job %q: %w", name, err))
-	}
-
-	// Extract the raw XML configuration
-	config, err := job.GetConfig(ctx)
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::update - Job %q could not extract configuration: %v", job.Base, err))
-	}
-
-	// Next, parse the properties from the config
-	f, err := parseFolder(config)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-
-	// Then update the values
-	f.Description = d.Get("description").(string)
-	f.DisplayName = d.Get("display_name").(string)
-	f.Properties.Security = expandSecurity(d.Get("security").(*schema.Set).List())
-
-	// And send it back to Jenkins
-	xml, err := f.Render()
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::create - Error binding config.xml template to %q: %w", name, err))
-	}
-
-	err = job.UpdateConfig(ctx, string(xml))
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("jenkins::update - Error updating job %q configuration: %w", name, err))
-	}
-
-	return resourceJenkinsFolderRead(ctx, d, meta)
-}
-
-func resourceJenkinsFolderDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(jenkinsClient)
-	name, folders := parseCanonicalJobID(d.Id())
-
-	log.Printf("[DEBUG] jenkins::delete - Removing %q", name)
-
-	ok, err := client.DeleteJobInFolder(ctx, name, folders...)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-
-	log.Printf("[DEBUG] jenkins::delete - %q removed: %t", name, ok)
-	return nil
-}
-
-func expandSecurity(config []interface{}) *folderSecurity {
-	if len(config) == 0 {
+// securityFromModel converts the "security" set block into the internal
+// folderSecurity model used to render config.xml. It returns nil when no
+// security block is configured.
+func securityFromModel(ctx context.Context, set types.Set, diags *diag.Diagnostics) *folderSecurity {
+	if set.IsNull() || set.IsUnknown() || len(set.Elements()) == 0 {
 		return nil
 	}
 
-	ret := &folderSecurity{}
-	data := config[0].(map[string]interface{})
-	ret.InheritanceStrategy = folderPermissionInheritanceStrategy{
-		Class: data["inheritance_strategy"].(string),
+	var blocks []folderSecurityBlockModel
+	diags.Append(set.ElementsAs(ctx, &blocks, false)...)
+	if diags.HasError() || len(blocks) == 0 {
+		return nil
 	}
-	ret.Permission = []string{}
-	for _, permission := range data["permissions"].([]interface{}) {
-		ret.Permission = append(ret.Permission, permission.(string))
+
+	b := blocks[0]
+	permissions := []string{}
+	diags.Append(b.Permissions.ElementsAs(ctx, &permissions, false)...)
+	if diags.HasError() {
+		return nil
 	}
-	return ret
+
+	// The schema Default normally fills this in, but fall back to the default
+	// class so an omitted inheritance_strategy never renders an empty class.
+	strategy := b.InheritanceStrategy.ValueString()
+	if strategy == "" {
+		strategy = defaultFolderInheritanceStrategy
+	}
+
+	return &folderSecurity{
+		InheritanceStrategy: folderPermissionInheritanceStrategy{Class: strategy},
+		Permission:          permissions,
+	}
 }
 
-func flattenSecurity(config *folderSecurity) []map[string]interface{} {
-	ret := []map[string]interface{}{}
-	if config == nil {
-		return ret
+// securityToSet converts an internal folderSecurity model into the "security"
+// set block. A nil model yields an empty set, matching a folder with no
+// project-based security configured.
+func securityToSet(ctx context.Context, sec *folderSecurity, diags *diag.Diagnostics) types.Set {
+	if sec == nil {
+		return types.SetValueMust(folderSecurityObjectType, []attr.Value{})
 	}
 
-	d := map[string]interface{}{}
-	d["inheritance_strategy"] = config.InheritanceStrategy.Class
-	d["permissions"] = config.Permission
+	permissions, d := types.ListValueFrom(ctx, types.StringType, sec.Permission)
+	diags.Append(d...)
 
-	return append(ret, d)
+	set, d := types.SetValueFrom(ctx, folderSecurityObjectType, []folderSecurityBlockModel{
+		{
+			InheritanceStrategy: types.StringValue(sec.InheritanceStrategy.Class),
+			Permissions:         permissions,
+		},
+	})
+	diags.Append(d...)
+	return set
 }

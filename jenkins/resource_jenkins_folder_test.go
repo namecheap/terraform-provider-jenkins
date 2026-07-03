@@ -30,6 +30,12 @@ func TestAccJenkinsFolder_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("jenkins_folder.foo", "display_name", ""),
 				),
 			},
+			{
+				ResourceName:            "jenkins_folder.foo",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"template"},
+			},
 		},
 	})
 }

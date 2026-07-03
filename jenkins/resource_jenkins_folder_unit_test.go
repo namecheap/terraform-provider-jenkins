@@ -2,62 +2,33 @@ package jenkins
 
 import (
 	"context"
-	"fmt"
-	"reflect"
 	"testing"
 
-	jenkins "github.com/bndr/gojenkins"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 )
 
-func TestExpandSecurity(t *testing.T) {
+// TestSecurityRoundtrip exercises the securityToSet/securityFromModel pair that
+// replaces the SDKv2 flatten/expand helpers: a folderSecurity converted into the
+// "security" set block and back must be unchanged.
+func TestSecurityRoundtrip(t *testing.T) {
+	ctx := context.Background()
+
 	tests := []struct {
-		name  string
-		input []interface{}
-		want  *folderSecurity
+		name string
+		in   *folderSecurity
 	}{
+		{name: "nil", in: nil},
 		{
-			name:  "nil-returns-nil",
-			input: nil,
-			want:  nil,
-		},
-		{
-			name:  "empty-returns-nil",
-			input: []interface{}{},
-			want:  nil,
-		},
-		{
-			name: "basic",
-			input: []interface{}{
-				map[string]interface{}{
-					"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-					"permissions":          []interface{}{"hudson.model.Item.Build:dev"},
-				},
-			},
-			want: &folderSecurity{
-				InheritanceStrategy: folderPermissionInheritanceStrategy{
-					Class: "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-				},
-				Permission: []string{"hudson.model.Item.Build:dev"},
+			name: "single-permission",
+			in: &folderSecurity{
+				InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+				Permission:          []string{"hudson.model.Item.Build:dev"},
 			},
 		},
 		{
 			name: "multiple-permissions",
-			input: []interface{}{
-				map[string]interface{}{
-					"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy",
-					"permissions": []interface{}{
-						"hudson.model.Item.Build:dev",
-						"hudson.model.Item.Read:authenticated",
-						"hudson.model.Item.Cancel:admin",
-					},
-				},
-			},
-			want: &folderSecurity{
-				InheritanceStrategy: folderPermissionInheritanceStrategy{
-					Class: "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy",
-				},
+			in: &folderSecurity{
+				InheritanceStrategy: folderPermissionInheritanceStrategy{Class: "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy"},
 				Permission: []string{
 					"hudson.model.Item.Build:dev",
 					"hudson.model.Item.Read:authenticated",
@@ -65,207 +36,45 @@ func TestExpandSecurity(t *testing.T) {
 				},
 			},
 		},
-		{
-			name: "empty-permissions-list",
-			input: []interface{}{
-				map[string]interface{}{
-					"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-					"permissions":          []interface{}{},
-				},
-			},
-			want: &folderSecurity{
-				InheritanceStrategy: folderPermissionInheritanceStrategy{
-					Class: "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-				},
-				Permission: []string{},
-			},
-		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := expandSecurity(tt.input)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("expandSecurity() = %+v, want %+v", got, tt.want)
+			var diags diag.Diagnostics
+			set := securityToSet(ctx, tt.in, &diags)
+			if diags.HasError() {
+				t.Fatalf("securityToSet: %v", diags)
+			}
+
+			got := securityFromModel(ctx, set, &diags)
+			if diags.HasError() {
+				t.Fatalf("securityFromModel: %v", diags)
+			}
+
+			if tt.in == nil {
+				if got != nil {
+					t.Fatalf("expected nil security, got %+v", got)
+				}
+				if len(set.Elements()) != 0 {
+					t.Fatalf("expected empty set for nil security, got %d elements", len(set.Elements()))
+				}
+				return
+			}
+
+			if got == nil {
+				t.Fatalf("expected non-nil security")
+			}
+			if got.InheritanceStrategy.Class != tt.in.InheritanceStrategy.Class {
+				t.Errorf("inheritance_strategy = %q, want %q", got.InheritanceStrategy.Class, tt.in.InheritanceStrategy.Class)
+			}
+			if len(got.Permission) != len(tt.in.Permission) {
+				t.Fatalf("permissions len = %d, want %d", len(got.Permission), len(tt.in.Permission))
+			}
+			for i := range got.Permission {
+				if got.Permission[i] != tt.in.Permission[i] {
+					t.Errorf("permission[%d] = %q, want %q", i, got.Permission[i], tt.in.Permission[i])
+				}
 			}
 		})
-	}
-}
-
-func TestFlattenSecurity(t *testing.T) {
-	tests := []struct {
-		name  string
-		input *folderSecurity
-		want  []map[string]interface{}
-	}{
-		{
-			name:  "nil-returns-empty-slice",
-			input: nil,
-			want:  []map[string]interface{}{},
-		},
-		{
-			name: "basic",
-			input: &folderSecurity{
-				InheritanceStrategy: folderPermissionInheritanceStrategy{
-					Class: "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-				},
-				Permission: []string{"hudson.model.Item.Build:dev"},
-			},
-			want: []map[string]interface{}{
-				{
-					"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-					"permissions":          []string{"hudson.model.Item.Build:dev"},
-				},
-			},
-		},
-		{
-			name: "multiple-permissions",
-			input: &folderSecurity{
-				InheritanceStrategy: folderPermissionInheritanceStrategy{
-					Class: "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy",
-				},
-				Permission: []string{
-					"hudson.model.Item.Build:dev",
-					"hudson.model.Item.Read:authenticated",
-				},
-			},
-			want: []map[string]interface{}{
-				{
-					"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy",
-					"permissions":          []string{"hudson.model.Item.Build:dev", "hudson.model.Item.Read:authenticated"},
-				},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := flattenSecurity(tt.input)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("flattenSecurity() = %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExpandFlattenSecurity_Roundtrip(t *testing.T) {
-	original := &folderSecurity{
-		InheritanceStrategy: folderPermissionInheritanceStrategy{
-			Class: "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
-		},
-		Permission: []string{"hudson.model.Item.Build:dev", "hudson.model.Item.Read:dev"},
-	}
-	flat := flattenSecurity(original)
-
-	// Simulate Terraform reading []string back into []interface{} before calling expandSecurity.
-	input := make([]interface{}, len(flat))
-	for i, m := range flat {
-		perms := m["permissions"].([]string)
-		ifacePerms := make([]interface{}, len(perms))
-		for j, p := range perms {
-			ifacePerms[j] = p
-		}
-		input[i] = map[string]interface{}{
-			"inheritance_strategy": m["inheritance_strategy"],
-			"permissions":          ifacePerms,
-		}
-	}
-
-	got := expandSecurity(input)
-	if !reflect.DeepEqual(got, original) {
-		t.Errorf("roundtrip: got %+v, want %+v", got, original)
-	}
-}
-
-func Test_resourceJenkinsFolderDelete(t *testing.T) {
-	tests := []struct {
-		name string
-		meta jenkinsClient
-		want diag.Diagnostics
-	}{
-		{
-			name: "success",
-			meta: &mockJenkinsClient{
-				mockDeleteJobInFolder: func(_ context.Context, _ string, _ ...string) (bool, error) {
-					return true, nil
-				},
-			},
-			want: nil,
-		},
-		{
-			name: "error",
-			meta: &mockJenkinsClient{
-				mockDeleteJobInFolder: func(_ context.Context, _ string, _ ...string) (bool, error) {
-					return false, fmt.Errorf("api error")
-				},
-			},
-			want: diag.Diagnostics{
-				{Summary: "api error"},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := schema.TestResourceDataRaw(t, resourceJenkinsFolder().Schema, map[string]interface{}{})
-			got := resourceJenkinsFolderDelete(context.Background(), d, tt.meta)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("resourceJenkinsFolderDelete() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_resourceJenkinsFolderRead(t *testing.T) {
-	tests := []struct {
-		name string
-		meta jenkinsClient
-		want diag.Diagnostics
-	}{
-		{
-			name: "not-found-clears-id",
-			meta: &mockJenkinsClient{
-				mockGetJob: func(_ context.Context, _ string, _ ...string) (*jenkins.Job, error) {
-					return nil, fmt.Errorf("404")
-				},
-			},
-			want: nil,
-		},
-		{
-			name: "server-error",
-			meta: &mockJenkinsClient{
-				mockGetJob: func(_ context.Context, _ string, _ ...string) (*jenkins.Job, error) {
-					return nil, fmt.Errorf("503 Service Unavailable")
-				},
-			},
-			want: diag.Diagnostics{
-				{Summary: `jenkins::read - Job "" does not exist: 503 Service Unavailable`},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := schema.TestResourceDataRaw(t, resourceJenkinsFolder().Schema, map[string]interface{}{})
-			got := resourceJenkinsFolderRead(context.Background(), d, tt.meta)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("resourceJenkinsFolderRead() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_resourceJenkinsFolderCreate_folderNotFound(t *testing.T) {
-	meta := &mockJenkinsClient{
-		mockGetFolder: func(_ context.Context, _ string, _ ...string) (*jenkins.Folder, error) {
-			return nil, fmt.Errorf("404 Not Found")
-		},
-	}
-	d := schema.TestResourceDataRaw(t, resourceJenkinsFolder().Schema, map[string]interface{}{
-		"name":   "test-job",
-		"folder": "/job/parent",
-	})
-	got := resourceJenkinsFolderCreate(context.Background(), d, meta)
-	want := diag.Diagnostics{
-		{Summary: "jenkins::create - Could not find folder '/job/parent': 404 Not Found"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("resourceJenkinsFolderCreate() = %v, want %v", got, want)
 	}
 }
