@@ -19,6 +19,8 @@ type mockJenkinsClient struct {
 	mockGetPlugin         func(ctx context.Context, name string) (*jenkins.Plugin, error)
 	mockCreateView        func(ctx context.Context, name string, viewType string) (*jenkins.View, error)
 	mockPostRequest       func(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error)
+	mockGetAllNodes       func(ctx context.Context) ([]*jenkins.Node, error)
+	mockGetAllJobNames    func(ctx context.Context) ([]jenkins.InnerJob, error)
 	mockCreateNode        func(ctx context.Context, name string, numExecutors int, description string, remoteFS string, label string, options ...interface{}) (*jenkins.Node, error)
 	mockGetNode           func(ctx context.Context, name string) (*jenkins.Node, error)
 	mockDeleteNode        func(ctx context.Context, name string) (bool, error)
@@ -63,6 +65,14 @@ func (m *mockJenkinsClient) CreateView(ctx context.Context, name string, viewTyp
 
 func (m *mockJenkinsClient) PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	return m.mockPostRequest(ctx, endpoint, payload, responseStruct, querystring)
+}
+
+func (m *mockJenkinsClient) GetAllNodes(ctx context.Context) ([]*jenkins.Node, error) {
+	return m.mockGetAllNodes(ctx)
+}
+
+func (m *mockJenkinsClient) GetAllJobNames(ctx context.Context) ([]jenkins.InnerJob, error) {
+	return m.mockGetAllJobNames(ctx)
 }
 
 func (m *mockJenkinsClient) CreateNode(ctx context.Context, name string, numExecutors int, description string, remoteFS string, label string, options ...interface{}) (*jenkins.Node, error) {
