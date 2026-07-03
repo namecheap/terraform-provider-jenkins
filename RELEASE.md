@@ -14,9 +14,23 @@ Terraform Registry (key ID `D48A102B93ABB761`, "Namecheap Cloud Platform (for
 terraform registry) <squid@namecheap.com>"). **Do not generate a new key** —
 the same key and secrets are reused here.
 
-Retrieve the `GPG_PRIVATE_KEY` and `PASSPHRASE` values from the
-`namecheap/terraform-provider-spaceship` repository (Settings → Secrets and
-variables → Actions) and add them to this repository.
+**Key owner:** the SQUID / Namecheap Cloud Platform team (`squid@namecheap.com`).
+Contact them for rotation or access requests.
+
+**Canonical storage:** the private key and passphrase live in **HashiCorp
+Vault** at the KV v2 path below (the authoritative source of truth — GitHub
+repository secrets are only mirrors of these values):
+
+| Vault path                                          | Field         | Maps to GitHub secret |
+|-----------------------------------------------------|---------------|-----------------------|
+| `kv/squid/terraform-registry/gpg-signing-key`       | `private_key` | `GPG_PRIVATE_KEY`     |
+| `kv/squid/terraform-registry/gpg-signing-key`       | `passphrase`  | `PASSPHRASE`          |
+
+Read them with the Vault CLI (requires SQUID-team Vault access):
+
+```bash
+vault kv get kv/squid/terraform-registry/gpg-signing-key
+```
 
 ### 2. Add GitHub repository secrets
 
@@ -28,8 +42,9 @@ Go to **Settings → Secrets and variables → Actions** in this repository and 
 | `PASSPHRASE`      | Same value as `PASSPHRASE` in `namecheap/terraform-provider-spaceship`             |
 
 > **Note:** GitHub secrets are write-only and cannot be read back through the
-> UI or API. Export the values from the secrets vault / 1Password / wherever
-> they were stored when the Spaceship provider was first set up.
+> UI or API. Retrieve the canonical values from HashiCorp Vault
+> (`kv/squid/terraform-registry/gpg-signing-key`, see step 1) rather than from
+> the Spaceship repository's secrets — Vault is the source of truth.
 
 ### 3. Connect to Terraform Registry
 
