@@ -200,6 +200,7 @@ func TestIsNotFound(t *testing.T) {
 		{"200 ok", errors.New("200 OK"), false},
 		{"500 error", errors.New("500 Internal Server Error"), false},
 		{"unrelated", errors.New("connection refused"), false},
+		{"nil error", nil, false},
 	}
 	for _, tt := range tests {
 		if got := isNotFound(tt.err); got != tt.want {
