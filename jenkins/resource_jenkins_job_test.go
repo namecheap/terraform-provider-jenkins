@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
-	jenkins "github.com/bndr/gojenkins"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -102,93 +100,43 @@ func testAccCheckJenkinsJobDestroy(s *terraform.State) error {
 	return nil
 }
 
-func Test_resourceJenkinsJobDelete(t *testing.T) {
-	type args struct {
-		ctx  context.Context
-		d    *schema.ResourceData
-		meta jenkinsClient
-	}
-	tests := []struct {
-		name string
-		args args
-		want diag.Diagnostics
+// TestJobTemplateSemanticEquality verifies the framework template plan modifier
+// suppresses a diff for semantically-equal (but textually different) XML — the
+// behaviour previously provided by the SDKv2 templateDiff DiffSuppressFunc — and
+// preserves a diff for a genuine change.
+func TestJobTemplateSemanticEquality(t *testing.T) {
+	cases := []struct {
+		name         string
+		state        string
+		plan         string
+		wantSuppress bool
 	}{
 		{
-			name: "success",
-			args: args{
-				meta: &mockJenkinsClient{
-					mockDeleteJobInFolder: func(ctx context.Context, name string, parentIDs ...string) (bool, error) {
-						return true, nil
-					},
-				},
-				d: schema.TestResourceDataRaw(t, resourceJenkinsJob().Schema, map[string]interface{}{}),
-			},
+			name:         "reformatted equal",
+			state:        `<?xml version='1.1' encoding='UTF-8'?><project plugin="x@1.0"> <description>hi</description></project>`,
+			plan:         `<project plugin="x@2.0"><description>hi</description></project>`,
+			wantSuppress: true,
 		},
 		{
-			name: "error",
-			args: args{
-				meta: &mockJenkinsClient{
-					mockDeleteJobInFolder: func(ctx context.Context, name string, parentIDs ...string) (bool, error) {
-						return false, fmt.Errorf("omg")
-					},
-				},
-				d: schema.TestResourceDataRaw(t, resourceJenkinsJob().Schema, map[string]interface{}{}),
-			},
-			want: diag.Diagnostics{
-				diag.Diagnostic{Summary: "omg"},
-			},
+			name:         "genuine change",
+			state:        `<project><description>hi</description></project>`,
+			plan:         `<project><description>changed</description></project>`,
+			wantSuppress: false,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := resourceJenkinsJobDelete(tt.args.ctx, tt.args.d, tt.args.meta); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("resourceJenkinsJobDelete() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
 
-func Test_resourceJenkinsJobRead(t *testing.T) {
-	type args struct {
-		ctx  context.Context
-		d    *schema.ResourceData
-		meta jenkinsClient
-	}
-	tests := []struct {
-		name string
-		args args
-		want diag.Diagnostics
-	}{
-		{
-			name: "missing-job",
-			args: args{
-				meta: &mockJenkinsClient{
-					mockGetJob: func(ctx context.Context, id string, parentIDs ...string) (*jenkins.Job, error) {
-						return nil, fmt.Errorf("404")
-					},
-				},
-				d: schema.TestResourceDataRaw(t, resourceJenkinsJob().Schema, map[string]interface{}{}),
-			},
-		},
-		{
-			name: "error-job",
-			args: args{
-				meta: &mockJenkinsClient{
-					mockGetJob: func(ctx context.Context, id string, parentIDs ...string) (*jenkins.Job, error) {
-						return nil, fmt.Errorf("500")
-					},
-				},
-				d: schema.TestResourceDataRaw(t, resourceJenkinsJob().Schema, map[string]interface{}{}),
-			},
-			want: diag.Diagnostics{
-				diag.Diagnostic{Summary: "jenkins::read - Job \"\" does not exist: 500"},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := resourceJenkinsJobRead(tt.args.ctx, tt.args.d, tt.args.meta); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("resourceJenkinsJobRead() = %v, want %v", got, tt.want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := planmodifier.StringRequest{
+				StateValue: types.StringValue(tc.state),
+				PlanValue:  types.StringValue(tc.plan),
+			}
+			resp := &planmodifier.StringResponse{PlanValue: req.PlanValue}
+			templateSemanticEqualityModifier{}.PlanModifyString(context.Background(), req, resp)
+
+			suppressed := resp.PlanValue.Equal(req.StateValue)
+			if suppressed != tc.wantSuppress {
+				t.Errorf("suppressed = %v, want %v (plan=%q)", suppressed, tc.wantSuppress, resp.PlanValue.ValueString())
 			}
 		})
 	}

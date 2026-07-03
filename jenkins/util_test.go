@@ -113,7 +113,7 @@ func TestTemplateDiff(t *testing.T) {
 	inputLeft := "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Case</root>"
 	inputRight := "<root>Test Case</root>"
 
-	job := resourceJenkinsJob()
+	job := resourceJenkinsFolder()
 	bag := job.TestResourceData()
 
 	if actual := templateDiff("", inputLeft, inputRight, bag); !actual {
@@ -155,7 +155,7 @@ func TestTemplateDiff_HTMLEntities(t *testing.T) {
 }
 
 func TestTemplateDiff_PluginVersions(t *testing.T) {
-	job := resourceJenkinsJob()
+	job := resourceJenkinsFolder()
 	bag := job.TestResourceData()
 
 	// Different plugin versions on identical content must be equal.

@@ -86,17 +86,23 @@ var (
 	rePlugin = regexp.MustCompile(` plugin="[^"]*"`)
 )
 
+// normalizeJobXML canonicalises job/folder config XML for equality comparison:
+// it drops the XML declaration and Jenkins-rewritten plugin version attributes,
+// removes insignificant whitespace, and unescapes HTML entities. Shared by the
+// SDKv2 folder DiffSuppressFunc and the framework job template plan modifier so
+// both paths treat semantically-equal XML identically.
+func normalizeJobXML(s string) string {
+	s = reXMLDecl.ReplaceAllString(s, "")
+	s = rePlugin.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.TrimSpace(s)
+	s = html.UnescapeString(s)
+	return s
+}
+
 func templateDiff(k, old, new string, d *schema.ResourceData) bool {
-	normalize := func(s string) string {
-		s = reXMLDecl.ReplaceAllString(s, "")
-		s = rePlugin.ReplaceAllString(s, "")
-		s = strings.ReplaceAll(s, " ", "")
-		s = strings.TrimSpace(s)
-		s = html.UnescapeString(s)
-		return s
-	}
-	old = normalize(old)
-	new = normalize(new)
+	old = normalizeJobXML(old)
+	new = normalizeJobXML(new)
 
 	// SECURITY: the normalized job/folder XML can contain inlined secrets (for
 	// example credentials embedded in job configuration), so log only its length
