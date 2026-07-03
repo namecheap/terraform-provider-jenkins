@@ -126,7 +126,14 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 		}
 	}
 
-	client := newJenkinsClient(&config)
+	client, err := newJenkinsClient(&config)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid ca_cert",
+			err.Error(),
+		)
+		return
+	}
 	if _, err := client.Init(ctx); err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to initialize client",

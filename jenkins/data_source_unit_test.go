@@ -68,7 +68,7 @@ func TestDataSourceHelperConfigure_wrongType(t *testing.T) {
 
 func TestDataSourceHelperConfigure_valid(t *testing.T) {
 	d := newDataSourceHelper()
-	client := newJenkinsClient(&Config{})
+	client, _ := newJenkinsClient(&Config{})
 	resp := &datasource.ConfigureResponse{}
 	d.Configure(context.Background(), datasource.ConfigureRequest{ProviderData: client}, resp)
 	if resp.Diagnostics.HasError() {

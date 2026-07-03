@@ -47,7 +47,7 @@ func init() {
 		Username:  os.Getenv("JENKINS_USERNAME"),
 		Password:  os.Getenv("JENKINS_PASSWORD"),
 	}
-	testAccClient = newJenkinsClient(&config)
+	testAccClient, _ = newJenkinsClient(&config)
 }
 
 func TestProvider(t *testing.T) {

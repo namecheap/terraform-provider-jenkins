@@ -101,7 +101,10 @@ func configureProvider(ctx context.Context, d *schema.ResourceData) (interface{}
 		}
 	}
 
-	client := newJenkinsClient(&config)
+	client, err := newJenkinsClient(&config)
+	if err != nil {
+		return nil, diag.Errorf("Invalid ca_cert: %s", err.Error())
+	}
 	if _, err = client.Init(ctx); err != nil {
 		return nil, diag.FromErr(err)
 	}
