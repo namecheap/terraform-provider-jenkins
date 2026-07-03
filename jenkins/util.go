@@ -109,7 +109,11 @@ func normalizeJobXML(s string) string {
 // is never masked. It returns ok=false when s is not well-formed XML, in which
 // case the caller falls back to the string comparison.
 func canonicalizeXML(s string) (string, bool) {
-	dec := xml.NewDecoder(strings.NewReader(s))
+	// Strip the XML declaration first: Jenkins serves config.xml as
+	// `<?xml version='1.1'?>`, which Go's encoding/xml rejects ("unsupported
+	// version 1.1"). The declaration is semantically irrelevant to the
+	// comparison, so removing it lets the token stream parse.
+	dec := xml.NewDecoder(strings.NewReader(reXMLDecl.ReplaceAllString(s, "")))
 	var buf strings.Builder
 	enc := xml.NewEncoder(&buf)
 	for {

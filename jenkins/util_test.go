@@ -219,6 +219,8 @@ func TestValidateJobXML(t *testing.T) {
 	}{
 		{"valid project", `<project><description>x</description></project>`, false, false},
 		{"valid self-closing", `<flow-definition plugin="workflow-job@2.25"/>`, false, false},
+		{"jenkins 1.1 declaration", "<?xml version=\"1.1\" encoding=\"UTF-8\"?><project><description>x</description></project>", false, false},
+		{"jenkins 1.1 malformed", "<?xml version=\"1.1\" encoding=\"UTF-8\"?><project><description>x</project>", true, false},
 		{"empty string", ``, false, false},
 		{"whitespace only", "  \n  ", false, false},
 		{"mismatched tags", `<project><description>x</project>`, true, false},

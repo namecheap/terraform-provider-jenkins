@@ -39,7 +39,12 @@ func validateJobXML(val interface{}, path cty.Path) diag.Diagnostics {
 		return diags
 	}
 
-	dec := xml.NewDecoder(strings.NewReader(s))
+	// Strip the XML declaration before parsing: Jenkins uses
+	// `<?xml version='1.1'?>`, which Go's encoding/xml rejects outright. Removing
+	// it (the declaration carries no configuration) leaves the newline in place,
+	// so reported line numbers stay accurate. This matches how templates are
+	// normalized elsewhere in the provider.
+	dec := xml.NewDecoder(strings.NewReader(reXMLDecl.ReplaceAllString(s, "")))
 	depth, rootSeen := 0, false
 	for {
 		tok, err := dec.Token()
