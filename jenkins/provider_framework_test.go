@@ -2,9 +2,12 @@ package jenkins
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 func TestJenkinsProvider_Metadata(t *testing.T) {
@@ -25,6 +28,66 @@ func TestJenkinsProvider_Schema(t *testing.T) {
 		if _, ok := resp.Schema.Attributes[attr]; !ok {
 			t.Errorf("Schema() missing attribute %q", attr)
 		}
+	}
+}
+
+// TestJenkinsProvider_Configure_missingServerURL is a regression test for the bug
+// where Configure() added a "server_url is required" diagnostic but did not return,
+// falling through to construct the client and dial the network via client.Init.
+// With no server_url provided (config all-null and JENKINS_URL unset), Configure
+// must surface the validation diagnostic and must not initialize the client.
+func TestJenkinsProvider_Configure_missingServerURL(t *testing.T) {
+	// Ensure the environment does not supply a server URL for this test.
+	t.Setenv("JENKINS_URL", "")
+
+	ctx := context.Background()
+	p := &JenkinsProvider{}
+
+	schemaResp := &provider.SchemaResponse{}
+	p.Schema(ctx, provider.SchemaRequest{}, schemaResp)
+
+	// Build an all-null config object from the provider schema (mirrors the
+	// pattern in resource_unit_test.go); every attribute, including server_url,
+	// is therefore unset.
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+	attrs := make(map[string]tftypes.Value, len(objType.AttributeTypes))
+	for name, typ := range objType.AttributeTypes {
+		attrs[name] = tftypes.NewValue(typ, nil)
+	}
+
+	req := provider.ConfigureRequest{
+		Config: tfsdk.Config{
+			Schema: schemaResp.Schema,
+			Raw:    tftypes.NewValue(objType, attrs),
+		},
+	}
+	resp := &provider.ConfigureResponse{}
+
+	p.Configure(ctx, req, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("Configure() with missing server_url should return an error diagnostic")
+	}
+
+	var sawServerURL bool
+	for _, d := range resp.Diagnostics.Errors() {
+		if strings.Contains(d.Summary(), "server_url is required") {
+			sawServerURL = true
+		}
+		if strings.Contains(d.Summary(), "Unable to initialize client") {
+			t.Errorf("Configure() attempted to initialize the client despite missing server_url: %s", d.Detail())
+		}
+	}
+	if !sawServerURL {
+		t.Errorf("Configure() should surface the 'server_url is required' diagnostic, got: %v", resp.Diagnostics.Errors())
+	}
+
+	// The client must not be handed to resources/data sources when config failed.
+	if resp.ResourceData != nil {
+		t.Error("Configure() set ResourceData despite missing server_url")
+	}
+	if resp.DataSourceData != nil {
+		t.Error("Configure() set DataSourceData despite missing server_url")
 	}
 }
 

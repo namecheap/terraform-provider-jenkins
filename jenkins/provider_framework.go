@@ -78,6 +78,10 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 			"server_url is required",
 			"server_url is required and must be provided in the provider config or the JENKINS_URL environment variable",
 		)
+		// Return before constructing the client: without a server_url, client.Init
+		// below would dial the network (and fail with an opaque connection error)
+		// instead of surfacing this validation diagnostic. Mirrors the SDKv2 provider.
+		return
 	}
 
 	caCert := os.Getenv("JENKINS_CA_CERT")
