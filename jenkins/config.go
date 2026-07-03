@@ -22,6 +22,22 @@ type jenkinsClient interface {
 	GetView(ctx context.Context, name string) (*jenkins.View, error)
 }
 
+// frameworkClient is the Jenkins client surface used by the terraform-plugin-framework
+// resources and data sources. It extends jenkinsClient (shared with the SDKv2 path) with
+// the operations only the framework side calls, so the framework helpers can depend on an
+// interface (enabling a mock in tests) instead of the concrete *jenkinsAdapter.
+type frameworkClient interface {
+	jenkinsClient
+	GetPlugin(ctx context.Context, name string) (*jenkins.Plugin, error)
+	CreateView(ctx context.Context, name string, viewType string) (*jenkins.View, error)
+	// PostRequest wraps the underlying Requester.Post so callers do not reach through to
+	// the embedded gojenkins client's Requester field, which cannot be mocked.
+	PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error)
+}
+
+// Ensure the concrete adapter satisfies the framework client surface.
+var _ frameworkClient = (*jenkinsAdapter)(nil)
+
 // jenkinsAdapter wraps the Jenkins client, enabling additional functionality
 type jenkinsAdapter struct {
 	*jenkins.Jenkins
@@ -106,6 +122,13 @@ func (j *jenkinsAdapter) Credentials() *jenkins.CredentialsManager {
 	return &jenkins.CredentialsManager{
 		J: j.Jenkins,
 	}
+}
+
+// PostRequest issues a POST to the given Jenkins endpoint via the underlying requester.
+// It exists so framework resources can depend on the frameworkClient interface rather
+// than reaching into the embedded gojenkins client's Requester field.
+func (j *jenkinsAdapter) PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
+	return j.Requester.Post(ctx, endpoint, payload, responseStruct, querystring)
 }
 
 // DeleteJobInFolder assists in running DeleteJob funcs, as DeleteJob is not folder aware

@@ -96,21 +96,26 @@ provider "jenkins" {
 }
 ```
 
-| Argument | Environment variable | Description |
-|---|---|---|
-| `server_url` | `JENKINS_URL` | Jenkins base URL |
-| `username` | `JENKINS_USERNAME` | Jenkins username |
-| `password` | `JENKINS_PASSWORD` | Jenkins API token or password |
-| `ca_cert` | `JENKINS_CA_CERT` | Path to a custom CA certificate |
-| `insecure` | — | Skip TLS certificate verification (non-production only) |
+| Argument | Environment variable | Required | Description |
+|---|---|---|---|
+| `server_url` | `JENKINS_URL` | **Yes** | Jenkins base URL. Must be set in the provider block or via `JENKINS_URL`. |
+| `username` | `JENKINS_USERNAME` | No | Jenkins username |
+| `password` | `JENKINS_PASSWORD` | No | Jenkins API token or password |
+| `ca_cert` | `JENKINS_CA_CERT` | No | Path to a custom CA certificate |
+| `insecure` | — | No | Skip TLS certificate verification (non-production only) |
+
+`server_url` (or the `JENKINS_URL` environment variable) is required; the provider returns a configuration error if it is not set. All other arguments are optional.
 
 ## Developing the Provider
 
 **Requirements:**
 
-- [Go](https://go.dev/dl/) ≥ 1.26 (see `go.mod` for the exact minimum)
-- [Terraform](https://www.terraform.io/downloads.html) ≥ 1.6
+- [Go](https://go.dev/dl/) — see the `go` directive in `go.mod` for the authoritative minimum
+- [Terraform](https://www.terraform.io/downloads.html) ≥ 1.6 (required by the `terraform test` integration suite)
 - [Docker Engine](https://docs.docker.com/engine/install/) ≥ 20.10 (acceptance and integration tests)
+- [golangci-lint](https://golangci-lint.run/) (for `make lint`) — pinned in CI (`.github/workflows/test.yml`)
+
+Exact, reproducible tool versions for local development (Go, Terraform, golangci-lint) are pinned in [`mise.toml`](mise.toml); run [`mise install`](https://mise.jdx.dev/) to match them.
 
 **Build & local install:**
 
@@ -134,6 +139,8 @@ make generate   # regenerate docs/  from provider schema
 ssh-keygen -t ed25519 -N "" -f integration/credentials/id_ed25519
 cd integration && terraform init && terraform test
 ```
+
+> `terraform init` may report an error resolving the provider from the registry (the dev build is used via `dev_overrides`, not the registry). This is expected and safe to ignore — CI runs `terraform init || true` for the same reason; `terraform test` uses the local build.
 
 **Update docs** after any schema change:
 

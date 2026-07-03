@@ -2,12 +2,12 @@ package jenkins
 
 import (
 	"context"
-	"fmt"
 
 	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSSHResourceModel struct {
@@ -71,6 +71,7 @@ Manages a SSH credential within Jenkins. This SSH credential may then be referen
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialSSHResource.Create")
 	var data credentialSSHResourceModel
 
 	// Read Terraform plan data into the model
@@ -79,18 +80,8 @@ func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	// Validate that the folder exists
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
-		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
+	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
+	if cm == nil {
 		return
 	}
 
@@ -134,6 +125,7 @@ func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateR
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialSSHResource.Read")
 	var data credentialSSHResourceModel
 
 	// Read Terraform plan data into the model
@@ -142,8 +134,7 @@ func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := jenkins.SSHCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
@@ -180,6 +171,7 @@ func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadReque
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialSSHResource.Update")
 	var data credentialSSHResourceModel
 	var state credentialSSHResourceModel
 
@@ -190,8 +182,7 @@ func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateR
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := jenkins.SSHCredentials{
 		ID:          data.Name.ValueString(),
@@ -241,18 +232,5 @@ func (r *credentialSSHResource) Delete(ctx context.Context, req resource.DeleteR
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	err := cm.Delete(ctx, data.Domain.ValueString(), data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Delete Resource",
-			"An unexpected error occurred while deleting the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
+	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }

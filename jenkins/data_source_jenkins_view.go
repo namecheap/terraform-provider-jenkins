@@ -6,6 +6,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type ViewDataSourceModel struct {
@@ -54,6 +55,7 @@ func (d *ViewDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 }
 
 func (d *ViewDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "ViewDataSource.Read")
 	var data ViewDataSourceModel
 
 	// Read Terraform configuration data into the model

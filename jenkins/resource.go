@@ -6,7 +6,9 @@ import (
 	"regexp"
 	"strings"
 
+	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -14,18 +16,61 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type (
 	// resourceHelper provides assistive snippets of logic to help reduce duplication in
 	// each resource definition.
 	resourceHelper struct {
-		client *jenkinsAdapter
+		client frameworkClient
 	}
 )
 
 func newResourceHelper() *resourceHelper {
 	return &resourceHelper{}
+}
+
+// credentialManager returns a CredentialsManager scoped to the given (unformatted)
+// folder. Shared by the credential resources' CRUD methods.
+func (r *resourceHelper) credentialManager(folder string) *jenkins.CredentialsManager {
+	cm := r.client.Credentials()
+	cm.Folder = formatFolderName(folder)
+	return cm
+}
+
+// credentialManagerForFolder is like credentialManager but also validates that the
+// folder exists. On failure it appends an "Invalid Folder" diagnostic and returns nil,
+// so callers should `if cm == nil { return }`.
+func (r *resourceHelper) credentialManagerForFolder(ctx context.Context, folder string, diags *diag.Diagnostics) *jenkins.CredentialsManager {
+	cm := r.credentialManager(folder)
+	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
+		diags.AddError(
+			"Invalid Folder",
+			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
+				"Please report this issue to the provider developers.\n\n"+
+				"Error: "+err.Error(),
+		)
+		return nil
+	}
+	tflog.Debug(ctx, "validated credential folder", map[string]interface{}{"folder": cm.Folder})
+	return cm
+}
+
+// deleteCredential deletes the named credential from the given folder/domain,
+// appending an "Unable to Delete Resource" diagnostic on failure. Shared by every
+// credential resource's Delete method.
+func (r *resourceHelper) deleteCredential(ctx context.Context, folder, domain, name string, diags *diag.Diagnostics) {
+	cm := r.credentialManager(folder)
+	tflog.Debug(ctx, "deleting credential", map[string]interface{}{"folder": cm.Folder, "domain": domain, "name": name})
+	if err := cm.Delete(ctx, domain, name); err != nil {
+		diags.AddError(
+			"Unable to Delete Resource",
+			"An unexpected error occurred while deleting the resource. "+
+				"Please report this issue to the provider developers.\n\n"+
+				"Error: "+err.Error(),
+		)
+	}
 }
 
 // Configure should register the client for the resource.

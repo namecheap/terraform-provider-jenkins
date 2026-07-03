@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialVaultAppRoleDataSourceModel struct {
@@ -59,6 +60,7 @@ func (d *credentialVaultAppRoleDataSource) Schema(ctx context.Context, req datas
 }
 
 func (d *credentialVaultAppRoleDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "credentialVaultAppRoleDataSource.Read")
 	var data credentialVaultAppRoleDataSourceModel
 
 	// Read Terraform configuration data into the model

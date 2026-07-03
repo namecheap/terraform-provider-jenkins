@@ -3,11 +3,11 @@ package jenkins
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // GitHubAppCredentials represents a Jenkins GitHub App credential.
@@ -77,6 +77,7 @@ Manages a GitHub App credential within Jenkins. This credential may then be refe
 
 // Create is called when the provider must create a new resource.
 func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialGitHubAppResource.Create")
 	var data credentialGitHubAppResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -84,17 +85,8 @@ func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
-		resp.Diagnostics.AddError(
-			"Invalid Folder",
-			fmt.Sprintf("An invalid folder name %q was specified. ", cm.Folder)+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
+	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
+	if cm == nil {
 		return
 	}
 
@@ -125,6 +117,7 @@ func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.C
 
 // Read is called when the provider must read resource values in order to update state.
 func (r *credentialGitHubAppResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialGitHubAppResource.Read")
 	var data credentialGitHubAppResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -132,8 +125,7 @@ func (r *credentialGitHubAppResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := GitHubAppCredentials{}
 	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
@@ -166,6 +158,7 @@ func (r *credentialGitHubAppResource) Read(ctx context.Context, req resource.Rea
 
 // Update is called to update the state of the resource.
 func (r *credentialGitHubAppResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialGitHubAppResource.Update")
 	var data credentialGitHubAppResourceModel
 	var state credentialGitHubAppResourceModel
 
@@ -175,8 +168,7 @@ func (r *credentialGitHubAppResource) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := GitHubAppCredentials{
 		ID:          data.Name.ValueString(),
@@ -215,18 +207,5 @@ func (r *credentialGitHubAppResource) Delete(ctx context.Context, req resource.D
 		return
 	}
 
-	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	err := cm.Delete(ctx, data.Domain.ValueString(), data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Delete Resource",
-			"An unexpected error occurred while deleting the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
+	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }

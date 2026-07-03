@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/bndr/gojenkins"
@@ -12,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 const createViewRetryDelay = time.Second
@@ -92,6 +94,8 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
+	tflog.Debug(ctx, "creating jenkins_view", map[string]interface{}{"name": data.Name.ValueString()})
+
 	if data.Folder.ValueString() != "" {
 		resp.Diagnostics.AddError(
 			"Folder-Scoped Views Not Supported",
@@ -136,7 +140,7 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 				fmt.Sprintf("Error adding %q to Jenkins view %q: %s", projectName, data.Name.ValueString(), err),
 			)
 
-			_, err := r.client.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
+			_, err := r.client.PostRequest(ctx, "/view/"+url.PathEscape(data.Name.ValueString())+"/doDelete", nil, nil, nil)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Unable to Delete Resource",
@@ -172,6 +176,8 @@ func (r *ViewResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	tflog.Debug(ctx, "reading jenkins_view", map[string]interface{}{"id": data.ID.ValueString()})
 
 	view, err := r.client.GetView(ctx, data.ID.ValueString())
 	if err != nil {
@@ -211,6 +217,8 @@ func (r *ViewResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
+	tflog.Debug(ctx, "updating jenkins_view (no-op)", map[string]interface{}{"name": data.Name.ValueString()})
+
 	// Skip any updating of the resource.
 	// No update-functionality in gojenkins.
 
@@ -233,7 +241,9 @@ func (r *ViewResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	_, err := r.client.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
+	tflog.Debug(ctx, "deleting jenkins_view", map[string]interface{}{"name": data.Name.ValueString()})
+
+	_, err := r.client.PostRequest(ctx, "/view/"+url.PathEscape(data.Name.ValueString())+"/doDelete", nil, nil, nil)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Delete Resource",

@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type folderDataSourceModel struct {
@@ -59,6 +60,7 @@ Get the attributes of a folder within Jenkins.
 }
 
 func (d *folderDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "folderDataSource.Read")
 	var data folderDataSourceModel
 
 	// Read Terraform configuration data into the model
@@ -72,7 +74,7 @@ func (d *folderDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	name, folders := parseCanonicalJobID(formatFolderName(folderName + "/" + name))
 	job, err := d.client.GetJob(ctx, name, folders...)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "404") {
+		if isNotFound(err) {
 			// Job does not exist
 			resp.State.RemoveResource(ctx)
 			return
