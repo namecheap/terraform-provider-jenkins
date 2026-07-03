@@ -204,6 +204,10 @@ func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.D
 		newFolderDataSource,
 		newPluginDataSource,
 		newNodeDataSource,
+		newJobsDataSource,
+		newFoldersDataSource,
+		newNodesDataSource,
+		newCredentialsDataSource,
 	}
 }
 

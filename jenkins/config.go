@@ -42,6 +42,10 @@ type frameworkClient interface {
 	// the embedded gojenkins client's Requester field, which cannot be mocked.
 	PostRequest(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error)
 
+	// Listing operations back the jenkins_jobs/_folders/_nodes list data sources.
+	GetAllNodes(ctx context.Context) ([]*jenkins.Node, error)
+	GetAllJobNames(ctx context.Context) ([]jenkins.InnerJob, error)
+
 	// Node operations back the jenkins_node resource and data source.
 	CreateNode(ctx context.Context, name string, numExecutors int, description string, remoteFS string, label string, options ...interface{}) (*jenkins.Node, error)
 	GetNode(ctx context.Context, name string) (*jenkins.Node, error)
