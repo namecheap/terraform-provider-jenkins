@@ -98,8 +98,10 @@ func templateDiff(k, old, new string, d *schema.ResourceData) bool {
 	old = normalize(old)
 	new = normalize(new)
 
-	log.Printf("[DEBUG] jenkins::diff - Old: %q", old)
-	log.Printf("[DEBUG] jenkins::diff - New: %q", new)
+	// SECURITY: the normalized job/folder XML can contain inlined secrets (for
+	// example credentials embedded in job configuration), so log only its length
+	// and whether it changed — never its content.
+	log.Printf("[DEBUG] jenkins::diff - old_len=%d new_len=%d equal=%t", len(old), len(new), old == new)
 	return old == new
 }
 

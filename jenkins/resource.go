@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type (
@@ -52,6 +53,7 @@ func (r *resourceHelper) credentialManagerForFolder(ctx context.Context, folder 
 		)
 		return nil
 	}
+	tflog.Debug(ctx, "validated credential folder", map[string]interface{}{"folder": cm.Folder})
 	return cm
 }
 
@@ -60,6 +62,7 @@ func (r *resourceHelper) credentialManagerForFolder(ctx context.Context, folder 
 // credential resource's Delete method.
 func (r *resourceHelper) deleteCredential(ctx context.Context, folder, domain, name string, diags *diag.Diagnostics) {
 	cm := r.credentialManager(folder)
+	tflog.Debug(ctx, "deleting credential", map[string]interface{}{"folder": cm.Folder, "domain": domain, "name": name})
 	if err := cm.Delete(ctx, domain, name); err != nil {
 		diags.AddError(
 			"Unable to Delete Resource",
