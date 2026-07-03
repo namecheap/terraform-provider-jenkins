@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	jenkins "github.com/bndr/gojenkins"
 )
@@ -24,6 +25,14 @@ type jenkinsClient interface {
 // jenkinsAdapter wraps the Jenkins client, enabling additional functionality
 type jenkinsAdapter struct {
 	*jenkins.Jenkins
+
+	// pluginsOnce/plugins/pluginsErr memoize the full plugin manifest so that
+	// multiple jenkins_plugin lookups within a single provider lifetime
+	// (one plan/apply) share a single GET of /pluginManager instead of
+	// re-fetching and decoding the whole inventory per lookup.
+	pluginsOnce sync.Once
+	plugins     *jenkins.Plugins
+	pluginsErr  error
 }
 
 // Config is the set of parameters needed to configure the Jenkins provider.
@@ -106,12 +115,20 @@ func (j *jenkinsAdapter) DeleteJobInFolder(ctx context.Context, name string, par
 }
 
 // GetPlugin returns the installed plugin with the given short name, or an error if not found.
+//
+// The full plugin manifest is fetched at most once per adapter (i.e. once per
+// provider configuration): the first call performs the GET /pluginManager and
+// caches the result, and subsequent lookups filter the cached inventory. This
+// avoids a redundant full-manifest fetch for every jenkins_plugin data source
+// in a configuration.
 func (j *jenkinsAdapter) GetPlugin(ctx context.Context, name string) (*jenkins.Plugin, error) {
-	plugins, err := j.GetPlugins(ctx, 1)
-	if err != nil {
-		return nil, err
+	j.pluginsOnce.Do(func() {
+		j.plugins, j.pluginsErr = j.GetPlugins(ctx, 1)
+	})
+	if j.pluginsErr != nil {
+		return nil, j.pluginsErr
 	}
-	p := plugins.Contains(name)
+	p := j.plugins.Contains(name)
 	if p == nil {
 		return nil, fmt.Errorf("404 plugin %q not installed", name)
 	}
