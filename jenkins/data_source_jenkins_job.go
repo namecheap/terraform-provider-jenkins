@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type jobDataSourceModel struct {
@@ -46,6 +47,7 @@ func (d *jobDataSource) Schema(ctx context.Context, req datasource.SchemaRequest
 }
 
 func (d *jobDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "jobDataSource.Read")
 	var data jobDataSourceModel
 
 	// Read Terraform configuration data into the model

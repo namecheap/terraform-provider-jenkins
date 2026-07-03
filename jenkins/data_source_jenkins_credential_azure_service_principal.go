@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialAzureServicePrincipalDataSourceModel struct {
@@ -43,6 +44,7 @@ func (d *credentialAzureServicePrincipalDataSource) Schema(_ context.Context, _ 
 }
 
 func (d *credentialAzureServicePrincipalDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	tflog.Debug(ctx, "credentialAzureServicePrincipalDataSource.Read")
 	var data credentialAzureServicePrincipalDataSourceModel
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)

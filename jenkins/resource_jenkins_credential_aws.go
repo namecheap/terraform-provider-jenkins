@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialAws struct {
@@ -97,6 +98,7 @@ Manages an AWS credential within Jenkins.
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialAwsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialAwsResource.Create")
 	var data credentialAwsResourceModel
 
 	// Read Terraform plan data into the model
@@ -144,6 +146,7 @@ func (r *credentialAwsResource) Create(ctx context.Context, req resource.CreateR
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialAwsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialAwsResource.Read")
 	var data credentialAwsResourceModel
 
 	// Read Terraform plan data into the model
@@ -190,6 +193,7 @@ func (r *credentialAwsResource) Read(ctx context.Context, req resource.ReadReque
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialAwsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialAwsResource.Update")
 	var data credentialAwsResourceModel
 	var state credentialAwsResourceModel
 

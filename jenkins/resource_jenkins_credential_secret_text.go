@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSecretTextResourceModel struct {
@@ -57,6 +58,7 @@ Manages a secret text credential within Jenkins. This secret text may then be re
 // and planned state values should be read from the
 // CreateRequest and new state values set on the CreateResponse.
 func (r *credentialSecretTextResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	tflog.Debug(ctx, "credentialSecretTextResource.Create")
 	var data credentialSecretTextResourceModel
 
 	// Read Terraform plan data into the model
@@ -101,6 +103,7 @@ func (r *credentialSecretTextResource) Create(ctx context.Context, req resource.
 // to update state. Planned state values should be read from the
 // ReadRequest and new state values set on the ReadResponse.
 func (r *credentialSecretTextResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	tflog.Debug(ctx, "credentialSecretTextResource.Read")
 	var data credentialSecretTextResourceModel
 
 	// Read Terraform plan data into the model
@@ -145,6 +148,7 @@ func (r *credentialSecretTextResource) Read(ctx context.Context, req resource.Re
 // state, and prior state values should be read from the
 // UpdateRequest and new state values set on the UpdateResponse.
 func (r *credentialSecretTextResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	tflog.Debug(ctx, "credentialSecretTextResource.Update")
 	var data credentialSecretTextResourceModel
 	var state credentialSecretTextResourceModel
 
