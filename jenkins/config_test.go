@@ -41,15 +41,46 @@ func (m *mockJenkinsClient) GetView(ctx context.Context, name string) (*jenkins.
 	return m.mockGetView(ctx, name)
 }
 
+// testCACertPEM is a self-signed certificate used only to exercise the CACert
+// code path. AppendCertsFromPEM parses the structure without checking validity
+// dates, so expiry is irrelevant to these tests.
+const testCACertPEM = `-----BEGIN CERTIFICATE-----
+MIIDNTCCAh2gAwIBAgIUfAh5DLdoeHg4eFl3RnQ7qbDjtgIwDQYJKoZIhvcNAQEL
+BQAwKjEoMCYGA1UEAwwfdGVycmFmb3JtLXByb3ZpZGVyLWplbmtpbnMtdGVzdDAe
+Fw0yNjA3MDMwNjU4NDZaFw0zNjA2MzAwNjU4NDZaMCoxKDAmBgNVBAMMH3RlcnJh
+Zm9ybS1wcm92aWRlci1qZW5raW5zLXRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQDTzGkXXYJDGxChQg6m+bFnB5ykdvP5MOsnhP/XP+gzweoI+p2D
+EmOtt2z6Ny/6rm9a1ISPSFjblUZa4gz4355SV2v0gZXIZbq405OGjk8z4RoFEesX
+VAzsDQAr08woaF1e/FNTLtPNs61HHQpCXmeFsUmNQRlAMEphyIMQSobE9WzGsMIZ
+XSIsvnA7MKTkzE8jMSvouC26gU9ZchPR5jCNNtMbpabfk5+HCmkpevtqmdeg+Y91
+ZM/V0i28YbQhQ7db8Fk0cfX5s/hgj5R/WNqRZJJ0t0DMYsbLSsN0FXGi9scjW+R0
+JveknqbMPOq8avpq3j0oXGyEoJNFX1FbSq8pAgMBAAGjUzBRMB0GA1UdDgQWBBTK
+50xNLR+YRwHxTBF/AgtP5ReepDAfBgNVHSMEGDAWgBTK50xNLR+YRwHxTBF/AgtP
+5ReepDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAXzfoTPrsG
+8EAjhqPOhMEnB8L8Xt7gYquk4lL0wCW5TW2gim/EQCXxQx6BOxgb7LtoeqWGuq18
+6FWvy8z0DJccx2qgJcdR1rUTjL9YeHVW6aHZ57bSvfx3+GqXPkCXLxyhzrVVDQZg
+UdxVsfqaVpcO8T8mY7AsJ1KTltLtEW/rQfWZGrlEV9cZ9MINYmQx2wMthd/PyXGP
+vE/k6y7v7bIuFdOYrj9BJ9afRP1wOdpC0xfhgOtu4qNs25ObWRrzIu7c7zwJs7uN
+LhYMHmektYUK2kVMw8q4kwjogHLpaFVUT5UzI4eRoL4DscZ9UtxmjG2HddI20EI1
+kBtu3QWHJ858
+-----END CERTIFICATE-----
+`
+
 func TestNewJenkinsClient(t *testing.T) {
-	c := newJenkinsClient(&Config{})
+	c, err := newJenkinsClient(&Config{})
+	if err != nil {
+		t.Errorf("Unexpected error: %s", err)
+	}
 	if c == nil {
 		t.Errorf("Expected populated client")
 	}
 
-	c = newJenkinsClient(&Config{
-		CACert: []byte("certificate"),
+	c, err = newJenkinsClient(&Config{
+		CACert: []byte(testCACertPEM),
 	})
+	if err != nil {
+		t.Fatalf("Unexpected error with valid CACert: %s", err)
+	}
 	// When CACert is provided, a custom http.Client (not http.DefaultClient) must be used
 	// so the TLS config with the CA cert pool is active.
 	// gojenkins v1.2.0 stores Requester as a JenkinsRequester interface; type-assert to
@@ -60,13 +91,26 @@ func TestNewJenkinsClient(t *testing.T) {
 		t.Error("Expected custom HTTP client when CACert is set")
 	}
 
-	c = newJenkinsClient(&Config{
+	c, err = newJenkinsClient(&Config{
 		Insecure: true,
 	})
+	if err != nil {
+		t.Fatalf("Unexpected error with Insecure: %s", err)
+	}
 	if r, ok := c.Requester.(*jenkins.Requester); !ok {
 		t.Error("Expected Requester to be *jenkins.Requester")
 	} else if r.Client == http.DefaultClient {
 		t.Error("Expected custom HTTP client when Insecure is set")
+	}
+}
+
+func TestNewJenkinsClient_invalidCACert(t *testing.T) {
+	c, err := newJenkinsClient(&Config{CACert: []byte("not a valid pem certificate")})
+	if err == nil {
+		t.Error("Expected an error for a ca_cert with no valid PEM certificates, got nil")
+	}
+	if c != nil {
+		t.Error("Expected a nil client when ca_cert is invalid")
 	}
 }
 
@@ -78,7 +122,7 @@ func TestNewJenkinsClient_UserAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newJenkinsClient(&Config{ServerURL: srv.URL, UserAgent: "terraform-provider-jenkins my-org"})
+	c, _ := newJenkinsClient(&Config{ServerURL: srv.URL, UserAgent: "terraform-provider-jenkins my-org"})
 	// make any request to trigger the transport
 	//nolint:errcheck
 	c.Requester.Get(context.Background(), "/", nil, nil)
@@ -129,7 +173,7 @@ func TestJenkinsPostRedirectTransport_GET302passesThrough(t *testing.T) {
 }
 
 func TestJenkinsAdapter_Credentials(t *testing.T) {
-	c := newJenkinsClient(&Config{})
+	c, _ := newJenkinsClient(&Config{})
 	cm := c.Credentials()
 
 	if cm == nil {

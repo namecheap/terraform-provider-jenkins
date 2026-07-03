@@ -31,7 +31,7 @@ func TestJenkinsAdapter_GetPlugin(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newJenkinsClient(&Config{ServerURL: srv.URL})
+	c, _ := newJenkinsClient(&Config{ServerURL: srv.URL})
 
 	p, err := c.GetPlugin(context.Background(), "git")
 	if err != nil {

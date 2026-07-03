@@ -70,14 +70,16 @@ func (t *jenkinsPostRedirectTransport) RoundTrip(req *http.Request) (*http.Respo
 	return resp, nil
 }
 
-func newJenkinsClient(c *Config) *jenkinsAdapter {
+func newJenkinsClient(c *Config) (*jenkinsAdapter, error) {
 	transport := http.RoundTripper(http.DefaultTransport)
 	tlsCfg := &tls.Config{}
 	if c.Insecure {
 		tlsCfg.InsecureSkipVerify = true //nolint:gosec // user-opted-in skip
 	} else if len(c.CACert) > 0 {
 		certPool := x509.NewCertPool()
-		certPool.AppendCertsFromPEM(c.CACert)
+		if !certPool.AppendCertsFromPEM(c.CACert) {
+			return nil, fmt.Errorf("ca_cert does not contain any valid PEM-encoded certificates")
+		}
 		tlsCfg.RootCAs = certPool
 	}
 	if c.Insecure || len(c.CACert) > 0 {
@@ -88,7 +90,7 @@ func newJenkinsClient(c *Config) *jenkinsAdapter {
 	}
 	httpClient := &http.Client{Transport: &jenkinsPostRedirectTransport{base: transport}}
 	client := jenkins.CreateJenkins(httpClient, c.ServerURL, c.Username, c.Password)
-	return &jenkinsAdapter{Jenkins: client}
+	return &jenkinsAdapter{Jenkins: client}, nil
 }
 
 func (j *jenkinsAdapter) Credentials() *jenkins.CredentialsManager {

@@ -145,7 +145,7 @@ func TestResourceHelperConfigure_wrongType(t *testing.T) {
 
 func TestResourceHelperConfigure_valid(t *testing.T) {
 	r := newResourceHelper()
-	client := newJenkinsClient(&Config{})
+	client, _ := newJenkinsClient(&Config{})
 	resp := &resource.ConfigureResponse{}
 	r.Configure(context.Background(), resource.ConfigureRequest{ProviderData: client}, resp)
 	if resp.Diagnostics.HasError() {
