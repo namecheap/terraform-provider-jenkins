@@ -2,10 +2,13 @@ package jenkins
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -84,25 +87,119 @@ var (
 	// rePlugin matches plugin="..." version attributes, which Jenkins rewrites on every
 	// read; stripping them prevents a version bump from registering as configuration drift.
 	rePlugin = regexp.MustCompile(` plugin="[^"]*"`)
+	// reDisabledElement matches the top-level <disabled> element that every Jenkins
+	// config.xml carries. It is stripped from both sides of a template comparison
+	// only when the resource's "disabled" attribute is managed, so that toggling a
+	// job via the enable/disable API does not register as template drift.
+	reDisabledElement = regexp.MustCompile(`<disabled>[^<]*</disabled>`)
 )
 
-func templateDiff(k, old, new string, d *schema.ResourceData) bool {
-	normalize := func(s string) string {
-		s = reXMLDecl.ReplaceAllString(s, "")
-		s = rePlugin.ReplaceAllString(s, "")
-		s = strings.ReplaceAll(s, " ", "")
-		s = strings.TrimSpace(s)
-		s = html.UnescapeString(s)
-		return s
-	}
-	old = normalize(old)
-	new = normalize(new)
+// normalizeJobXML applies the string-level normalizations that have historically
+// suppressed phantom jenkins_job diffs: it strips the XML declaration, plugin
+// version annotations, and spaces, and unescapes HTML entities. It is deliberately
+// conservative (no element parsing), so it can never mask a genuine change.
+func normalizeJobXML(s string) string {
+	s = reXMLDecl.ReplaceAllString(s, "")
+	s = rePlugin.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.TrimSpace(s)
+	s = html.UnescapeString(s)
+	return s
+}
 
-	// SECURITY: the normalized job/folder XML can contain inlined secrets (for
-	// example credentials embedded in job configuration), so log only its length
-	// and whether it changed — never its content.
-	log.Printf("[DEBUG] jenkins::diff - old_len=%d new_len=%d equal=%t", len(old), len(new), old == new)
-	return old == new
+// canonicalizeXML re-serializes s into a canonical form in which attribute
+// ordering, empty-element syntax (`<a/>` vs `<a></a>`), the XML declaration, and
+// insignificant inter-element whitespace are normalized. Child element order and
+// element text content are preserved verbatim, so a genuine configuration change
+// is never masked. It returns ok=false when s is not well-formed XML, in which
+// case the caller falls back to the string comparison.
+func canonicalizeXML(s string) (string, bool) {
+	// Strip the XML declaration first: Jenkins serves config.xml as
+	// `<?xml version='1.1'?>`, which Go's encoding/xml rejects ("unsupported
+	// version 1.1"). The declaration is semantically irrelevant to the
+	// comparison, so removing it lets the token stream parse.
+	dec := xml.NewDecoder(strings.NewReader(reXMLDecl.ReplaceAllString(s, "")))
+	var buf strings.Builder
+	enc := xml.NewEncoder(&buf)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", false
+		}
+		switch t := tok.(type) {
+		case xml.ProcInst:
+			// The XML declaration cannot be re-encoded by encoding/xml and is
+			// semantically irrelevant to the configuration; drop it.
+			if t.Target == "xml" {
+				continue
+			}
+		case xml.CharData:
+			// Drop whitespace-only character data between elements (formatting
+			// indentation); real text content is preserved untouched.
+			if strings.TrimSpace(string(t)) == "" {
+				continue
+			}
+		case xml.StartElement:
+			sort.Slice(t.Attr, func(i, j int) bool {
+				if t.Attr[i].Name.Space != t.Attr[j].Name.Space {
+					return t.Attr[i].Name.Space < t.Attr[j].Name.Space
+				}
+				return t.Attr[i].Name.Local < t.Attr[j].Name.Local
+			})
+			tok = t
+		}
+		if err := enc.EncodeToken(tok); err != nil {
+			return "", false
+		}
+	}
+	if err := enc.Flush(); err != nil {
+		return "", false
+	}
+	return buf.String(), true
+}
+
+// templatesEqual reports whether two job templates are equivalent, ignoring the
+// XML declaration, plugin version annotations, HTML-entity encoding, and spaces
+// (string normalization), and additionally attribute ordering, empty-element
+// syntax, and formatting whitespace (canonical XML comparison). The canonical
+// path is a strict superset of the string path — it can only remove phantom
+// diffs, never introduce them — and malformed XML falls back to the string
+// result. Child element order and text content are always significant.
+func templatesEqual(old, new string) bool {
+	if normalizeJobXML(old) == normalizeJobXML(new) {
+		return true
+	}
+	if co, ok := canonicalizeXML(old); ok {
+		if cn, ok := canonicalizeXML(new); ok {
+			return normalizeJobXML(co) == normalizeJobXML(cn)
+		}
+	}
+	return false
+}
+
+func templateDiff(k, old, new string, d *schema.ResourceData) bool {
+	// When the "disabled" attribute manages the job's enabled state, the
+	// enable/disable API rewrites the template's <disabled> element out of band,
+	// so ignore that element to prevent it from registering as template drift.
+	// GetRawConfig is not populated inside a DiffSuppressFunc, so managed state is
+	// detected via GetOk (true only when disabled is set to true). When the
+	// attribute is unset, the template's <disabled> value diffs normally,
+	// preserving pre-existing behavior.
+	if v, ok := d.GetOk("disabled"); ok && v.(bool) {
+		old = reDisabledElement.ReplaceAllString(old, "")
+		new = reDisabledElement.ReplaceAllString(new, "")
+	}
+
+	equal := templatesEqual(old, new)
+
+	// SECURITY: the job/folder XML can contain inlined secrets (for example
+	// credentials embedded in job configuration), so log only whether it changed
+	// — never its content.
+	log.Printf("[DEBUG] jenkins::diff - equal=%t", equal)
+	return equal
 }
 
 func generateCredentialID(folder, name string) string {

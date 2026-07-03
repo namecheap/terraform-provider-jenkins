@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	gojenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func TestFormatFolderName(t *testing.T) {
@@ -177,6 +180,193 @@ func TestTemplateDiff_PluginVersions(t *testing.T) {
 	newVal = `<flow-definition plugin="workflow-job@2.25"><description>new</description></flow-definition>`
 	if templateDiff("", old, newVal, bag) {
 		t.Errorf("different content should remain unequal after plugin stripping")
+	}
+}
+
+func TestTemplateDiff_CanonicalXML(t *testing.T) {
+	job := resourceJenkinsJob()
+	bag := job.TestResourceData()
+
+	cases := []struct {
+		name        string
+		left, right string
+		equal       bool
+	}{
+		{"attribute order", `<a x="1" y="2"><b/></a>`, `<a y="2" x="1"><b/></a>`, true},
+		{"empty element form", `<a><b></b></a>`, `<a><b/></a>`, true},
+		{"insignificant whitespace", "<a>\n\t<b/>\n</a>", "<a><b/></a>", true},
+		{"declaration presence", `<?xml version="1.0" encoding="UTF-8"?><a><b/></a>`, `<a><b/></a>`, true},
+		{"declaration version variant", `<?xml version='1.1'?><a><b/></a>`, `<a><b/></a>`, true},
+		{"genuine text change", `<a><b>one</b></a>`, `<a><b>two</b></a>`, false},
+		{"genuine element added", `<a><b/></a>`, `<a><b/><c/></a>`, false},
+		{"genuine child reorder", `<a><b/><c/></a>`, `<a><c/><b/></a>`, false},
+		{"malformed falls back to string inequality", `<a><b></a>`, `<a><b/></a>`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := templateDiff("", tc.left, tc.right, bag); got != tc.equal {
+				t.Errorf("templateDiff(%q, %q) = %t, want %t", tc.left, tc.right, got, tc.equal)
+			}
+		})
+	}
+}
+
+func TestReDisabledElement(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`<project><disabled>true</disabled></project>`, `<project></project>`},
+		{`<project><disabled>false</disabled></project>`, `<project></project>`},
+		{`<project><x/></project>`, `<project><x/></project>`},
+	}
+	for _, c := range cases {
+		if got := reDisabledElement.ReplaceAllString(c.in, ""); got != c.want {
+			t.Errorf("strip(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestTemplateDiff_DisabledManaged exercises the real Resource.Diff path to
+// confirm that CustomizeDiff clears a template diff caused solely by the
+// <disabled> element when the disabled attribute is managed. GetRawConfig reads
+// from InstanceState.RawConfig (see schemaMap.Diff), which the plugin protocol
+// populates from the config; the test sets it directly to mirror that.
+func TestTemplateDiff_DisabledManaged(t *testing.T) {
+	r := resourceJenkinsJob()
+
+	// rawConfig builds a cty config object matching the resource's implied type.
+	// disabled is a *bool so the unmanaged case can send a null.
+	rawConfig := func(template string, disabled *bool) cty.Value {
+		d := cty.NullVal(cty.Bool)
+		if disabled != nil {
+			d = cty.BoolVal(*disabled)
+		}
+		return cty.ObjectVal(map[string]cty.Value{
+			"id":       cty.NullVal(cty.String),
+			"name":     cty.StringVal("x"),
+			"folder":   cty.NullVal(cty.String),
+			"template": cty.StringVal(template),
+			"disabled": d,
+		})
+	}
+	yes := true
+
+	t.Run("managed suppresses disabled-only change", func(t *testing.T) {
+		state := &terraform.InstanceState{
+			ID: "/job/x",
+			Attributes: map[string]string{
+				"id":       "/job/x",
+				"name":     "x",
+				"template": `<project><disabled>true</disabled></project>`,
+				"disabled": "true",
+			},
+			RawConfig: rawConfig(`<project><disabled>false</disabled></project>`, &yes),
+		}
+		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
+			"name":     "x",
+			"template": `<project><disabled>false</disabled></project>`,
+			"disabled": true,
+		})
+		diff, err := r.Diff(context.Background(), state, rc, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff != nil {
+			if d, ok := diff.Attributes["template"]; ok {
+				t.Errorf("expected template diff to be suppressed, got %+v", d)
+			}
+		}
+	})
+
+	t.Run("managed keeps a non-disabled change", func(t *testing.T) {
+		state := &terraform.InstanceState{
+			ID: "/job/x",
+			Attributes: map[string]string{
+				"id":       "/job/x",
+				"name":     "x",
+				"template": `<project><disabled>true</disabled></project>`,
+				"disabled": "true",
+			},
+			RawConfig: rawConfig(`<project><disabled>false</disabled><x/></project>`, &yes),
+		}
+		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
+			"name":     "x",
+			"template": `<project><disabled>false</disabled><x/></project>`,
+			"disabled": true,
+		})
+		diff, err := r.Diff(context.Background(), state, rc, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff == nil {
+			t.Fatal("expected a template diff for a real change, got none")
+		}
+		if _, ok := diff.Attributes["template"]; !ok {
+			t.Errorf("expected a non-<disabled> template change to remain visible")
+		}
+	})
+
+	t.Run("unmanaged keeps disabled change", func(t *testing.T) {
+		state := &terraform.InstanceState{
+			ID: "/job/x",
+			Attributes: map[string]string{
+				"id":       "/job/x",
+				"name":     "x",
+				"template": `<project><disabled>true</disabled></project>`,
+			},
+			RawConfig: rawConfig(`<project><disabled>false</disabled></project>`, nil),
+		}
+		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
+			"name":     "x",
+			"template": `<project><disabled>false</disabled></project>`,
+		})
+		diff, err := r.Diff(context.Background(), state, rc, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff == nil {
+			t.Fatal("expected a template diff when disabled is unmanaged, got none")
+		}
+		if _, ok := diff.Attributes["template"]; !ok {
+			t.Errorf("expected template change to remain visible when disabled is unmanaged")
+		}
+	})
+}
+
+func TestValidateJobXML(t *testing.T) {
+	cases := []struct {
+		name     string
+		xml      string
+		wantErr  bool
+		wantWarn bool
+	}{
+		{"valid project", `<project><description>x</description></project>`, false, false},
+		{"valid self-closing", `<flow-definition plugin="workflow-job@2.25"/>`, false, false},
+		{"jenkins 1.1 declaration", "<?xml version=\"1.1\" encoding=\"UTF-8\"?><project><description>x</description></project>", false, false},
+		{"jenkins 1.1 malformed", "<?xml version=\"1.1\" encoding=\"UTF-8\"?><project><description>x</project>", true, false},
+		{"empty string", ``, false, false},
+		{"whitespace only", "  \n  ", false, false},
+		{"mismatched tags", `<project><description>x</project>`, true, false},
+		{"unclosed root", `<project>`, true, false},
+		{"no root element", `just text`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			diags := validateJobXML(tc.xml, cty.Path{})
+			var gotErr, gotWarn bool
+			for _, d := range diags {
+				switch d.Severity {
+				case diag.Error:
+					gotErr = true
+				case diag.Warning:
+					gotWarn = true
+				}
+			}
+			if gotErr != tc.wantErr {
+				t.Errorf("validateJobXML(%q) error = %t, want %t (%v)", tc.xml, gotErr, tc.wantErr, diags)
+			}
+			if gotWarn != tc.wantWarn {
+				t.Errorf("validateJobXML(%q) warning = %t, want %t (%v)", tc.xml, gotWarn, tc.wantWarn, diags)
+			}
+		})
 	}
 }
 
