@@ -2,3 +2,6 @@
 # Keep in sync with the `go` directive in go.mod (the authoritative minimum).
 go = "1.26.4"
 terraform = "1.12"
+# Keep in sync with the version pinned in .github/workflows/test.yml so local
+# `make lint` matches CI and avoids "passes locally, fails in CI".
+"golangci-lint" = "2.12.2"
