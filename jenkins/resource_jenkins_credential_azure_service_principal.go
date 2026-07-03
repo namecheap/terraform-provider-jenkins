@@ -278,33 +278,7 @@ func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, re
 	cm := r.client.Credentials()
 	cm.Folder = formatFolderName(data.Folder.ValueString())
 
-	credData := AzureServicePrincipalCredentialsData{
-		SubscriptionId:          data.SubscriptionId.ValueString(),
-		ClientId:                data.ClientId.ValueString(),
-		Tenant:                  data.Tenant.ValueString(),
-		AzureEnvironmentName:    data.AzureEnvironmentName.ValueString(),
-		ServiceManagementURL:    data.ServiceManagementURL.ValueString(),
-		AuthenticationEndpoint:  data.AuthenticationEndpoint.ValueString(),
-		ResourceManagerEndpoint: data.ResourceManagerEndpoint.ValueString(),
-		GraphEndpoint:           data.GraphEndpoint.ValueString(),
-	}
-
-	cred := AzureServicePrincipalCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Data:        credData,
-	}
-
-	// Only send the client_secret if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [client_secret].
-	if !data.ClientSecret.Equal(state.ClientSecret) {
-		cred.Data.ClientSecret = data.ClientSecret.ValueString()
-	}
-
-	if data.CertificateId.ValueString() != "" {
-		cred.Data.ClientId = data.CertificateId.ValueString()
-	}
+	cred := buildAzureServicePrincipalUpdate(data, state)
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
 	if err != nil {
@@ -348,4 +322,42 @@ func (r *credentialAzureServicePrincipalResource) Delete(ctx context.Context, re
 
 		return
 	}
+}
+
+// buildAzureServicePrincipalUpdate maps the planned model (data) and the prior
+// state into the credential payload sent to Jenkins on update.
+//
+// client_secret is written only when it changed, so that
+// lifecycle.ignore_changes = [client_secret] leaves the Jenkins-stored secret
+// untouched. certificate_id is written to the CertificateId field (the previous
+// code wrote it to ClientId, clobbering the real client id and wiping
+// certificate_id on every update — including description-only edits) and is
+// re-sent whenever the credential is certificate-based, because omitting it on
+// an unchanged update would send an empty value and delete the reference.
+func buildAzureServicePrincipalUpdate(data, state credentialAzureServicePrincipalResourceModel) AzureServicePrincipalCredentials {
+	cred := AzureServicePrincipalCredentials{
+		ID:          data.Name.ValueString(),
+		Scope:       data.Scope.ValueString(),
+		Description: data.Description.ValueString(),
+		Data: AzureServicePrincipalCredentialsData{
+			SubscriptionId:          data.SubscriptionId.ValueString(),
+			ClientId:                data.ClientId.ValueString(),
+			Tenant:                  data.Tenant.ValueString(),
+			AzureEnvironmentName:    data.AzureEnvironmentName.ValueString(),
+			ServiceManagementURL:    data.ServiceManagementURL.ValueString(),
+			AuthenticationEndpoint:  data.AuthenticationEndpoint.ValueString(),
+			ResourceManagerEndpoint: data.ResourceManagerEndpoint.ValueString(),
+			GraphEndpoint:           data.GraphEndpoint.ValueString(),
+		},
+	}
+
+	if !data.ClientSecret.Equal(state.ClientSecret) {
+		cred.Data.ClientSecret = data.ClientSecret.ValueString()
+	}
+
+	if data.CertificateId.ValueString() != "" {
+		cred.Data.CertificateId = data.CertificateId.ValueString()
+	}
+
+	return cred
 }
