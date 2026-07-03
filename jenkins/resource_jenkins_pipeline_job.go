@@ -264,7 +264,11 @@ func (r *pipelineJobResource) Delete(ctx context.Context, req resource.DeleteReq
 func (r *pipelineJobResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	name, folders := parseCanonicalJobID(req.ID)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("folder"), formatFolderID(folders))...)
+	// Only set folder when the job is nested; a top-level job leaves folder null
+	// (matching a config that omits it) so ImportStateVerify sees no difference.
+	if folder := formatFolderID(folders); folder != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("folder"), folder)...)
+	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }
 
