@@ -49,7 +49,7 @@ run "jobs" {
     error_message = "${data.jenkins_job.pipeline_scm.name} did not return the expected configuration"
   }
   assert {
-    condition     = strcontains(data.jenkins_job.pipeline_inline.template, "An example pipeline inline script job")
+    condition     = strcontains(data.jenkins_job.pipeline_inline.template, "Example inline script template")
     error_message = "${data.jenkins_job.pipeline_inline.name} did not return the expected configuration"
   }
   assert {
