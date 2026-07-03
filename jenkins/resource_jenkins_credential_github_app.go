@@ -211,6 +211,9 @@ func (r *credentialGitHubAppResource) Delete(ctx context.Context, req resource.D
 	var data credentialGitHubAppResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	cm := r.client.Credentials()
 	cm.Folder = formatFolderName(data.Folder.ValueString())
