@@ -227,5 +227,6 @@ func (p *JenkinsProvider) Resources(ctx context.Context) []func() resource.Resou
 		newViewResource,
 		newNodeResource,
 		newPipelineJobResource,
+		newMultibranchPipelineResource,
 	}
 }
