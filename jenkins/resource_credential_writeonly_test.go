@@ -26,6 +26,7 @@ func TestCredentialWriteOnlySchema(t *testing.T) {
 		{"azure_service_principal", newCredentialAzureServicePrincipalResource, "client_secret"},
 		{"vault_approle", newCredentialVaultAppRoleResource, "secret_id"},
 		{"github_app", newCredentialGitHubAppResource, "private_key"},
+		{"certificate", newCredentialCertificateResource, "keystore"},
 	}
 
 	ctx := context.Background()
