@@ -189,6 +189,83 @@ func Test_parseFolder(t *testing.T) {
 	}
 }
 
+// Test_parseFolder_adversarial feeds well-formed-but-unexpected XML (extra
+// elements, plugin-schema shape drift, XML 1.1 declarations, wrong roots) to
+// guard against a Jenkins/plugin config-shape change silently breaking parsing.
+// Unknown elements must be ignored, known fields must still parse, and only
+// genuinely invalid input (malformed XML or a wrong root element) must error.
+func Test_parseFolder_adversarial(t *testing.T) {
+	tests := []struct {
+		name            string
+		def             string
+		wantErr         bool
+		wantDescription string
+	}{
+		{
+			name: "unknown extra elements are ignored",
+			def: `<?xml version="1.0" encoding="UTF-8"?>
+<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>desc</description>
+  <someFutureField>surprise</someFutureField>
+  <nestedFuture><child>x</child></nestedFuture>
+</com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantErr:         false,
+			wantDescription: "desc",
+		},
+		{
+			name: "authorization matrix with an added child element",
+			def: `<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>d</description>
+  <properties>
+    <com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
+      <permission>hudson.model.Item.Read:alice</permission>
+      <entries><entry>unexpected</entry></entries>
+    </com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantErr:         false,
+			wantDescription: "d",
+		},
+		{
+			name: "xml 1.1 declaration is normalized",
+			def: `<?xml version="1.1" encoding="UTF-8"?>
+<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>eleven</description>
+</com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantErr:         false,
+			wantDescription: "eleven",
+		},
+		{
+			name:            "empty but well-formed folder",
+			def:             `<com.cloudbees.hudson.plugins.folder.Folder></com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantErr:         false,
+			wantDescription: "",
+		},
+		{
+			name:    "well-formed XML with a wrong root element",
+			def:     `<some.other.Plugin><description>d</description></some.other.Plugin>`,
+			wantErr: true,
+		},
+		{
+			name:    "malformed XML (unclosed tag)",
+			def:     `<com.cloudbees.hudson.plugins.folder.Folder><description>d`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseFolder(tt.def)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseFolder() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got.Description != tt.wantDescription {
+				t.Errorf("Description = %q, want %q", got.Description, tt.wantDescription)
+			}
+		})
+	}
+}
+
 func Test_folder_Render(t *testing.T) {
 	type fields struct {
 		Description string
