@@ -32,6 +32,38 @@ type mockJenkinsClient struct {
 	mockInstallPlugin     func(ctx context.Context, name, version string) error
 	mockUninstallPlugin   func(ctx context.Context, name string) error
 	mockHasPlugin         func(ctx context.Context, name string) (*jenkins.Plugin, error)
+	mockAddRole           func(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error
+	mockAssignRole        func(ctx context.Context, roleType, name, sid string) error
+	mockGetRole           func(ctx context.Context, roleType, name string, out interface{}) error
+	mockRemoveRole        func(ctx context.Context, roleType, name string) error
+}
+
+func (m *mockJenkinsClient) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {
+	if m.mockAddRole == nil {
+		return nil
+	}
+	return m.mockAddRole(ctx, roleType, name, permissionIDs, pattern, overwrite)
+}
+
+func (m *mockJenkinsClient) AssignRole(ctx context.Context, roleType, name, sid string) error {
+	if m.mockAssignRole == nil {
+		return nil
+	}
+	return m.mockAssignRole(ctx, roleType, name, sid)
+}
+
+func (m *mockJenkinsClient) GetRole(ctx context.Context, roleType, name string, out interface{}) error {
+	if m.mockGetRole == nil {
+		return nil
+	}
+	return m.mockGetRole(ctx, roleType, name, out)
+}
+
+func (m *mockJenkinsClient) RemoveRole(ctx context.Context, roleType, name string) error {
+	if m.mockRemoveRole == nil {
+		return nil
+	}
+	return m.mockRemoveRole(ctx, roleType, name)
 }
 
 // mockJenkinsClient implements the full framework client surface so it can be

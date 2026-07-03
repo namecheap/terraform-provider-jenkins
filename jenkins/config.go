@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -69,6 +70,15 @@ type frameworkClient interface {
 	InstallPlugin(ctx context.Context, name, version string) error
 	UninstallPlugin(ctx context.Context, name string) error
 	HasPlugin(ctx context.Context, name string) (*jenkins.Plugin, error)
+
+	// Role-strategy operations back the jenkins_role resource. gojenkins has no
+	// role-strategy support, so these are implemented directly against the
+	// plugin's REST endpoints. roleType is one of the role-strategy type strings
+	// ("globalRoles", "projectRoles", "slaveRoles").
+	AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error
+	AssignRole(ctx context.Context, roleType, name, sid string) error
+	GetRole(ctx context.Context, roleType, name string, out interface{}) error
+	RemoveRole(ctx context.Context, roleType, name string) error
 }
 
 // Ensure the concrete adapter satisfies the framework client surface.
@@ -521,6 +531,98 @@ func (j *jenkinsAdapter) GetCredentialDomain(ctx context.Context, folder, name s
 // and cannot take a canonical job ID without mishandling it.
 func (j *jenkinsAdapter) DeleteJobInFolder(ctx context.Context, name string, parentIDs ...string) (bool, error) {
 	return j.DeleteJob(ctx, strings.Join(append(parentIDs, name), "/job/"))
+}
+
+// roleStrategyBase is the REST base path of the Role Strategy plugin.
+const roleStrategyBase = "/role-strategy/strategy"
+
+// rolePostForm issues a form-urlencoded POST to a role-strategy endpoint. The
+// role-strategy web methods read their arguments as @QueryParameter values,
+// which Stapler populates from the POST form body. Requester.Post attaches the
+// CSRF crumb and reports failures via the enriched error handler.
+func (j *jenkinsAdapter) rolePostForm(ctx context.Context, action string, form url.Values) error {
+	resp, err := j.Requester.Post(ctx, roleStrategyBase+"/"+action, strings.NewReader(form.Encode()), &struct{}{}, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("invalid response code %d from role-strategy %s", resp.StatusCode, action)
+	}
+	return nil
+}
+
+// AddRole creates (or, when overwrite is true, replaces) a role. Replacing a
+// role via the plugin drops its existing SID assignments, so callers that
+// overwrite must re-assign afterwards.
+func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {
+	form := url.Values{}
+	form.Set("type", roleType)
+	form.Set("roleName", name)
+	form.Set("permissionIds", strings.Join(permissionIDs, ","))
+	form.Set("overwrite", strconv.FormatBool(overwrite))
+	if pattern != "" {
+		form.Set("pattern", pattern)
+	}
+	return j.rolePostForm(ctx, "addRole", form)
+}
+
+// AssignRole assigns a role to a sid (user or group; the plugin resolves the
+// kind automatically).
+func (j *jenkinsAdapter) AssignRole(ctx context.Context, roleType, name, sid string) error {
+	form := url.Values{}
+	form.Set("type", roleType)
+	form.Set("roleName", name)
+	form.Set("sid", sid)
+	return j.rolePostForm(ctx, "assignRole", form)
+}
+
+// RemoveRole deletes a role (and its assignments) of the given type.
+func (j *jenkinsAdapter) RemoveRole(ctx context.Context, roleType, name string) error {
+	form := url.Values{}
+	form.Set("type", roleType)
+	form.Set("roleNames", name)
+	return j.rolePostForm(ctx, "removeRoles", form)
+}
+
+// GetRole fetches a role's definition and XML-decodes the JSON into out. It
+// issues the GET directly (rather than via the gojenkins Requester) to avoid
+// that requester's trailing-slash rewrite, which the getRole endpoint rejects.
+// A missing role returns an empty JSON object, so out's permission map is left
+// empty; callers treat that as "not found".
+func (j *jenkinsAdapter) GetRole(ctx context.Context, roleType, name string, out interface{}) error {
+	r, ok := j.Requester.(*jenkins.Requester)
+	if !ok {
+		return fmt.Errorf("unexpected requester type %T", j.Requester)
+	}
+
+	query := url.Values{}
+	query.Set("type", roleType)
+	query.Set("roleName", name)
+	endpoint := strings.TrimRight(r.Base, "/") + roleStrategyBase + "/getRole?" + query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if r.BasicAuth != nil {
+		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
+	}
+
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("unexpected status %d fetching role %q", resp.StatusCode, name)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, out)
 }
 
 // GetPlugin returns the installed plugin with the given short name, or an error if not found.
