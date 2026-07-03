@@ -54,6 +54,14 @@ type frameworkClient interface {
 	// Returned wrapped so callers depend on the interface rather than the embedded
 	// gojenkins Requester, whose Do() appends a trailing slash that breaks config.xml.
 	GetNodeConfig(ctx context.Context, name string, out interface{}) error
+
+	// Credential-domain operations back the jenkins_credential_domain resource.
+	// gojenkins has no domain support, so these are implemented directly against
+	// the credentials store REST endpoints.
+	CreateCredentialDomain(ctx context.Context, folder, name, description string) error
+	GetCredentialDomain(ctx context.Context, folder, name string, out interface{}) error
+	UpdateCredentialDomain(ctx context.Context, folder, name, description string) error
+	DeleteCredentialDomain(ctx context.Context, folder, name string) error
 }
 
 // Ensure the concrete adapter satisfies the framework client surface.
@@ -394,6 +402,108 @@ func stripXMLDeclaration(b []byte) []byte {
 		}
 	}
 	return b
+}
+
+// credentialDomainXML is the config payload for a credentials domain. An empty
+// specifications set makes the domain match any credential (a plain named store).
+type credentialDomainXML struct {
+	XMLName        xml.Name `xml:"com.cloudbees.plugins.credentials.domains.Domain"`
+	Name           string   `xml:"name"`
+	Description    string   `xml:"description"`
+	Specifications string   `xml:"specifications"`
+}
+
+// credentialStoreBase returns the REST base path of the credentials store for the
+// given (unformatted) folder: the global system store, or a folder-scoped store.
+func credentialStoreBase(folder string) string {
+	if folder == "" {
+		return "/credentials/store/system"
+	}
+	return "/job/" + formatFolderName(folder) + "/credentials/store/folder"
+}
+
+// CreateCredentialDomain creates a credentials domain in the given folder's store.
+func (j *jenkinsAdapter) CreateCredentialDomain(ctx context.Context, folder, name, description string) error {
+	payload, err := xml.Marshal(credentialDomainXML{Name: name, Description: description})
+	if err != nil {
+		return err
+	}
+	resp, err := j.Requester.PostXML(ctx, credentialStoreBase(folder)+"/createDomain", string(payload), j.Raw, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("credential domain %q already exists", name)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("invalid response code %d creating credential domain %q", resp.StatusCode, name)
+	}
+	return nil
+}
+
+// UpdateCredentialDomain rewrites a domain's config.xml (e.g. its description).
+func (j *jenkinsAdapter) UpdateCredentialDomain(ctx context.Context, folder, name, description string) error {
+	payload, err := xml.Marshal(credentialDomainXML{Name: name, Description: description})
+	if err != nil {
+		return err
+	}
+	resp, err := j.Requester.PostXML(ctx, credentialStoreBase(folder)+"/domain/"+name+"/config.xml", string(payload), j.Raw, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("invalid response code %d updating credential domain %q", resp.StatusCode, name)
+	}
+	return nil
+}
+
+// DeleteCredentialDomain removes a domain (and any credentials it contains).
+func (j *jenkinsAdapter) DeleteCredentialDomain(ctx context.Context, folder, name string) error {
+	resp, err := j.Requester.Post(ctx, credentialStoreBase(folder)+"/domain/"+name+"/doDelete", nil, j.Raw, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("invalid response code %d deleting credential domain %q", resp.StatusCode, name)
+	}
+	return nil
+}
+
+// GetCredentialDomain fetches a domain's config.xml and XML-decodes it into out.
+// It issues the GET directly to avoid the gojenkins Requester trailing-slash quirk.
+func (j *jenkinsAdapter) GetCredentialDomain(ctx context.Context, folder, name string, out interface{}) error {
+	r, ok := j.Requester.(*jenkins.Requester)
+	if !ok {
+		return fmt.Errorf("unexpected requester type %T", j.Requester)
+	}
+
+	endpoint := strings.TrimRight(r.Base, "/") + credentialStoreBase(folder) + "/domain/" + url.PathEscape(name) + "/config.xml"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if r.BasicAuth != nil {
+		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
+	}
+
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("404 credential domain %q not found", name)
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("unexpected status %d fetching credential domain %q", resp.StatusCode, name)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return xml.Unmarshal(stripXMLDeclaration(body), out)
 }
 
 // DeleteJobInFolder assists in running DeleteJob funcs, as DeleteJob is not folder aware

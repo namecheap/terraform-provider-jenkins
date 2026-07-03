@@ -25,6 +25,10 @@ type mockJenkinsClient struct {
 	mockGetNode           func(ctx context.Context, name string) (*jenkins.Node, error)
 	mockDeleteNode        func(ctx context.Context, name string) (bool, error)
 	mockGetNodeConfig     func(ctx context.Context, name string, out interface{}) error
+	mockCreateCredDomain  func(ctx context.Context, folder, name, description string) error
+	mockGetCredDomain     func(ctx context.Context, folder, name string, out interface{}) error
+	mockUpdateCredDomain  func(ctx context.Context, folder, name, description string) error
+	mockDeleteCredDomain  func(ctx context.Context, folder, name string) error
 }
 
 // mockJenkinsClient implements the full framework client surface so it can be
@@ -89,6 +93,22 @@ func (m *mockJenkinsClient) DeleteNode(ctx context.Context, name string) (bool, 
 
 func (m *mockJenkinsClient) GetNodeConfig(ctx context.Context, name string, out interface{}) error {
 	return m.mockGetNodeConfig(ctx, name, out)
+}
+
+func (m *mockJenkinsClient) CreateCredentialDomain(ctx context.Context, folder, name, description string) error {
+	return m.mockCreateCredDomain(ctx, folder, name, description)
+}
+
+func (m *mockJenkinsClient) GetCredentialDomain(ctx context.Context, folder, name string, out interface{}) error {
+	return m.mockGetCredDomain(ctx, folder, name, out)
+}
+
+func (m *mockJenkinsClient) UpdateCredentialDomain(ctx context.Context, folder, name, description string) error {
+	return m.mockUpdateCredDomain(ctx, folder, name, description)
+}
+
+func (m *mockJenkinsClient) DeleteCredentialDomain(ctx context.Context, folder, name string) error {
+	return m.mockDeleteCredDomain(ctx, folder, name)
 }
 
 // testCACertPEM is a self-signed certificate used only to exercise the CACert
