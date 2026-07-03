@@ -5,6 +5,32 @@ run:
 
 linters:
   default: standard
+  enable:
+    - gosec
+  settings:
+    gosec:
+      # Scope gosec to the high-signal security rules relevant to a Terraform
+      # provider: hardcoded credentials, weak crypto, and TLS misconfiguration.
+      # Enabling only these (rather than the full ruleset) avoids false positives
+      # on legitimate patterns such as reading a user-provided ca_cert path (G304)
+      # while still failing CI on md5/DES/RC4/SHA1 usage or InsecureSkipVerify.
+      # The one legitimate InsecureSkipVerify (user opt-in) keeps its //nolint:gosec.
+      includes:
+        - G101 # Look for hardcoded credentials
+        - G401 # Detect the usage of weak crypto (DES, RC4, MD5, SHA1)
+        - G402 # Look for bad TLS connection settings (e.g. InsecureSkipVerify)
+        - G501 # Import blocklist: crypto/md5
+        - G502 # Import blocklist: crypto/des
+        - G503 # Import blocklist: crypto/rc4
+        - G504 # Import blocklist: net/http/cgi
+        - G505 # Import blocklist: crypto/sha1
+  exclusions:
+    rules:
+      # Test fixtures legitimately contain dummy secrets/keys (e.g. RSA test keys);
+      # gate on production code, not test data.
+      - path: _test\.go
+        linters:
+          - gosec
 
 formatters:
   enable:
