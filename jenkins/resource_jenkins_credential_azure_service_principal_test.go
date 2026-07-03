@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -249,6 +250,11 @@ func TestAccJenkinsCredentialAzureServicePrincipal_certificateDescriptionUpdate(
 			},
 			{
 				// Change ONLY the description; client_id and certificate_id are identical.
+				// This exercises the code path that previously corrupted the credential.
+				// The Jenkins-side corruption is not observable through Read (the Azure
+				// plugin blanks these fields on read), so the value-level regression is
+				// pinned by TestBuildAzureServicePrincipalUpdate below; here we assert the
+				// update applies cleanly and the config values persist in state.
 				Config: fmt.Sprintf(`
 				resource "jenkins_folder" "example" {
 					name        = "azure-sp-cert-update-folder-%s"
@@ -267,20 +273,82 @@ func TestAccJenkinsCredentialAzureServicePrincipal_certificateDescriptionUpdate(
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckJenkinsCredentialAzureServicePrincipalExists("jenkins_credential_azure_service_principal.foo", &cred),
 					resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "description", "updated"),
-					// The Jenkins-stored client id must remain the real client id and must
-					// not have been overwritten with the certificate reference.
-					func(_ *terraform.State) error {
-						if cred.Data.ClientId == "my-cred-id/123" {
-							return fmt.Errorf("client_id was overwritten with certificate_id on update: got %q", cred.Data.ClientId)
-						}
-						if cred.Data.ClientId != "client-abc" {
-							return fmt.Errorf("expected client_id %q after description-only update, got %q", "client-abc", cred.Data.ClientId)
-						}
-						return nil
-					},
+					resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "client_id", "client-abc"),
+					resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "certificate_id", "my-cred-id/123"),
 				),
 			},
 		},
+	})
+}
+
+// TestBuildAzureServicePrincipalUpdate is the value-level regression test for the
+// Update() bug where the certificate reference was written to ClientId (wiping the
+// real client id and clearing certificate_id). It exercises the pure mapping helper
+// directly, so it needs neither a live Jenkins nor the Azure plugin.
+func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
+	base := func() credentialAzureServicePrincipalResourceModel {
+		return credentialAzureServicePrincipalResourceModel{
+			Name:           types.StringValue("bla"),
+			SubscriptionId: types.StringValue("sub-123"),
+			ClientId:       types.StringValue("client-abc"),
+			Tenant:         types.StringValue("tenant-456"),
+		}
+	}
+
+	t.Run("certificate credential, description-only change", func(t *testing.T) {
+		state := base()
+		state.CertificateId = types.StringValue("my-cred-id/123")
+		state.Description = types.StringValue("initial")
+
+		data := base()
+		data.CertificateId = types.StringValue("my-cred-id/123")
+		data.Description = types.StringValue("updated")
+
+		cred := buildAzureServicePrincipalUpdate(data, state)
+
+		if cred.Data.ClientId != "client-abc" {
+			t.Errorf("client_id: got %q, want %q (must not be overwritten with the certificate reference)", cred.Data.ClientId, "client-abc")
+		}
+		if cred.Data.CertificateId != "my-cred-id/123" {
+			t.Errorf("certificate_id: got %q, want %q (must not be wiped on a description-only update)", cred.Data.CertificateId, "my-cred-id/123")
+		}
+		if cred.Data.ClientSecret != "" {
+			t.Errorf("client_secret: got %q, want empty for a certificate-based credential", cred.Data.ClientSecret)
+		}
+	})
+
+	t.Run("secret credential, secret unchanged (ignore_changes)", func(t *testing.T) {
+		state := base()
+		state.ClientSecret = types.StringValue("sekret")
+
+		data := base()
+		data.ClientSecret = types.StringValue("sekret")
+
+		cred := buildAzureServicePrincipalUpdate(data, state)
+
+		if cred.Data.ClientSecret != "" {
+			t.Errorf("client_secret: got %q, want empty (unchanged secret must not be re-sent)", cred.Data.ClientSecret)
+		}
+		if cred.Data.CertificateId != "" {
+			t.Errorf("certificate_id: got %q, want empty for a secret-based credential", cred.Data.CertificateId)
+		}
+		if cred.Data.ClientId != "client-abc" {
+			t.Errorf("client_id: got %q, want %q", cred.Data.ClientId, "client-abc")
+		}
+	})
+
+	t.Run("secret credential, secret changed", func(t *testing.T) {
+		state := base()
+		state.ClientSecret = types.StringValue("old")
+
+		data := base()
+		data.ClientSecret = types.StringValue("new")
+
+		cred := buildAzureServicePrincipalUpdate(data, state)
+
+		if cred.Data.ClientSecret != "new" {
+			t.Errorf("client_secret: got %q, want %q (changed secret must be sent)", cred.Data.ClientSecret, "new")
+		}
 	})
 }
 
