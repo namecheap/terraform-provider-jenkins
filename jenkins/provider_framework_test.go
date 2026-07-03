@@ -91,6 +91,24 @@ func TestJenkinsProvider_Configure_missingServerURL(t *testing.T) {
 	}
 }
 
+func TestJenkinsProviders_PasswordIsSensitive(t *testing.T) {
+	ctx := context.Background()
+
+	fwResp := &provider.SchemaResponse{}
+	(&JenkinsProvider{}).Schema(ctx, provider.SchemaRequest{}, fwResp)
+	if attr, ok := fwResp.Schema.Attributes["password"]; !ok {
+		t.Error("framework provider: missing password attribute")
+	} else if !attr.IsSensitive() {
+		t.Error("framework provider: password attribute should be Sensitive")
+	}
+
+	if pw, ok := Provider().Schema["password"]; !ok {
+		t.Error("sdkv2 provider: missing password attribute")
+	} else if !pw.Sensitive {
+		t.Error("sdkv2 provider: password attribute should be Sensitive")
+	}
+}
+
 func TestJenkinsProvider_DataSources(t *testing.T) {
 	p := &JenkinsProvider{}
 	sources := p.DataSources(context.Background())
