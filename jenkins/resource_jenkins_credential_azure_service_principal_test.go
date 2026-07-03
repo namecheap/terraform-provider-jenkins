@@ -206,6 +206,84 @@ func TestAccJenkinsCredentialAzureServicePrincipal_folder_certificate(t *testing
 	})
 }
 
+// TestAccJenkinsCredentialAzureServicePrincipal_certificateDescriptionUpdate is a
+// regression test for the Update() bug where a certificate-based credential had its
+// certificate reference written into the client_id field, clobbering the real client
+// id and wiping certificate_id on every update — including a description-only edit.
+// The second step changes only the description while certificate_id stays populated,
+// and asserts the Jenkins-stored client_id is unchanged (i.e. was not overwritten
+// with the certificate reference).
+func TestAccJenkinsCredentialAzureServicePrincipal_certificateDescriptionUpdate(t *testing.T) {
+	var cred AzureServicePrincipalCredentials
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy: resource.ComposeTestCheckFunc(
+			testAccCheckJenkinsCredentialAzureServicePrincipalDestroy,
+			testAccCheckJenkinsFolderDestroy,
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+				resource "jenkins_folder" "example" {
+					name        = "azure-sp-cert-update-folder-%s"
+					description = "A sample folder"
+				}
+
+				resource jenkins_credential_azure_service_principal foo {
+					name = "bla"
+					folder = jenkins_folder.example.id
+					description = "initial"
+					subscription_id = "123"
+					client_id = "client-abc"
+					certificate_id = "my-cred-id/123"
+					tenant = "456"
+				}`, randString),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsCredentialAzureServicePrincipalExists("jenkins_credential_azure_service_principal.foo", &cred),
+					resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "client_id", "client-abc"),
+					resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "certificate_id", "my-cred-id/123"),
+				),
+			},
+			{
+				// Change ONLY the description; client_id and certificate_id are identical.
+				Config: fmt.Sprintf(`
+				resource "jenkins_folder" "example" {
+					name        = "azure-sp-cert-update-folder-%s"
+					description = "A sample folder"
+				}
+
+				resource jenkins_credential_azure_service_principal foo {
+					name = "bla"
+					folder = jenkins_folder.example.id
+					description = "updated"
+					subscription_id = "123"
+					client_id = "client-abc"
+					certificate_id = "my-cred-id/123"
+					tenant = "456"
+				}`, randString),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsCredentialAzureServicePrincipalExists("jenkins_credential_azure_service_principal.foo", &cred),
+					resource.TestCheckResourceAttr("jenkins_credential_azure_service_principal.foo", "description", "updated"),
+					// The Jenkins-stored client id must remain the real client id and must
+					// not have been overwritten with the certificate reference.
+					func(_ *terraform.State) error {
+						if cred.Data.ClientId == "my-cred-id/123" {
+							return fmt.Errorf("client_id was overwritten with certificate_id on update: got %q", cred.Data.ClientId)
+						}
+						if cred.Data.ClientId != "client-abc" {
+							return fmt.Errorf("expected client_id %q after description-only update, got %q", "client-abc", cred.Data.ClientId)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckJenkinsCredentialAzureServicePrincipalExists(resourceName string, cred *AzureServicePrincipalCredentials) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		ctx := context.Background()

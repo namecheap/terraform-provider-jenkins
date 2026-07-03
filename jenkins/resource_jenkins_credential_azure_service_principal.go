@@ -302,8 +302,14 @@ func (r *credentialAzureServicePrincipalResource) Update(ctx context.Context, re
 		cred.Data.ClientSecret = data.ClientSecret.ValueString()
 	}
 
+	// Re-send the certificate reference whenever the credential is certificate-based.
+	// It must be written to CertificateId (not ClientId): the previous code assigned it
+	// to ClientId, which clobbered the real client id and wiped certificate_id on every
+	// update — including description-only edits. A "changed"-gated write is deliberately
+	// avoided here because omitting certificate_id on an unchanged update would send an
+	// empty value and delete the reference in Jenkins.
 	if data.CertificateId.ValueString() != "" {
-		cred.Data.ClientId = data.CertificateId.ValueString()
+		cred.Data.CertificateId = data.CertificateId.ValueString()
 	}
 
 	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
