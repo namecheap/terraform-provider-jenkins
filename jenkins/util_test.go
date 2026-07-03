@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	gojenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 )
 
 func TestFormatFolderName(t *testing.T) {
@@ -177,6 +179,71 @@ func TestTemplateDiff_PluginVersions(t *testing.T) {
 	newVal = `<flow-definition plugin="workflow-job@2.25"><description>new</description></flow-definition>`
 	if templateDiff("", old, newVal, bag) {
 		t.Errorf("different content should remain unequal after plugin stripping")
+	}
+}
+
+func TestTemplateDiff_CanonicalXML(t *testing.T) {
+	job := resourceJenkinsJob()
+	bag := job.TestResourceData()
+
+	cases := []struct {
+		name        string
+		left, right string
+		equal       bool
+	}{
+		{"attribute order", `<a x="1" y="2"><b/></a>`, `<a y="2" x="1"><b/></a>`, true},
+		{"empty element form", `<a><b></b></a>`, `<a><b/></a>`, true},
+		{"insignificant whitespace", "<a>\n\t<b/>\n</a>", "<a><b/></a>", true},
+		{"declaration presence", `<?xml version="1.0" encoding="UTF-8"?><a><b/></a>`, `<a><b/></a>`, true},
+		{"declaration version variant", `<?xml version='1.1'?><a><b/></a>`, `<a><b/></a>`, true},
+		{"genuine text change", `<a><b>one</b></a>`, `<a><b>two</b></a>`, false},
+		{"genuine element added", `<a><b/></a>`, `<a><b/><c/></a>`, false},
+		{"genuine child reorder", `<a><b/><c/></a>`, `<a><c/><b/></a>`, false},
+		{"malformed falls back to string inequality", `<a><b></a>`, `<a><b/></a>`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := templateDiff("", tc.left, tc.right, bag); got != tc.equal {
+				t.Errorf("templateDiff(%q, %q) = %t, want %t", tc.left, tc.right, got, tc.equal)
+			}
+		})
+	}
+}
+
+func TestValidateJobXML(t *testing.T) {
+	cases := []struct {
+		name     string
+		xml      string
+		wantErr  bool
+		wantWarn bool
+	}{
+		{"valid project", `<project><description>x</description></project>`, false, false},
+		{"valid self-closing", `<flow-definition plugin="workflow-job@2.25"/>`, false, false},
+		{"empty string", ``, false, false},
+		{"whitespace only", "  \n  ", false, false},
+		{"mismatched tags", `<project><description>x</project>`, true, false},
+		{"unclosed root", `<project>`, true, false},
+		{"no root element", `just text`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			diags := validateJobXML(tc.xml, cty.Path{})
+			var gotErr, gotWarn bool
+			for _, d := range diags {
+				switch d.Severity {
+				case diag.Error:
+					gotErr = true
+				case diag.Warning:
+					gotWarn = true
+				}
+			}
+			if gotErr != tc.wantErr {
+				t.Errorf("validateJobXML(%q) error = %t, want %t (%v)", tc.xml, gotErr, tc.wantErr, diags)
+			}
+			if gotWarn != tc.wantWarn {
+				t.Errorf("validateJobXML(%q) warning = %t, want %t (%v)", tc.xml, gotWarn, tc.wantWarn, diags)
+			}
+		})
 	}
 }
 

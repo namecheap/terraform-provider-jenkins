@@ -85,6 +85,72 @@ resource jenkins_job sub {
 	})
 }
 
+func TestAccJenkinsJob_disabled(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(testDir, "test.xml"), testXML, 0644)
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	resourceName := "jenkins_job.foo"
+
+	config := func(disabled bool) string {
+		return fmt.Sprintf(`
+resource jenkins_job foo {
+	name = "tf-acc-test-%s"
+	disabled = %t
+	template = templatefile("%s/test.xml", {
+		description = "Acceptance testing Jenkins provider"
+	})
+}`, randString, disabled, testDir)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsJobDestroy,
+		Steps: []resource.TestStep{
+			{
+				// Created disabled: the job must not be buildable.
+				Config: config(true),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "disabled", "true"),
+					testAccCheckJenkinsJobEnabled(resourceName, false),
+				),
+			},
+			{
+				// Toggled to enabled: the provider must flip the job state.
+				Config: config(false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "disabled", "false"),
+					testAccCheckJenkinsJobEnabled(resourceName, true),
+				),
+			},
+		},
+	})
+}
+
+// testAccCheckJenkinsJobEnabled asserts the live enabled state of a job resource.
+func testAccCheckJenkinsJobEnabled(resourceName string, want bool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", resourceName)
+		}
+
+		ctx := context.Background()
+		job, err := testAccClient.GetJob(ctx, rs.Primary.ID)
+		if err != nil {
+			return err
+		}
+		enabled, err := job.IsEnabled(ctx)
+		if err != nil {
+			return err
+		}
+		if enabled != want {
+			return fmt.Errorf("job %s enabled = %t, want %t", rs.Primary.ID, enabled, want)
+		}
+		return nil
+	}
+}
+
 func testAccCheckJenkinsJobDestroy(s *terraform.State) error {
 	ctx := context.Background()
 
