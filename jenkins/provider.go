@@ -47,6 +47,26 @@ func Provider() *schema.Provider {
 				Optional:    true,
 				Description: "Disables TLS certificate verification. Set to true only for non-production Jenkins instances with self-signed certificates when `ca_cert` cannot be used.",
 			},
+			"request_timeout": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Maximum duration for each Jenkins API operation, including retries, as a Go duration string (e.g. `30s`, `2m`). Overridable via `JENKINS_REQUEST_TIMEOUT`. Defaults to no timeout.",
+			},
+			"retry_max": {
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Description: "Number of times to retry a failed idempotent request (GET/HEAD/OPTIONS/PUT/DELETE) on connection errors, HTTP 429, or 5xx responses. POST requests are never retried. Overridable via `JENKINS_RETRY_MAX`. Defaults to `4`; set to `0` to disable retries.",
+			},
+			"retry_wait_min": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Minimum wait between retries as a Go duration string (e.g. `1s`). Overridable via `JENKINS_RETRY_WAIT_MIN`. Defaults to `1s`.",
+			},
+			"retry_wait_max": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Maximum wait between retries as a Go duration string (e.g. `30s`). Overridable via `JENKINS_RETRY_WAIT_MAX`. Defaults to `30s`.",
+			},
 		},
 
 		DataSourcesMap: map[string]*schema.Resource{},
@@ -85,15 +105,45 @@ func configureProvider(ctx context.Context, d *schema.ResourceData) (interface{}
 		password = d.Get("password").(string)
 	}
 
+	requestTimeout, err := resolveDuration(d.Get("request_timeout").(string), envRequestTimeout, 0)
+	if err != nil {
+		return nil, diag.Errorf("Invalid request_timeout: %s", err.Error())
+	}
+	retryWaitMin, err := resolveDuration(d.Get("retry_wait_min").(string), envRetryWaitMin, defaultRetryWaitMin)
+	if err != nil {
+		return nil, diag.Errorf("Invalid retry_wait_min: %s", err.Error())
+	}
+	retryWaitMax, err := resolveDuration(d.Get("retry_wait_max").(string), envRetryWaitMax, defaultRetryWaitMax)
+	if err != nil {
+		return nil, diag.Errorf("Invalid retry_wait_max: %s", err.Error())
+	}
+
+	// Distinguish an explicit retry_max = 0 (disable retries) from an unset
+	// attribute via the raw config: d.GetOk cannot tell 0 from absent.
+	retryMaxVal, retryMaxSet := 0, false
+	if raw := d.GetRawConfig(); !raw.IsNull() && raw.Type().HasAttribute("retry_max") {
+		if a := raw.GetAttr("retry_max"); !a.IsNull() && a.IsKnown() {
+			n, _ := a.AsBigFloat().Int64()
+			retryMaxVal, retryMaxSet = int(n), true
+		}
+	}
+	retryMax, err := resolveRetryMax(retryMaxVal, retryMaxSet)
+	if err != nil {
+		return nil, diag.Errorf("Invalid retry_max: %s", err.Error())
+	}
+
 	config := Config{
-		ServerURL: serverURL,
-		Username:  username,
-		Password:  password,
-		Insecure:  d.Get("insecure").(bool),
+		ServerURL:      serverURL,
+		Username:       username,
+		Password:       password,
+		Insecure:       d.Get("insecure").(bool),
+		RequestTimeout: requestTimeout,
+		RetryMax:       retryMax,
+		RetryWaitMin:   retryWaitMin,
+		RetryWaitMax:   retryWaitMax,
 	}
 
 	// Read the certificate
-	var err error
 	if caCert != "" {
 		config.CACert, err = os.ReadFile(caCert)
 		if err != nil {
