@@ -62,6 +62,13 @@ type frameworkClient interface {
 	GetCredentialDomain(ctx context.Context, folder, name string, out interface{}) error
 	UpdateCredentialDomain(ctx context.Context, folder, name, description string) error
 	DeleteCredentialDomain(ctx context.Context, folder, name string) error
+
+	// Plugin management backs the jenkins_plugin resource. HasPlugin performs a
+	// fresh (uncached) lookup, unlike GetPlugin which memoizes the manifest for
+	// the data source; the resource must observe its own installs.
+	InstallPlugin(ctx context.Context, name, version string) error
+	UninstallPlugin(ctx context.Context, name string) error
+	HasPlugin(ctx context.Context, name string) (*jenkins.Plugin, error)
 }
 
 // Ensure the concrete adapter satisfies the framework client surface.

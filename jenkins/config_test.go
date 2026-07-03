@@ -29,6 +29,9 @@ type mockJenkinsClient struct {
 	mockGetCredDomain     func(ctx context.Context, folder, name string, out interface{}) error
 	mockUpdateCredDomain  func(ctx context.Context, folder, name, description string) error
 	mockDeleteCredDomain  func(ctx context.Context, folder, name string) error
+	mockInstallPlugin     func(ctx context.Context, name, version string) error
+	mockUninstallPlugin   func(ctx context.Context, name string) error
+	mockHasPlugin         func(ctx context.Context, name string) (*jenkins.Plugin, error)
 }
 
 // mockJenkinsClient implements the full framework client surface so it can be
@@ -61,6 +64,18 @@ func (m *mockJenkinsClient) GetView(ctx context.Context, name string) (*jenkins.
 
 func (m *mockJenkinsClient) GetPlugin(ctx context.Context, name string) (*jenkins.Plugin, error) {
 	return m.mockGetPlugin(ctx, name)
+}
+
+func (m *mockJenkinsClient) InstallPlugin(ctx context.Context, name, version string) error {
+	return m.mockInstallPlugin(ctx, name, version)
+}
+
+func (m *mockJenkinsClient) UninstallPlugin(ctx context.Context, name string) error {
+	return m.mockUninstallPlugin(ctx, name)
+}
+
+func (m *mockJenkinsClient) HasPlugin(ctx context.Context, name string) (*jenkins.Plugin, error) {
+	return m.mockHasPlugin(ctx, name)
 }
 
 func (m *mockJenkinsClient) CreateView(ctx context.Context, name string, viewType string) (*jenkins.View, error) {
