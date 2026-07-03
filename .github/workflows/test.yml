@@ -160,7 +160,10 @@ jobs:
           TF_ACC: "1"
           JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
-          JENKINS_PASSWORD: ${{ secrets.JENKINS_PASSWORD || 'admin' }}
+          # The acceptance Jenkins now runs a local security realm (see
+          # integration/jenkins.yaml) with a fixed admin/admin account, matching
+          # the integration test and local `make testacc`.
+          JENKINS_PASSWORD: "admin"
         run: |
           # Warm the build cache (compile only, run no tests) while Jenkins
           # boots in the background. This overlaps the container startup with

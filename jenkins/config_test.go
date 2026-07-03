@@ -36,6 +36,30 @@ type mockJenkinsClient struct {
 	mockAssignRole        func(ctx context.Context, roleType, name, sid string) error
 	mockGetRole           func(ctx context.Context, roleType, name string, out interface{}) error
 	mockRemoveRole        func(ctx context.Context, roleType, name string) error
+	mockCreateUser        func(ctx context.Context, username, password, fullName, email string) error
+	mockGetUser           func(ctx context.Context, username string, out interface{}) error
+	mockDeleteUser        func(ctx context.Context, username string) error
+}
+
+func (m *mockJenkinsClient) CreateUser(ctx context.Context, username, password, fullName, email string) error {
+	if m.mockCreateUser == nil {
+		return nil
+	}
+	return m.mockCreateUser(ctx, username, password, fullName, email)
+}
+
+func (m *mockJenkinsClient) GetUser(ctx context.Context, username string, out interface{}) error {
+	if m.mockGetUser == nil {
+		return nil
+	}
+	return m.mockGetUser(ctx, username, out)
+}
+
+func (m *mockJenkinsClient) DeleteUser(ctx context.Context, username string) error {
+	if m.mockDeleteUser == nil {
+		return nil
+	}
+	return m.mockDeleteUser(ctx, username)
 }
 
 func (m *mockJenkinsClient) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {

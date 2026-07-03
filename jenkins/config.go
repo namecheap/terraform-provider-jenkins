@@ -79,6 +79,13 @@ type frameworkClient interface {
 	AssignRole(ctx context.Context, roleType, name, sid string) error
 	GetRole(ctx context.Context, roleType, name string, out interface{}) error
 	RemoveRole(ctx context.Context, roleType, name string) error
+
+	// Local-realm user operations back the jenkins_user resource. They target
+	// the HudsonPrivateSecurityRealm REST endpoints and fail (surfaced by the
+	// resource) when a different realm is active.
+	CreateUser(ctx context.Context, username, password, fullName, email string) error
+	GetUser(ctx context.Context, username string, out interface{}) error
+	DeleteUser(ctx context.Context, username string) error
 }
 
 // Ensure the concrete adapter satisfies the framework client surface.
@@ -623,6 +630,76 @@ func (j *jenkinsAdapter) GetRole(ctx context.Context, roleType, name string, out
 		return err
 	}
 	return json.Unmarshal(body, out)
+}
+
+// CreateUser registers a local-realm account via createAccountByAdmin. Success
+// is reported by the endpoint as a redirect (normalized to 200 by the POST
+// transport); a validation failure re-renders the form (also 200), so callers
+// confirm creation with a follow-up GetUser rather than trusting the status.
+func (j *jenkinsAdapter) CreateUser(ctx context.Context, username, password, fullName, email string) error {
+	form := url.Values{}
+	form.Set("username", username)
+	form.Set("password1", password)
+	form.Set("password2", password)
+	form.Set("fullname", fullName)
+	form.Set("email", email)
+
+	// A non-*string responseStruct is required: Requester.Post re-wraps it in an
+	// interface, so a *string target would make the JSON decoder try to decode
+	// the "{}" success body into a string and fail. On success the endpoint
+	// redirects (normalized to 200 with a "{}" body by the POST transport).
+	_, err := j.Requester.Post(ctx, "/securityRealm/createAccountByAdmin", strings.NewReader(form.Encode()), &struct{}{}, map[string]string{})
+	return err
+}
+
+// GetUser fetches a user's public fields and XML-decodes the JSON into out.
+// It issues the GET directly to avoid the gojenkins trailing-slash rewrite and
+// returns a 404 as an error the caller treats as "not found".
+func (j *jenkinsAdapter) GetUser(ctx context.Context, username string, out interface{}) error {
+	r, ok := j.Requester.(*jenkins.Requester)
+	if !ok {
+		return fmt.Errorf("unexpected requester type %T", j.Requester)
+	}
+
+	endpoint := strings.TrimRight(r.Base, "/") + "/user/" + url.PathEscape(username) + "/api/json?tree=id,fullName,property[address]"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if r.BasicAuth != nil {
+		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
+	}
+
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("404 user %q not found", username)
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("unexpected status %d fetching user %q", resp.StatusCode, username)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(respBody, out)
+}
+
+// DeleteUser removes a local-realm account.
+func (j *jenkinsAdapter) DeleteUser(ctx context.Context, username string) error {
+	resp, err := j.Requester.Post(ctx, "/user/"+url.PathEscape(username)+"/doDelete", nil, &struct{}{}, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("invalid response code %d deleting user %q", resp.StatusCode, username)
+	}
+	return nil
 }
 
 // GetPlugin returns the installed plugin with the given short name, or an error if not found.
