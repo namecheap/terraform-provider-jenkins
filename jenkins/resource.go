@@ -20,7 +20,7 @@ type (
 	// resourceHelper provides assistive snippets of logic to help reduce duplication in
 	// each resource definition.
 	resourceHelper struct {
-		client *jenkinsAdapter
+		client frameworkClient
 	}
 )
 
