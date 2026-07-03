@@ -1,3 +1,4 @@
 [tools]
-go = "1.24"
+# Keep in sync with the `go` directive in go.mod (the authoritative minimum).
+go = "1.26.4"
 terraform = "1.12"
