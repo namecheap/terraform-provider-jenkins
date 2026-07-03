@@ -4,10 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	jenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
@@ -57,6 +62,67 @@ func TestJenkinsAdapter_GetPlugin(t *testing.T) {
 	// The manifest must be fetched only once across multiple lookups.
 	if manifestFetches != 1 {
 		t.Errorf("plugin manifest fetched %d times, want 1 (results should be cached per adapter)", manifestFetches)
+	}
+}
+
+// TestPluginDataSource_Read_withMock is a pilot unit test demonstrating that the
+// injectable frameworkClient seam lets framework data sources be tested without a
+// live Jenkins: it injects a mockJenkinsClient and verifies plugin data flows into
+// state. It exercises the seam introduced for the framework resources/data sources.
+func TestPluginDataSource_Read_withMock(t *testing.T) {
+	ctx := context.Background()
+
+	mock := &mockJenkinsClient{
+		mockGetPlugin: func(_ context.Context, name string) (*jenkins.Plugin, error) {
+			if name != "git" {
+				return nil, fmt.Errorf("404 plugin %q not installed", name)
+			}
+			return &jenkins.Plugin{
+				ShortName: "git",
+				Version:   "5.2.0",
+				LongName:  "Git plugin",
+				URL:       "https://example.com",
+				Active:    true,
+				Enabled:   true,
+			}, nil
+		},
+	}
+
+	d := &pluginDataSource{dataSourceHelper: &dataSourceHelper{client: mock}}
+
+	schemaResp := &datasource.SchemaResponse{}
+	d.Schema(ctx, datasource.SchemaRequest{}, schemaResp)
+
+	objType := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+	attrs := make(map[string]tftypes.Value, len(objType.AttributeTypes))
+	for name, typ := range objType.AttributeTypes {
+		attrs[name] = tftypes.NewValue(typ, nil)
+	}
+	attrs["name"] = tftypes.NewValue(objType.AttributeTypes["name"], "git")
+	cfg := tftypes.NewValue(objType, attrs)
+
+	req := datasource.ReadRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: cfg}}
+	resp := &datasource.ReadResponse{State: tfsdk.State{Schema: schemaResp.Schema, Raw: cfg}}
+
+	d.Read(ctx, req, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("Read returned diagnostics: %v", resp.Diagnostics.Errors())
+	}
+
+	var got pluginDataSourceModel
+	resp.Diagnostics.Append(resp.State.Get(ctx, &got)...)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("State.Get diagnostics: %v", resp.Diagnostics.Errors())
+	}
+	if got.ID.ValueString() != "git" {
+		t.Errorf("id = %q, want %q", got.ID.ValueString(), "git")
+	}
+	if got.Version.ValueString() != "5.2.0" {
+		t.Errorf("version = %q, want %q", got.Version.ValueString(), "5.2.0")
+	}
+	if !got.Enabled.ValueBool() {
+		t.Error("enabled = false, want true")
 	}
 }
 

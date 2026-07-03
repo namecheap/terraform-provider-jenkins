@@ -12,7 +12,7 @@ type (
 	// dataSourceHelper provides assistive snippets of logic to help reduce duplication in
 	// each data source definition.
 	dataSourceHelper struct {
-		client *jenkinsAdapter
+		client frameworkClient
 	}
 )
 
