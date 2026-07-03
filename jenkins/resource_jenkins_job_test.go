@@ -136,7 +136,8 @@ func testAccCheckJenkinsJobEnabled(resourceName string, want bool) resource.Test
 		}
 
 		ctx := context.Background()
-		job, err := testAccClient.GetJob(ctx, rs.Primary.ID)
+		name, folders := parseCanonicalJobID(rs.Primary.ID)
+		job, err := testAccClient.GetJob(ctx, name, folders...)
 		if err != nil {
 			return err
 		}
