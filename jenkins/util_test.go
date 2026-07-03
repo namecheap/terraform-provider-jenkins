@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	gojenkins "github.com/bndr/gojenkins"
-	"github.com/hashicorp/go-cty/cty"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 func TestFormatFolderName(t *testing.T) {
@@ -112,91 +112,28 @@ func TestExtractFolders(t *testing.T) {
 	}
 }
 
-func TestTemplateDiff(t *testing.T) {
-	inputLeft := "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Case</root>"
-	inputRight := "<root>Test Case</root>"
-
-	job := resourceJenkinsJob()
-	bag := job.TestResourceData()
-
-	if actual := templateDiff("", inputLeft, inputRight, bag); !actual {
-		t.Errorf("Expected %s to be considered equal to %s", inputLeft, inputRight)
-	}
-
-	inputLeft = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Incorrect</root>"
-	if actual := templateDiff("", inputLeft, inputRight, bag); actual {
-		t.Errorf("Expected %s to be considered inequal to %s", inputLeft, inputRight)
-	}
-
-	inputRight = "<root>Test Incorrect</root>"
-	if actual := templateDiff("", inputLeft, inputRight, bag); !actual {
-		t.Errorf("Expected %s to be considered equal to %s", inputLeft, inputRight)
-	}
-
-	inputRight = "<root>Test Even More Incorrect</root>"
-	if actual := templateDiff("", inputLeft, inputRight, bag); actual {
-		t.Errorf("Expected %s to be considered inequal to %s", inputLeft, inputRight)
-	}
-}
-
-func TestTemplateDiff_HTMLEntities(t *testing.T) {
-	job := resourceJenkinsFolder()
-	bag := job.TestResourceData()
-	_ = bag.Set("description", "Case")
-
-	inputLeft := "<root>&apos;/&apos;</root>"
-	inputRight := "<root>'/'</root>"
-	if actual := templateDiff("", inputLeft, inputRight, bag); !actual {
-		t.Errorf("Expected %s to be considered equal to %s", inputLeft, inputRight)
-	}
-
-	inputLeft = "<root>'/'</root>"
-	inputRight = "<root>&apos;/&apos;</root>"
-	if actual := templateDiff("", inputLeft, inputRight, bag); !actual {
-		t.Errorf("Expected %s to be considered equal to %s", inputLeft, inputRight)
-	}
-}
-
-func TestTemplateDiff_PluginVersions(t *testing.T) {
-	job := resourceJenkinsJob()
-	bag := job.TestResourceData()
-
-	// Different plugin versions on identical content must be equal.
-	old := `<flow-definition plugin="workflow-job@2.25"><description>test</description></flow-definition>`
-	newVal := `<flow-definition plugin="workflow-job@1571.1580.v18e46842c125"><description>test</description></flow-definition>`
-	if !templateDiff("", old, newVal, bag) {
-		t.Errorf("different plugin versions should be equal after normalization: %q vs %q", old, newVal)
-	}
-
-	// Multiple plugin attributes with differing versions must also be equal.
-	old = `<a plugin="x@1"><b plugin="y@2">text</b></a>`
-	newVal = `<a plugin="x@99"><b plugin="y@100">text</b></a>`
-	if !templateDiff("", old, newVal, bag) {
-		t.Errorf("multiple plugin version differences should be equal")
-	}
-
-	// Content that differs beyond plugin versions must remain unequal.
-	old = `<flow-definition plugin="workflow-job@2.25"><description>old</description></flow-definition>`
-	newVal = `<flow-definition plugin="workflow-job@2.25"><description>new</description></flow-definition>`
-	if templateDiff("", old, newVal, bag) {
-		t.Errorf("different content should remain unequal after plugin stripping")
-	}
-}
-
-func TestTemplateDiff_CanonicalXML(t *testing.T) {
-	job := resourceJenkinsJob()
-	bag := job.TestResourceData()
-
+func TestTemplatesEqual(t *testing.T) {
 	cases := []struct {
 		name        string
 		left, right string
 		equal       bool
 	}{
+		// XML declaration presence / version.
+		{"declaration stripped", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Case</root>", "<root>Test Case</root>", true},
+		{"declaration 1.1 variant", `<?xml version='1.1'?><a><b/></a>`, `<a><b/></a>`, true},
+		{"different content", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>Test Incorrect</root>", "<root>Test Case</root>", false},
+		{"even more different content", "<root>Test Incorrect</root>", "<root>Test Even More Incorrect</root>", false},
+		// HTML entities (from #8).
+		{"html entity apos", "<root>&apos;/&apos;</root>", "<root>'/'</root>", true},
+		{"html entity apos reversed", "<root>'/'</root>", "<root>&apos;/&apos;</root>", true},
+		// Plugin versions (from #8).
+		{"plugin version differs", `<flow-definition plugin="workflow-job@2.25"><description>test</description></flow-definition>`, `<flow-definition plugin="workflow-job@1571.1580.v18e46842c125"><description>test</description></flow-definition>`, true},
+		{"multiple plugin versions differ", `<a plugin="x@1"><b plugin="y@2">text</b></a>`, `<a plugin="x@99"><b plugin="y@100">text</b></a>`, true},
+		{"content differs beyond plugins", `<flow-definition plugin="workflow-job@2.25"><description>old</description></flow-definition>`, `<flow-definition plugin="workflow-job@2.25"><description>new</description></flow-definition>`, false},
+		// Canonical XML.
 		{"attribute order", `<a x="1" y="2"><b/></a>`, `<a y="2" x="1"><b/></a>`, true},
 		{"empty element form", `<a><b></b></a>`, `<a><b/></a>`, true},
 		{"insignificant whitespace", "<a>\n\t<b/>\n</a>", "<a><b/></a>", true},
-		{"declaration presence", `<?xml version="1.0" encoding="UTF-8"?><a><b/></a>`, `<a><b/></a>`, true},
-		{"declaration version variant", `<?xml version='1.1'?><a><b/></a>`, `<a><b/></a>`, true},
 		{"genuine text change", `<a><b>one</b></a>`, `<a><b>two</b></a>`, false},
 		{"genuine element added", `<a><b/></a>`, `<a><b/><c/></a>`, false},
 		{"genuine child reorder", `<a><b/><c/></a>`, `<a><c/><b/></a>`, false},
@@ -204,8 +141,8 @@ func TestTemplateDiff_CanonicalXML(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := templateDiff("", tc.left, tc.right, bag); got != tc.equal {
-				t.Errorf("templateDiff(%q, %q) = %t, want %t", tc.left, tc.right, got, tc.equal)
+			if got := templatesEqual(tc.left, tc.right); got != tc.equal {
+				t.Errorf("templatesEqual(%q, %q) = %t, want %t", tc.left, tc.right, got, tc.equal)
 			}
 		})
 	}
@@ -224,114 +161,7 @@ func TestReDisabledElement(t *testing.T) {
 	}
 }
 
-// TestTemplateDiff_DisabledManaged exercises the real Resource.Diff path to
-// confirm that CustomizeDiff clears a template diff caused solely by the
-// <disabled> element when the disabled attribute is managed. GetRawConfig reads
-// from InstanceState.RawConfig (see schemaMap.Diff), which the plugin protocol
-// populates from the config; the test sets it directly to mirror that.
-func TestTemplateDiff_DisabledManaged(t *testing.T) {
-	r := resourceJenkinsJob()
-
-	// rawConfig builds a cty config object matching the resource's implied type.
-	// disabled is a *bool so the unmanaged case can send a null.
-	rawConfig := func(template string, disabled *bool) cty.Value {
-		d := cty.NullVal(cty.Bool)
-		if disabled != nil {
-			d = cty.BoolVal(*disabled)
-		}
-		return cty.ObjectVal(map[string]cty.Value{
-			"id":       cty.NullVal(cty.String),
-			"name":     cty.StringVal("x"),
-			"folder":   cty.NullVal(cty.String),
-			"template": cty.StringVal(template),
-			"disabled": d,
-		})
-	}
-	yes := true
-
-	t.Run("managed suppresses disabled-only change", func(t *testing.T) {
-		state := &terraform.InstanceState{
-			ID: "/job/x",
-			Attributes: map[string]string{
-				"id":       "/job/x",
-				"name":     "x",
-				"template": `<project><disabled>true</disabled></project>`,
-				"disabled": "true",
-			},
-			RawConfig: rawConfig(`<project><disabled>false</disabled></project>`, &yes),
-		}
-		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
-			"name":     "x",
-			"template": `<project><disabled>false</disabled></project>`,
-			"disabled": true,
-		})
-		diff, err := r.Diff(context.Background(), state, rc, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if diff != nil {
-			if d, ok := diff.Attributes["template"]; ok {
-				t.Errorf("expected template diff to be suppressed, got %+v", d)
-			}
-		}
-	})
-
-	t.Run("managed keeps a non-disabled change", func(t *testing.T) {
-		state := &terraform.InstanceState{
-			ID: "/job/x",
-			Attributes: map[string]string{
-				"id":       "/job/x",
-				"name":     "x",
-				"template": `<project><disabled>true</disabled></project>`,
-				"disabled": "true",
-			},
-			RawConfig: rawConfig(`<project><disabled>false</disabled><x/></project>`, &yes),
-		}
-		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
-			"name":     "x",
-			"template": `<project><disabled>false</disabled><x/></project>`,
-			"disabled": true,
-		})
-		diff, err := r.Diff(context.Background(), state, rc, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if diff == nil {
-			t.Fatal("expected a template diff for a real change, got none")
-		}
-		if _, ok := diff.Attributes["template"]; !ok {
-			t.Errorf("expected a non-<disabled> template change to remain visible")
-		}
-	})
-
-	t.Run("unmanaged keeps disabled change", func(t *testing.T) {
-		state := &terraform.InstanceState{
-			ID: "/job/x",
-			Attributes: map[string]string{
-				"id":       "/job/x",
-				"name":     "x",
-				"template": `<project><disabled>true</disabled></project>`,
-			},
-			RawConfig: rawConfig(`<project><disabled>false</disabled></project>`, nil),
-		}
-		rc := terraform.NewResourceConfigRaw(map[string]interface{}{
-			"name":     "x",
-			"template": `<project><disabled>false</disabled></project>`,
-		})
-		diff, err := r.Diff(context.Background(), state, rc, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if diff == nil {
-			t.Fatal("expected a template diff when disabled is unmanaged, got none")
-		}
-		if _, ok := diff.Attributes["template"]; !ok {
-			t.Errorf("expected template change to remain visible when disabled is unmanaged")
-		}
-	})
-}
-
-func TestValidateJobXML(t *testing.T) {
+func TestJobXMLValidator(t *testing.T) {
 	cases := []struct {
 		name     string
 		xml      string
@@ -350,21 +180,17 @@ func TestValidateJobXML(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			diags := validateJobXML(tc.xml, cty.Path{})
-			var gotErr, gotWarn bool
-			for _, d := range diags {
-				switch d.Severity {
-				case diag.Error:
-					gotErr = true
-				case diag.Warning:
-					gotWarn = true
-				}
+			resp := &validator.StringResponse{}
+			jobXMLValidatorAttr().ValidateString(context.Background(), validator.StringRequest{
+				Path:        path.Root("template"),
+				ConfigValue: types.StringValue(tc.xml),
+			}, resp)
+
+			if got := resp.Diagnostics.HasError(); got != tc.wantErr {
+				t.Errorf("ValidateString(%q) error = %t, want %t (%v)", tc.xml, got, tc.wantErr, resp.Diagnostics)
 			}
-			if gotErr != tc.wantErr {
-				t.Errorf("validateJobXML(%q) error = %t, want %t (%v)", tc.xml, gotErr, tc.wantErr, diags)
-			}
-			if gotWarn != tc.wantWarn {
-				t.Errorf("validateJobXML(%q) warning = %t, want %t (%v)", tc.xml, gotWarn, tc.wantWarn, diags)
+			if got := len(resp.Diagnostics.Warnings()) > 0; got != tc.wantWarn {
+				t.Errorf("ValidateString(%q) warning = %t, want %t (%v)", tc.xml, got, tc.wantWarn, resp.Diagnostics)
 			}
 		})
 	}

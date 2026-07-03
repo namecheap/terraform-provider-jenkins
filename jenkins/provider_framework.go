@@ -225,6 +225,7 @@ func (p *JenkinsProvider) Resources(ctx context.Context) []func() resource.Resou
 		newCredentialCertificateResource,
 		newCredentialDomainResource,
 		newViewResource,
+		newJobResource,
 		newNodeResource,
 		newPipelineJobResource,
 		newMultibranchPipelineResource,

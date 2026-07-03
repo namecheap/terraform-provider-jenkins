@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -35,7 +36,11 @@ data jenkins_job foo {
 					resource.TestCheckResourceAttr("jenkins_job.foo", "id", "/job/tf-acc-test-"+randString),
 					resource.TestCheckResourceAttr("data.jenkins_job.foo", "id", "/job/tf-acc-test-"+randString),
 					resource.TestCheckResourceAttr("data.jenkins_job.foo", "name", "tf-acc-test-"+randString),
-					resource.TestCheckResourceAttrPair("data.jenkins_job.foo", "template", "jenkins_job.foo", "template"),
+					// The data source returns Jenkins' rendered config.xml. Since the
+					// jenkins_job resource now preserves the user's template verbatim
+					// (semantic equality), assert the data source contains the expected
+					// content rather than requiring byte-for-byte equality with the resource.
+					resource.TestMatchResourceAttr("data.jenkins_job.foo", "template", regexp.MustCompile("Acceptance testing Jenkins provider")),
 				),
 			},
 		},
@@ -74,7 +79,7 @@ data jenkins_job sub {
 					resource.TestCheckResourceAttr("jenkins_job.sub", "id", "/job/tf-acc-test-"+randString+"/job/subfolder"),
 					resource.TestCheckResourceAttr("data.jenkins_job.sub", "name", "subfolder"),
 					resource.TestCheckResourceAttr("data.jenkins_job.sub", "folder", "/job/tf-acc-test-"+randString),
-					resource.TestCheckResourceAttrPair("data.jenkins_job.sub", "template", "jenkins_job.sub", "template"),
+					resource.TestMatchResourceAttr("data.jenkins_job.sub", "template", regexp.MustCompile("Acceptance testing Jenkins provider")),
 				),
 			},
 		},
