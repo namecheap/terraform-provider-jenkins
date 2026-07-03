@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -117,7 +116,7 @@ func resourceJenkinsFolderRead(ctx context.Context, d *schema.ResourceData, meta
 
 	job, err := client.GetJob(ctx, name, folders...)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "404") {
+		if isNotFound(err) {
 			// Job does not exist
 			d.SetId("")
 			return nil

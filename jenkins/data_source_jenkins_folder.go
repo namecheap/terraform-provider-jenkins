@@ -72,7 +72,7 @@ func (d *folderDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	name, folders := parseCanonicalJobID(formatFolderName(folderName + "/" + name))
 	job, err := d.client.GetJob(ctx, name, folders...)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "404") {
+		if isNotFound(err) {
 			// Job does not exist
 			resp.State.RemoveResource(ctx)
 			return

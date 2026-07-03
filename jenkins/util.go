@@ -109,7 +109,9 @@ func generateCredentialID(folder, name string) string {
 
 // isNotFound reports whether err represents an HTTP 404 response.
 // gojenkins formats credential errors as "invalid response code 404" and job
-// errors as the bare string "404"; strings.Contains handles both forms.
+// errors as the bare string "404"; strings.Contains handles both forms. This is
+// the single 404 matcher used by every resource path so the SDKv2 and framework
+// providers cannot silently diverge. It is nil-safe: a nil error is not a 404.
 func isNotFound(err error) bool {
-	return strings.Contains(err.Error(), "404")
+	return err != nil && strings.Contains(err.Error(), "404")
 }
