@@ -307,6 +307,9 @@ func (r *credentialAzureServicePrincipalResource) Delete(ctx context.Context, re
 
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	cm := r.client.Credentials()
 	cm.Folder = formatFolderName(data.Folder.ValueString())

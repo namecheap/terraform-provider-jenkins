@@ -229,6 +229,9 @@ func (r *ViewResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	_, err := r.client.Requester.Post(ctx, "/view/"+data.Name.ValueString()+"/doDelete", nil, nil, nil)
 	if err != nil {
