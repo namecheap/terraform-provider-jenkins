@@ -76,12 +76,17 @@ func folderExists(ctx context.Context, client jenkinsClient, name string) error 
 	return nil
 }
 
+// Compiled once at package load: templateDiff is a DiffSuppressFunc invoked
+// per-attribute on every plan/apply, so these must not be recompiled per call.
+var (
+	// reXMLDecl matches an XML declaration, sanitized to prevent inadvertent inequalities.
+	reXMLDecl = regexp.MustCompile(`<\?xml.+\?>`)
+	// rePlugin matches plugin="..." version attributes, which Jenkins rewrites on every
+	// read; stripping them prevents a version bump from registering as configuration drift.
+	rePlugin = regexp.MustCompile(` plugin="[^"]*"`)
+)
+
 func templateDiff(k, old, new string, d *schema.ResourceData) bool {
-	// Sanitize the XML entries to prevent inadvertent inequalities
-	reXMLDecl := regexp.MustCompile(`<\?xml.+\?>`)
-	// Jenkins rewrites plugin="..." version attributes on every read; strip them so
-	// a version bump in Jenkins does not register as configuration drift.
-	rePlugin := regexp.MustCompile(` plugin="[^"]*"`)
 	normalize := func(s string) string {
 		s = reXMLDecl.ReplaceAllString(s, "")
 		s = rePlugin.ReplaceAllString(s, "")
