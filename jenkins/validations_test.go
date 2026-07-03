@@ -1,39 +1,29 @@
 package jenkins
 
 import (
+	"context"
 	"testing"
 
-	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-func TestValidateJobName(t *testing.T) {
-
-	input, ctyPath := "job_name", make(cty.Path, 0)
-	actual := validateJobName(input, ctyPath)
-
-	if actual.HasError() {
-		t.Errorf("Error, validation failed for input: %s", input)
-	}
-
-	// Test if we fail when we should
-	input = "job_name/second_level"
-	actual = validateJobName(input, ctyPath)
-	if !actual.HasError() {
-		t.Errorf("Error, validation failed for input: %s", input)
-	}
-}
-
-func TestValidateFolderName(t *testing.T) {
-	ctyPath := make(cty.Path, 0)
-
-	for _, input := range []string{"folder_name", "parent/child", "a/b/c"} {
-		if actual := validateFolderName(input, ctyPath); actual.HasError() {
-			t.Errorf("unexpected error for valid input %q", input)
+func TestFolderNameValidator(t *testing.T) {
+	for _, in := range []string{"folder_name", "parent/child", "a/b/c", ""} {
+		req := validator.StringRequest{Path: path.Root("folder"), ConfigValue: types.StringValue(in)}
+		resp := &validator.StringResponse{}
+		folderNameValidator{}.ValidateString(context.Background(), req, resp)
+		if resp.Diagnostics.HasError() {
+			t.Errorf("unexpected error for valid folder %q: %v", in, resp.Diagnostics)
 		}
 	}
 
 	// backslashes are not valid Jenkins path separators
-	if actual := validateFolderName(`parent\child`, ctyPath); !actual.HasError() {
+	req := validator.StringRequest{Path: path.Root("folder"), ConfigValue: types.StringValue(`parent\child`)}
+	resp := &validator.StringResponse{}
+	folderNameValidator{}.ValidateString(context.Background(), req, resp)
+	if !resp.Diagnostics.HasError() {
 		t.Error("expected error for backslash in folder path, got none")
 	}
 }

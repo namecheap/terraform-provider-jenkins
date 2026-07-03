@@ -101,12 +101,6 @@ func TestJenkinsProviders_PasswordIsSensitive(t *testing.T) {
 	} else if !attr.IsSensitive() {
 		t.Error("framework provider: password attribute should be Sensitive")
 	}
-
-	if pw, ok := Provider().Schema["password"]; !ok {
-		t.Error("sdkv2 provider: missing password attribute")
-	} else if !pw.Sensitive {
-		t.Error("sdkv2 provider: password attribute should be Sensitive")
-	}
 }
 
 func TestJenkinsProvider_DataSources(t *testing.T) {

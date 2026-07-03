@@ -40,17 +40,21 @@ run "jobs" {
     condition     = data.jenkins_folder.example_subfolder.description == jenkins_folder.example_subfolder.description
     error_message = "${data.jenkins_folder.example_subfolder.name} did not match description"
   }
+  # The jenkins_job resource stores the practitioner's configured template,
+  # while the data source returns Jenkins' re-serialized config.xml; these are
+  # semantically but not textually equal, so assert the data source read a real
+  # config by matching the rendered description rather than an exact string.
   assert {
-    condition     = chomp(coalesce(data.jenkins_job.pipeline_scm.template, "")) == chomp(jenkins_job.pipeline_scm.template)
-    error_message = "${data.jenkins_job.pipeline_scm.name} produced inconsistent XML"
+    condition     = strcontains(data.jenkins_job.pipeline_scm.template, "An example pipeline job")
+    error_message = "${data.jenkins_job.pipeline_scm.name} data source did not return the expected config"
   }
   assert {
-    condition     = chomp(data.jenkins_job.pipeline_inline.template) == chomp(jenkins_job.pipeline_inline.template)
-    error_message = "${data.jenkins_job.pipeline_inline.name} produced inconsistent XML"
+    condition     = strcontains(data.jenkins_job.pipeline_inline.template, "Example inline script template")
+    error_message = "${data.jenkins_job.pipeline_inline.name} data source did not return the expected config"
   }
   assert {
-    condition     = chomp(data.jenkins_job.freestyle.template) == chomp(jenkins_job.freestyle.template)
-    error_message = "${data.jenkins_job.freestyle.name} produced inconsistent XML"
+    condition     = strcontains(data.jenkins_job.freestyle.template, "An example freestyle job")
+    error_message = "${data.jenkins_job.freestyle.name} data source did not return the expected config"
   }
   assert {
     condition     = data.jenkins_view.example.name == "example"

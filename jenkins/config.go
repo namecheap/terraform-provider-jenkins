@@ -111,6 +111,10 @@ type Config struct {
 // provider attributes. These are applied by the provider Configure functions so
 // the framework and SDKv2 entry points behave identically.
 const (
+	// defaultCredentialDomain is the default domain that all credentials go into.
+	// The value represents "All domains" in the Jenkins system.
+	defaultCredentialDomain = "_"
+
 	envRequestTimeout = "JENKINS_REQUEST_TIMEOUT"
 	envRetryMax       = "JENKINS_RETRY_MAX"
 	envRetryWaitMin   = "JENKINS_RETRY_WAIT_MIN"
