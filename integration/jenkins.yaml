@@ -1,0 +1,21 @@
+# Configuration as Code for the acceptance/integration Jenkins.
+#
+# The provider's RBAC resources (jenkins_role) require the Role-Based
+# Authorization Strategy to be the active strategy. Enabling it here — while
+# granting the "anonymous" and "authenticated" principals Overall/Administer —
+# activates the strategy's REST API without changing the effective access the
+# test suite has always relied on: every request (authenticated or not) still
+# has full control, so the existing acceptance and integration tests are
+# unaffected.
+jenkins:
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            description: "Full control. Preserves the pre-role-strategy open access the test suite relies on."
+            permissions:
+              - "Overall/Administer"
+            entries:
+              - user: "anonymous"
+              - group: "authenticated"
