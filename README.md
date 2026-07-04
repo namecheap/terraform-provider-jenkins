@@ -13,14 +13,24 @@ Manage Jenkins jobs, folders, views, and credentials declaratively with Terrafor
 
 ---
 
+## Requirements
+
+- **Terraform >= 1.11** or **OpenTofu >= 1.11.** The credential resources expose
+  write-only secret arguments (`<secret>_wo`), which rely on Terraform's
+  write-only attribute feature introduced in 1.11. Older versions are not
+  supported.
+
+---
+
 ## Quick Start
 
 ```hcl
 terraform {
+  required_version = ">= 1.11"
   required_providers {
     jenkins = {
       source  = "namecheap/jenkins"
-      version = "~> 1.0"
+      version = "~> 1.2"
     }
   }
 }

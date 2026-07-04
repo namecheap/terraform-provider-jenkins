@@ -8,6 +8,10 @@ description: |-
 
 The Jenkins provider is used to interact with the Jenkins API. The provider needs to be configured with the proper credentials before it can be used.
 
+## Requirements
+
+- **Terraform >= 1.11** or **OpenTofu >= 1.11.** The credential resources expose write-only secret arguments (`<secret>_wo`), which rely on Terraform's write-only attribute feature introduced in 1.11. Older versions are not supported.
+
 ## Example Usage
 
 ```terraform
