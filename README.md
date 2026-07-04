@@ -52,6 +52,27 @@ resource "jenkins_job" "deploy" {
 }
 ```
 
+### Terraform and OpenTofu
+
+The provider works with both **Terraform** (≥ 1.0) and **[OpenTofu](https://opentofu.org/)** (≥ 1.6). The configuration above is identical for either tool.
+
+OpenTofu resolves the same `namecheap/jenkins` source from its own registry, which mirrors GitHub releases automatically:
+
+```hcl
+terraform {
+  required_providers {
+    jenkins = {
+      # OpenTofu pulls this from registry.opentofu.org;
+      # Terraform pulls the same address from registry.terraform.io.
+      source  = "namecheap/jenkins"
+      version = "~> 1.0"
+    }
+  }
+}
+```
+
+Then `tofu init` (or `terraform init`) downloads and verifies the provider. GPG-signature verification uses the release signing key already registered with the Terraform Registry.
+
 ## Resources
 
 | Resource | Description | Required Plugin |
