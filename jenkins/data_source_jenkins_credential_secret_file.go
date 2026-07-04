@@ -7,8 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSecretFileDataSourceModel struct {
@@ -22,7 +20,7 @@ type credentialSecretFileDataSourceModel struct {
 }
 
 type credentialSecretFileDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialSecretFileDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -30,7 +28,24 @@ var _ datasource.DataSourceWithConfigure = &credentialSecretFileDataSource{}
 
 func newCredentialSecretFileDataSource() datasource.DataSource {
 	return &credentialSecretFileDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(secretFileCredentialDataSourceReader()),
+	}
+}
+
+func secretFileCredentialDataSourceReader() credentialDataSourceReader[credentialSecretFileDataSourceModel] {
+	return credentialDataSourceReader[credentialSecretFileDataSourceModel]{
+		folder:      func(m *credentialSecretFileDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialSecretFileDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialSecretFileDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialSecretFileDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialSecretFileDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &jenkins.FileCredentials{} },
+		fromAPI: func(api interface{}, m *credentialSecretFileDataSourceModel) {
+			cred := api.(*jenkins.FileCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Filename = types.StringValue(cred.Filename)
+		},
 	}
 }
 
@@ -48,41 +63,4 @@ func (d *credentialSecretFileDataSource) Schema(_ context.Context, _ datasource.
 			},
 		}),
 	}
-}
-
-func (d *credentialSecretFileDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialSecretFileDataSource.Read")
-	var data credentialSecretFileDataSourceModel
-
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := jenkins.FileCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Filename = types.StringValue(cred.Filename)
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

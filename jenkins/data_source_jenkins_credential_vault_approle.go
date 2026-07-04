@@ -6,8 +6,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialVaultAppRoleDataSourceModel struct {
@@ -23,7 +21,7 @@ type credentialVaultAppRoleDataSourceModel struct {
 }
 
 type credentialVaultAppRoleDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialVaultAppRoleDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -31,7 +29,26 @@ var _ datasource.DataSourceWithConfigure = &credentialVaultAppRoleDataSource{}
 
 func newCredentialVaultAppRoleDataSource() datasource.DataSource {
 	return &credentialVaultAppRoleDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(vaultAppRoleCredentialDataSourceReader()),
+	}
+}
+
+func vaultAppRoleCredentialDataSourceReader() credentialDataSourceReader[credentialVaultAppRoleDataSourceModel] {
+	return credentialDataSourceReader[credentialVaultAppRoleDataSourceModel]{
+		folder:      func(m *credentialVaultAppRoleDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialVaultAppRoleDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialVaultAppRoleDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialVaultAppRoleDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialVaultAppRoleDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &VaultAppRoleCredentials{} },
+		fromAPI: func(api interface{}, m *credentialVaultAppRoleDataSourceModel) {
+			cred := api.(*VaultAppRoleCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Namespace = types.StringValue(cred.Namespace)
+			m.Path = types.StringValue(cred.Path)
+			m.RoleID = types.StringValue(cred.RoleID)
+		},
 	}
 }
 
@@ -39,7 +56,7 @@ func (d *credentialVaultAppRoleDataSource) Metadata(_ context.Context, req datas
 	resp.TypeName = req.ProviderTypeName + "_credential_vault_approle"
 }
 
-func (d *credentialVaultAppRoleDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+func (d *credentialVaultAppRoleDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Get the attributes of a vault approle credential within Jenkins.",
 		Attributes: d.schemaCredential(map[string]schema.Attribute{
@@ -57,45 +74,4 @@ func (d *credentialVaultAppRoleDataSource) Schema(ctx context.Context, req datas
 			},
 		}),
 	}
-}
-
-func (d *credentialVaultAppRoleDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialVaultAppRoleDataSource.Read")
-	var data credentialVaultAppRoleDataSourceModel
-
-	// Read Terraform configuration data into the model
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := VaultAppRoleCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Namespace = types.StringValue(cred.Namespace)
-	data.Path = types.StringValue(cred.Path)
-	data.RoleID = types.StringValue(cred.RoleID)
-
-	// Save data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

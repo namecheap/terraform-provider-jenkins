@@ -7,8 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialUsernameDataSourceModel struct {
@@ -22,7 +20,7 @@ type credentialUsernameDataSourceModel struct {
 }
 
 type credentialUsernameDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialUsernameDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -30,7 +28,24 @@ var _ datasource.DataSourceWithConfigure = &credentialUsernameDataSource{}
 
 func newCredentialUsernameDataSource() datasource.DataSource {
 	return &credentialUsernameDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(usernameCredentialDataSourceReader()),
+	}
+}
+
+func usernameCredentialDataSourceReader() credentialDataSourceReader[credentialUsernameDataSourceModel] {
+	return credentialDataSourceReader[credentialUsernameDataSourceModel]{
+		folder:      func(m *credentialUsernameDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialUsernameDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialUsernameDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialUsernameDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialUsernameDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &jenkins.UsernameCredentials{} },
+		fromAPI: func(api interface{}, m *credentialUsernameDataSourceModel) {
+			cred := api.(*jenkins.UsernameCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Username = types.StringValue(cred.Username)
+		},
 	}
 }
 
@@ -38,7 +53,7 @@ func (d *credentialUsernameDataSource) Metadata(_ context.Context, req datasourc
 	resp.TypeName = req.ProviderTypeName + "_credential_username"
 }
 
-func (d *credentialUsernameDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+func (d *credentialUsernameDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Get the attributes of a username credential within Jenkins.",
 		Attributes: d.schemaCredential(map[string]schema.Attribute{
@@ -48,43 +63,4 @@ func (d *credentialUsernameDataSource) Schema(ctx context.Context, req datasourc
 			},
 		}),
 	}
-}
-
-func (d *credentialUsernameDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialUsernameDataSource.Read")
-	var data credentialUsernameDataSourceModel
-
-	// Read Terraform configuration data into the model
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := jenkins.UsernameCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Username = types.StringValue(cred.Username)
-
-	// Save data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

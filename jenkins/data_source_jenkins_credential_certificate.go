@@ -6,8 +6,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialCertificateDataSourceModel struct {
@@ -20,14 +18,30 @@ type credentialCertificateDataSourceModel struct {
 }
 
 type credentialCertificateDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialCertificateDataSourceModel]
 }
 
 var _ datasource.DataSourceWithConfigure = &credentialCertificateDataSource{}
 
 func newCredentialCertificateDataSource() datasource.DataSource {
 	return &credentialCertificateDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(certificateCredentialDataSourceReader()),
+	}
+}
+
+func certificateCredentialDataSourceReader() credentialDataSourceReader[credentialCertificateDataSourceModel] {
+	return credentialDataSourceReader[credentialCertificateDataSourceModel]{
+		folder:      func(m *credentialCertificateDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialCertificateDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialCertificateDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialCertificateDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialCertificateDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &CertificateCredentials{} },
+		fromAPI: func(api interface{}, m *credentialCertificateDataSourceModel) {
+			cred := api.(*CertificateCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+		},
 	}
 }
 
@@ -40,39 +54,4 @@ func (d *credentialCertificateDataSource) Schema(_ context.Context, _ datasource
 		MarkdownDescription: "Get the attributes of a certificate credential within Jenkins.",
 		Attributes:          d.schemaCredential(map[string]schema.Attribute{}),
 	}
-}
-
-func (d *credentialCertificateDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialCertificateDataSource.Read")
-	var data credentialCertificateDataSourceModel
-
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := CertificateCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

@@ -7,8 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSecretTextDataSourceModel struct {
@@ -21,7 +19,7 @@ type credentialSecretTextDataSourceModel struct {
 }
 
 type credentialSecretTextDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialSecretTextDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -29,7 +27,23 @@ var _ datasource.DataSourceWithConfigure = &credentialSecretTextDataSource{}
 
 func newCredentialSecretTextDataSource() datasource.DataSource {
 	return &credentialSecretTextDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(secretTextCredentialDataSourceReader()),
+	}
+}
+
+func secretTextCredentialDataSourceReader() credentialDataSourceReader[credentialSecretTextDataSourceModel] {
+	return credentialDataSourceReader[credentialSecretTextDataSourceModel]{
+		folder:      func(m *credentialSecretTextDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialSecretTextDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialSecretTextDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialSecretTextDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialSecretTextDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &jenkins.StringCredentials{} },
+		fromAPI: func(api interface{}, m *credentialSecretTextDataSourceModel) {
+			cred := api.(*jenkins.StringCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+		},
 	}
 }
 
@@ -42,40 +56,4 @@ func (d *credentialSecretTextDataSource) Schema(_ context.Context, _ datasource.
 		MarkdownDescription: "Get the attributes of a secret text credential within Jenkins.",
 		Attributes:          d.schemaCredential(map[string]schema.Attribute{}),
 	}
-}
-
-func (d *credentialSecretTextDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialSecretTextDataSource.Read")
-	var data credentialSecretTextDataSourceModel
-
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := jenkins.StringCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
