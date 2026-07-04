@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // VaultAppRoleCredentials struct representing credential for storing Vault AppRole role id and secret id
@@ -39,7 +38,7 @@ type credentialVaultAppRoleResourceModel struct {
 }
 
 type credentialVaultAppRoleResource struct {
-	*resourceHelper
+	*credentialCRUD[credentialVaultAppRoleResourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -49,7 +48,52 @@ var _ resource.ResourceWithConfigValidators = &credentialVaultAppRoleResource{}
 
 func newCredentialVaultAppRoleResource() resource.Resource {
 	return &credentialVaultAppRoleResource{
-		resourceHelper: newResourceHelper(),
+		credentialCRUD: newCredentialCRUD(vaultAppRoleCredentialSpec()),
+	}
+}
+
+// vaultAppRoleCredentialSpec supplies the type-specific mapping for the shared
+// credential CRUD flow (see credential_crud.go). Uses the local
+// VaultAppRoleCredentials XML struct (the HashiCorp Vault plugin type).
+func vaultAppRoleCredentialSpec() credentialSpec[credentialVaultAppRoleResourceModel] {
+	return credentialSpec[credentialVaultAppRoleResourceModel]{
+		identity: func(m *credentialVaultAppRoleResourceModel) (string, string, string) {
+			return m.Folder.ValueString(), m.Domain.ValueString(), m.Name.ValueString()
+		},
+		setID: func(m *credentialVaultAppRoleResourceModel, id string) {
+			m.ID = types.StringValue(id)
+		},
+		secretFields: []credentialSecretField[credentialVaultAppRoleResourceModel]{{
+			name:         "secret_id",
+			hasWriteOnly: true,
+			plainValue:   func(m *credentialVaultAppRoleResourceModel) types.String { return m.SecretID },
+			woVersion:    func(m *credentialVaultAppRoleResourceModel) types.String { return m.SecretIDWoVersion },
+		}},
+		build: func(m *credentialVaultAppRoleResourceModel, secrets map[string]string) interface{} {
+			cred := &VaultAppRoleCredentials{
+				ID:          m.Name.ValueString(),
+				Scope:       m.Scope.ValueString(),
+				Description: m.Description.ValueString(),
+				Namespace:   m.Namespace.ValueString(),
+				Path:        m.Path.ValueString(),
+				RoleID:      m.RoleID.ValueString(),
+			}
+			if s, ok := secrets["secret_id"]; ok {
+				cred.SecretID = s
+			}
+			return cred
+		},
+		newAPIValue: func() interface{} { return &VaultAppRoleCredentials{} },
+		fromAPI: func(api interface{}, m *credentialVaultAppRoleResourceModel) {
+			// NOTE: the secret id is intentionally not read back — GetSingle returns
+			// a placeholder. Only Create/Update send it.
+			cred := api.(*VaultAppRoleCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Namespace = types.StringValue(cred.Namespace)
+			m.Path = types.StringValue(cred.Path)
+			m.RoleID = types.StringValue(cred.RoleID)
+		},
 	}
 }
 
@@ -96,182 +140,4 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 // ConfigValidators enforces the plain/write-only secret constraints.
 func (r *credentialVaultAppRoleResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
 	return optionalWriteOnlySecretConfigValidators("secret_id")
-}
-
-// Create is called when the provider must create a new resource. Config
-// and planned state values should be read from the
-// CreateRequest and new state values set on the CreateResponse.
-func (r *credentialVaultAppRoleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	tflog.Debug(ctx, "credentialVaultAppRoleResource.Create")
-	var data credentialVaultAppRoleResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
-	if cm == nil {
-		return
-	}
-
-	secretID := data.SecretID.ValueString()
-	if secretIDWo := r.readWriteOnly(ctx, req.Config, "secret_id_wo", &resp.Diagnostics); !secretIDWo.IsNull() {
-		secretID = secretIDWo.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cred := VaultAppRoleCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Namespace:   data.Namespace.ValueString(),
-		Path:        data.Path.ValueString(),
-		RoleID:      data.RoleID.ValueString(),
-		SecretID:    secretID,
-	}
-
-	err := cm.Add(ctx, data.Domain.ValueString(), cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create Resource",
-			"An unexpected error occurred while creating the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	// Convert from the API data model to the Terraform data model
-	// and set any unknown attribute values.
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-
-	// Save data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Read is called when the provider must read resource values in order
-// to update state. Planned state values should be read from the
-// ReadRequest and new state values set on the ReadResponse.
-func (r *credentialVaultAppRoleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	tflog.Debug(ctx, "credentialVaultAppRoleResource.Read")
-	var data credentialVaultAppRoleResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := VaultAppRoleCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		if isNotFound(err) {
-			// Job does not exist
-			resp.State.RemoveResource(ctx)
-			return
-		}
-
-		resp.Diagnostics.AddError(
-			"Unable to Refresh Resource",
-			"An unexpected error occurred while parsing the resource read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Namespace = types.StringValue(cred.Namespace)
-	data.Path = types.StringValue(cred.Path)
-	data.RoleID = types.StringValue(cred.RoleID)
-	// NOTE: We are NOT setting the secret here, as the secret returned by GetSingle is garbage
-	// Secret only applies to Create/Update operations if the "secret_id" property is non-empty
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Update is called to update the state of the resource. Config, planned
-// state, and prior state values should be read from the
-// UpdateRequest and new state values set on the UpdateResponse.
-func (r *credentialVaultAppRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	tflog.Debug(ctx, "credentialVaultAppRoleResource.Update")
-	var data credentialVaultAppRoleResourceModel
-	var state credentialVaultAppRoleResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := VaultAppRoleCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Namespace:   data.Namespace.ValueString(),
-		Path:        data.Path.ValueString(),
-		RoleID:      data.RoleID.ValueString(),
-	}
-
-	// Send the secret_id only when it should change; omitting it leaves the
-	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
-	// Write-only: re-send when the version trigger changed. Plain: re-send when
-	// the value changed.
-	if secretIDWo := r.readWriteOnly(ctx, req.Config, "secret_id_wo", &resp.Diagnostics); !secretIDWo.IsNull() {
-		if !data.SecretIDWoVersion.Equal(state.SecretIDWoVersion) {
-			cred.SecretID = secretIDWo.ValueString()
-		}
-	} else if !data.SecretID.Equal(state.SecretID) {
-		cred.SecretID = data.SecretID.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Update Resource",
-			"An unexpected error occurred while attempting to update the resource. "+
-				"Please retry the operation or report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Delete is called when the provider must delete the resource. Config
-// values may be read from the DeleteRequest.
-//
-// If execution completes without error, the framework will automatically
-// call DeleteResponse.State.RemoveResource(), so it can be omitted
-// from provider logic.
-func (r *credentialVaultAppRoleResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data credentialVaultAppRoleResourceModel
-
-	// Read Terraform prior state data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }
