@@ -40,14 +40,25 @@ const (
 )
 
 // credentialSecretField describes one secret-valued attribute of a credential
-// (e.g. "secret", "password", "private_key"). A credential may have several —
-// Azure's mutually-exclusive client_secret / certificate_id pair is why the
-// shared machinery works with a list from the outset. plainValue and woVersion
-// return the model's plain value and its write-only rotation-version field.
+// (e.g. "secret", "password", "privatekey", "passphrase"). A credential may
+// have several — SSH's privatekey+passphrase and Azure's mutually-exclusive
+// client_secret/certificate_id pair are why the shared machinery works with a
+// list from the outset.
+//
+//   - hasWriteOnly: a "<name>_wo" / "<name>_wo_version" companion pair exists
+//     (added via addWriteOnlySecret). When false, no _wo attribute is read.
+//   - alwaysSend: the field must be sent on every update regardless of whether
+//     it changed (e.g. SSH's private-key source is structural and must always be
+//     present in the payload). When false, it is sent only when it changed.
+//
+// plainValue returns the model's plain value; woVersion returns its write-only
+// rotation trigger (only consulted when hasWriteOnly is true).
 type credentialSecretField[M any] struct {
-	name       string
-	plainValue func(*M) types.String
-	woVersion  func(*M) types.String
+	name         string
+	hasWriteOnly bool
+	alwaysSend   bool
+	plainValue   func(*M) types.String
+	woVersion    func(*M) types.String
 }
 
 // credentialSpec captures everything type-specific about one credential kind so
@@ -169,35 +180,49 @@ func (c *credentialCRUD[M]) Delete(ctx context.Context, req resource.DeleteReque
 	c.deleteCredential(ctx, folder, domain, name, &resp.Diagnostics)
 }
 
-// resolveSecretsCreate resolves each secret field's value for a create: the
-// write-only companion (read from config) takes precedence over the plain value.
-// Every declared field is included, matching the pre-refactor behavior of always
-// setting the secret on the credential struct at create time.
+// resolvePlainOrWo returns a field's effective value: the write-only companion
+// (read from config) when the field has one and it is set, otherwise the plain
+// value from the model.
+func (c *credentialCRUD[M]) resolvePlainOrWo(ctx context.Context, m *M, config tfsdk.Config, f credentialSecretField[M], diags *diag.Diagnostics) string {
+	if f.hasWriteOnly {
+		if wo := c.readWriteOnly(ctx, config, f.name+"_wo", diags); !wo.IsNull() {
+			return wo.ValueString()
+		}
+	}
+	return f.plainValue(m).ValueString()
+}
+
+// resolveSecretsCreate resolves every secret field for a create: the write-only
+// companion takes precedence over the plain value. All declared fields are
+// included, matching the pre-refactor behavior of setting the secret on the
+// credential struct at create time.
 func (c *credentialCRUD[M]) resolveSecretsCreate(ctx context.Context, m *M, config tfsdk.Config, diags *diag.Diagnostics) map[string]string {
 	secrets := make(map[string]string, len(c.spec.secretFields))
 	for _, f := range c.spec.secretFields {
-		val := f.plainValue(m).ValueString()
-		if wo := c.readWriteOnly(ctx, config, f.name+"_wo", diags); !wo.IsNull() {
-			val = wo.ValueString()
-		}
-		secrets[f.name] = val
+		secrets[f.name] = c.resolvePlainOrWo(ctx, m, config, f, diags)
 	}
 	return secrets
 }
 
-// resolveSecretsUpdate resolves each secret field for an update, sending it only
-// when it should change: for a write-only secret when its version trigger
-// changed, otherwise when the plain value changed. Fields left out keep Jenkins'
-// stored value (also correct under lifecycle.ignore_changes).
+// resolveSecretsUpdate resolves each secret field for an update. An alwaysSend
+// field is always included (e.g. SSH's structural private-key source). Otherwise
+// the field is sent only when it should change: for a write-only secret when its
+// version trigger changed, else when the plain value changed. Fields left out
+// keep Jenkins' stored value (also correct under lifecycle.ignore_changes).
 func (c *credentialCRUD[M]) resolveSecretsUpdate(ctx context.Context, plan, state *M, config tfsdk.Config, diags *diag.Diagnostics) map[string]string {
 	secrets := make(map[string]string)
 	for _, f := range c.spec.secretFields {
-		if wo := c.readWriteOnly(ctx, config, f.name+"_wo", diags); !wo.IsNull() {
+		switch {
+		case f.alwaysSend:
+			secrets[f.name] = c.resolvePlainOrWo(ctx, plan, config, f, diags)
+		case f.hasWriteOnly && !c.readWriteOnly(ctx, config, f.name+"_wo", diags).IsNull():
 			if !f.woVersion(plan).Equal(f.woVersion(state)) {
-				secrets[f.name] = wo.ValueString()
+				secrets[f.name] = c.readWriteOnly(ctx, config, f.name+"_wo", diags).ValueString()
 			}
-		} else if !f.plainValue(plan).Equal(f.plainValue(state)) {
-			secrets[f.name] = f.plainValue(plan).ValueString()
+		default:
+			if !f.plainValue(plan).Equal(f.plainValue(state)) {
+				secrets[f.name] = f.plainValue(plan).ValueString()
+			}
 		}
 	}
 	return secrets
