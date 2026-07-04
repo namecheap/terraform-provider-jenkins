@@ -6,8 +6,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialAzureServicePrincipalDataSourceModel struct {
@@ -20,7 +18,7 @@ type credentialAzureServicePrincipalDataSourceModel struct {
 }
 
 type credentialAzureServicePrincipalDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialAzureServicePrincipalDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -28,7 +26,23 @@ var _ datasource.DataSourceWithConfigure = &credentialAzureServicePrincipalDataS
 
 func newCredentialAzureServicePrincipalDataSource() datasource.DataSource {
 	return &credentialAzureServicePrincipalDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(azureServicePrincipalCredentialDataSourceReader()),
+	}
+}
+
+func azureServicePrincipalCredentialDataSourceReader() credentialDataSourceReader[credentialAzureServicePrincipalDataSourceModel] {
+	return credentialDataSourceReader[credentialAzureServicePrincipalDataSourceModel]{
+		folder:      func(m *credentialAzureServicePrincipalDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialAzureServicePrincipalDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialAzureServicePrincipalDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialAzureServicePrincipalDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialAzureServicePrincipalDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &AzureServicePrincipalCredentials{} },
+		fromAPI: func(api interface{}, m *credentialAzureServicePrincipalDataSourceModel) {
+			cred := api.(*AzureServicePrincipalCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+		},
 	}
 }
 
@@ -41,40 +55,4 @@ func (d *credentialAzureServicePrincipalDataSource) Schema(_ context.Context, _ 
 		MarkdownDescription: "Get the attributes of an Azure Service Principal credential within Jenkins.",
 		Attributes:          d.schemaCredential(map[string]schema.Attribute{}),
 	}
-}
-
-func (d *credentialAzureServicePrincipalDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialAzureServicePrincipalDataSource.Read")
-	var data credentialAzureServicePrincipalDataSourceModel
-
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := AzureServicePrincipalCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

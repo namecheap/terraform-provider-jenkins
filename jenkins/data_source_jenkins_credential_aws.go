@@ -6,8 +6,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialAwsDataSourceModel struct {
@@ -23,7 +21,7 @@ type credentialAwsDataSourceModel struct {
 }
 
 type credentialAwsDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialAwsDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -31,7 +29,26 @@ var _ datasource.DataSourceWithConfigure = &credentialAwsDataSource{}
 
 func newCredentialAwsDataSource() datasource.DataSource {
 	return &credentialAwsDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(awsCredentialDataSourceReader()),
+	}
+}
+
+func awsCredentialDataSourceReader() credentialDataSourceReader[credentialAwsDataSourceModel] {
+	return credentialDataSourceReader[credentialAwsDataSourceModel]{
+		folder:      func(m *credentialAwsDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialAwsDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialAwsDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialAwsDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialAwsDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &credentialAws{} },
+		fromAPI: func(api interface{}, m *credentialAwsDataSourceModel) {
+			cred := api.(*credentialAws)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.AccessKey = types.StringValue(cred.AccessKey)
+			m.IamRoleArn = types.StringValue(cred.IamRoleArn)
+			m.IamMfaSerialNumber = types.StringValue(cred.IamMfaSerialNumber)
+		},
 	}
 }
 
@@ -39,7 +56,7 @@ func (d *credentialAwsDataSource) Metadata(_ context.Context, req datasource.Met
 	resp.TypeName = req.ProviderTypeName + "_credential_aws"
 }
 
-func (d *credentialAwsDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+func (d *credentialAwsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Get the attributes of an AWS credential within Jenkins.",
 		Attributes: d.schemaCredential(map[string]schema.Attribute{
@@ -58,45 +75,4 @@ func (d *credentialAwsDataSource) Schema(ctx context.Context, req datasource.Sch
 			},
 		}),
 	}
-}
-
-func (d *credentialAwsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialAwsDataSource.Read")
-	var data credentialAwsDataSourceModel
-
-	// Read Terraform configuration data into the model
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := credentialAws{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.AccessKey = types.StringValue(cred.AccessKey)
-	data.IamRoleArn = types.StringValue(cred.IamRoleArn)
-	data.IamMfaSerialNumber = types.StringValue(cred.IamMfaSerialNumber)
-
-	// Save data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

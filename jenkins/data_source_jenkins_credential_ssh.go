@@ -7,8 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSSHDataSourceModel struct {
@@ -22,7 +20,7 @@ type credentialSSHDataSourceModel struct {
 }
 
 type credentialSSHDataSource struct {
-	*dataSourceHelper
+	*credentialDataSource[credentialSSHDataSourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -30,7 +28,24 @@ var _ datasource.DataSourceWithConfigure = &credentialSSHDataSource{}
 
 func newCredentialSSHDataSource() datasource.DataSource {
 	return &credentialSSHDataSource{
-		dataSourceHelper: newDataSourceHelper(),
+		credentialDataSource: newCredentialDataSource(sshCredentialDataSourceReader()),
+	}
+}
+
+func sshCredentialDataSourceReader() credentialDataSourceReader[credentialSSHDataSourceModel] {
+	return credentialDataSourceReader[credentialSSHDataSourceModel]{
+		folder:      func(m *credentialSSHDataSourceModel) types.String { return m.Folder },
+		name:        func(m *credentialSSHDataSourceModel) types.String { return m.Name },
+		domain:      func(m *credentialSSHDataSourceModel) types.String { return m.Domain },
+		setDomain:   func(m *credentialSSHDataSourceModel, v string) { m.Domain = types.StringValue(v) },
+		setID:       func(m *credentialSSHDataSourceModel, id string) { m.ID = types.StringValue(id) },
+		newAPIValue: func() interface{} { return &jenkins.SSHCredentials{} },
+		fromAPI: func(api interface{}, m *credentialSSHDataSourceModel) {
+			cred := api.(*jenkins.SSHCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Username = types.StringValue(cred.Username)
+		},
 	}
 }
 
@@ -48,41 +63,4 @@ func (d *credentialSSHDataSource) Schema(_ context.Context, _ datasource.SchemaR
 			},
 		}),
 	}
-}
-
-func (d *credentialSSHDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	tflog.Debug(ctx, "credentialSSHDataSource.Read")
-	var data credentialSSHDataSourceModel
-
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
-
-	if data.Domain.IsNull() {
-		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
-	}
-
-	cred := jenkins.SSHCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Read Data Source",
-			"An unexpected error occurred while parsing the data source read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Username = types.StringValue(cred.Username)
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
