@@ -16,7 +16,17 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-const createViewRetryDelay = time.Second
+// createViewRetryTimeout bounds how long Create polls for a freshly created
+// view to become readable, and createViewRetryInterval is the poll interval
+// within that window. gojenkins' CreateView issues the POST then an immediate
+// GET that can race Jenkins indexing the new view; polling (rather than a fixed
+// one-second sleep) lets Create return as soon as the view is readable instead
+// of always blocking a full second. They are vars, not consts, so tests can
+// shrink the timings.
+var (
+	createViewRetryTimeout  = 2 * time.Second
+	createViewRetryInterval = 100 * time.Millisecond
+)
 
 type ViewResourceModel struct {
 	ID               types.String `tfsdk:"id"`
@@ -108,9 +118,9 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 	if err != nil {
 		// gojenkins v1.2.0 CreateView calls GetView immediately after the POST.
 		// That internal GET can fail transiently (Jenkins indexing the new view).
-		// Retry once after a short delay before giving up.
-		time.Sleep(createViewRetryDelay)
-		view, err = r.client.GetView(ctx, data.Name.ValueString())
+		// Poll briefly for the view to become readable before giving up; this
+		// returns as soon as it appears instead of blocking a fixed second.
+		view, err = r.waitForView(ctx, data.Name.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Unable to Create Resource",
@@ -140,13 +150,22 @@ func (r *ViewResource) Create(ctx context.Context, req resource.CreateRequest, r
 				fmt.Sprintf("Error adding %q to Jenkins view %q: %s", projectName, data.Name.ValueString(), err),
 			)
 
-			_, err := r.client.PostRequest(ctx, "/view/"+url.PathEscape(data.Name.ValueString())+"/doDelete", nil, nil, nil)
-			if err != nil {
+			// Roll back the just-created view so a retry does not collide with a
+			// half-configured, same-named view. The assignment error is already
+			// reported above; only surface a second diagnostic if the rollback
+			// itself fails, and make clear the view is now orphaned.
+			if _, delErr := r.client.PostRequest(ctx, "/view/"+url.PathEscape(data.Name.ValueString())+"/doDelete", nil, nil, nil); delErr != nil {
 				resp.Diagnostics.AddError(
-					"Unable to Delete Resource",
-					"An unexpected error occurred while deleting the resource. "+
-						"Please report this issue to the provider developers.\n\n"+
-						"Error: "+err.Error(),
+					"View Left Orphaned After Failed Assignment",
+					fmt.Sprintf(
+						"Assigning project %q failed, and the automatic rollback that deletes the "+
+							"partially-created view %q also failed, so the view still exists in Jenkins "+
+							"but is not tracked in Terraform state.\n\n"+
+							"Delete the view manually before re-applying; otherwise the next apply will "+
+							"fail trying to create a view that already exists.\n\n"+
+							"Rollback error: %s",
+						projectName, data.Name.ValueString(), delErr,
+					),
 				)
 			}
 
@@ -259,4 +278,28 @@ func (r *ViewResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 // ImportState is called when performing import operations of existing resources.
 func (r *ViewResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// waitForView polls GetView until the view is readable or the retry window
+// elapses, returning the view on success or the last error observed. It returns
+// as soon as the view appears (handling the post-create indexing race without a
+// fixed one-second sleep) and respects context cancellation.
+func (r *ViewResource) waitForView(ctx context.Context, name string) (*gojenkins.View, error) {
+	deadline := time.Now().Add(createViewRetryTimeout)
+	var lastErr error
+	for {
+		view, err := r.client.GetView(ctx, name)
+		if err == nil {
+			return view, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(createViewRetryInterval):
+		}
+	}
 }

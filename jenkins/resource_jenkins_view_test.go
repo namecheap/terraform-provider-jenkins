@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"testing"
+	"time"
 
+	"github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -82,6 +84,62 @@ func TestAccJenkinsView_withAssignedProjects(t *testing.T) {
 				),
 			},
 		},
+	})
+}
+
+func TestWaitForView(t *testing.T) {
+	ctx := context.Background()
+
+	// Shrink the retry timings so the exhaustion case does not take seconds.
+	origTimeout, origInterval := createViewRetryTimeout, createViewRetryInterval
+	createViewRetryTimeout, createViewRetryInterval = 50*time.Millisecond, time.Millisecond
+	defer func() { createViewRetryTimeout, createViewRetryInterval = origTimeout, origInterval }()
+
+	t.Run("returns as soon as the view is readable", func(t *testing.T) {
+		calls := 0
+		r := &ViewResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+			mockGetView: func(_ context.Context, _ string) (*gojenkins.View, error) {
+				calls++
+				if calls < 3 {
+					return nil, fmt.Errorf("404 view not indexed yet")
+				}
+				return &gojenkins.View{}, nil
+			},
+		}}}
+		view, err := r.waitForView(ctx, "foo")
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		if view == nil {
+			t.Fatal("expected a view, got nil")
+		}
+		if calls != 3 {
+			t.Errorf("expected 3 GetView calls, got %d", calls)
+		}
+	})
+
+	t.Run("returns the last error when the window elapses", func(t *testing.T) {
+		r := &ViewResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+			mockGetView: func(_ context.Context, _ string) (*gojenkins.View, error) {
+				return nil, fmt.Errorf("still 404")
+			},
+		}}}
+		if _, err := r.waitForView(ctx, "foo"); err == nil {
+			t.Fatal("expected an error after the retry window elapsed")
+		}
+	})
+
+	t.Run("honors context cancellation", func(t *testing.T) {
+		cctx, cancel := context.WithCancel(ctx)
+		cancel()
+		r := &ViewResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+			mockGetView: func(_ context.Context, _ string) (*gojenkins.View, error) {
+				return nil, fmt.Errorf("404")
+			},
+		}}}
+		if _, err := r.waitForView(cctx, "foo"); err == nil {
+			t.Fatal("expected a cancellation error")
+		}
 	})
 }
 
