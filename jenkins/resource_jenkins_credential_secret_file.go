@@ -7,7 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSecretFileResourceModel struct {
@@ -24,7 +23,7 @@ type credentialSecretFileResourceModel struct {
 }
 
 type credentialSecretFileResource struct {
-	*resourceHelper
+	*credentialCRUD[credentialSecretFileResourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -34,7 +33,47 @@ var _ resource.ResourceWithConfigValidators = &credentialSecretFileResource{}
 
 func newCredentialSecretFileResource() resource.Resource {
 	return &credentialSecretFileResource{
-		resourceHelper: newResourceHelper(),
+		credentialCRUD: newCredentialCRUD(secretFileCredentialSpec()),
+	}
+}
+
+// secretFileCredentialSpec supplies the type-specific mapping for the shared
+// credential CRUD flow (see credential_crud.go).
+func secretFileCredentialSpec() credentialSpec[credentialSecretFileResourceModel] {
+	return credentialSpec[credentialSecretFileResourceModel]{
+		identity: func(m *credentialSecretFileResourceModel) (string, string, string) {
+			return m.Folder.ValueString(), m.Domain.ValueString(), m.Name.ValueString()
+		},
+		setID: func(m *credentialSecretFileResourceModel, id string) {
+			m.ID = types.StringValue(id)
+		},
+		secretFields: []credentialSecretField[credentialSecretFileResourceModel]{{
+			name:         "secretbytes",
+			hasWriteOnly: true,
+			plainValue:   func(m *credentialSecretFileResourceModel) types.String { return m.SecretBytes },
+			woVersion:    func(m *credentialSecretFileResourceModel) types.String { return m.SecretBytesWoVersion },
+		}},
+		build: func(m *credentialSecretFileResourceModel, secrets map[string]string) interface{} {
+			cred := &jenkins.FileCredentials{
+				ID:          m.Name.ValueString(),
+				Scope:       m.Scope.ValueString(),
+				Description: m.Description.ValueString(),
+				Filename:    m.Filename.ValueString(),
+			}
+			if s, ok := secrets["secretbytes"]; ok {
+				cred.SecretBytes = s
+			}
+			return cred
+		},
+		newAPIValue: func() interface{} { return &jenkins.FileCredentials{} },
+		fromAPI: func(api interface{}, m *credentialSecretFileResourceModel) {
+			// NOTE: the secret bytes are intentionally not read back — GetSingle
+			// returns a placeholder. Only Create/Update send them.
+			cred := api.(*jenkins.FileCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Filename = types.StringValue(cred.Filename)
+		},
 	}
 }
 
@@ -65,177 +104,4 @@ Manages a secret file credential within Jenkins. This secret file may then be re
 // ConfigValidators enforces the plain/write-only secret constraints.
 func (r *credentialSecretFileResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
 	return writeOnlySecretConfigValidators("secretbytes")
-}
-
-// Create is called when the provider must create a new resource. Config
-// and planned state values should be read from the
-// CreateRequest and new state values set on the CreateResponse.
-func (r *credentialSecretFileResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	tflog.Debug(ctx, "credentialSecretFileResource.Create")
-	var data credentialSecretFileResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
-	if cm == nil {
-		return
-	}
-
-	secretBytes := data.SecretBytes.ValueString()
-	if secretBytesWo := r.readWriteOnly(ctx, req.Config, "secretbytes_wo", &resp.Diagnostics); !secretBytesWo.IsNull() {
-		secretBytes = secretBytesWo.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cred := jenkins.FileCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Filename:    data.Filename.ValueString(),
-		SecretBytes: secretBytes,
-	}
-
-	err := cm.Add(ctx, data.Domain.ValueString(), cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create Resource",
-			"An unexpected error occurred while creating the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	// Convert from the API data model to the Terraform data model
-	// and set any unknown attribute values.
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-
-	// Save data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Read is called when the provider must read resource values in order
-// to update state. Planned state values should be read from the
-// ReadRequest and new state values set on the ReadResponse.
-func (r *credentialSecretFileResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	tflog.Debug(ctx, "credentialSecretFileResource.Read")
-	var data credentialSecretFileResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := jenkins.FileCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		if isNotFound(err) {
-			// Job does not exist
-			resp.State.RemoveResource(ctx)
-			return
-		}
-
-		resp.Diagnostics.AddError(
-			"Unable to Refresh Resource",
-			"An unexpected error occurred while parsing the resource read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Filename = types.StringValue(cred.Filename)
-
-	// NOTE: We are NOT setting the secret here, as the secret returned by GetSingle is garbage
-	// Secret only applies to Create/Update operations if the "secretbytes" property is non-empty
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Update is called to update the state of the resource. Config, planned
-// state, and prior state values should be read from the
-// UpdateRequest and new state values set on the UpdateResponse.
-func (r *credentialSecretFileResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	tflog.Debug(ctx, "credentialSecretFileResource.Update")
-	var data credentialSecretFileResourceModel
-	var state credentialSecretFileResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := jenkins.FileCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Filename:    data.Filename.ValueString(),
-	}
-
-	// Send the secret bytes only when they should change; omitting them leaves the
-	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
-	// Write-only: re-send when the version trigger changed. Plain: re-send when
-	// the value changed.
-	if secretBytesWo := r.readWriteOnly(ctx, req.Config, "secretbytes_wo", &resp.Diagnostics); !secretBytesWo.IsNull() {
-		if !data.SecretBytesWoVersion.Equal(state.SecretBytesWoVersion) {
-			cred.SecretBytes = secretBytesWo.ValueString()
-		}
-	} else if !data.SecretBytes.Equal(state.SecretBytes) {
-		cred.SecretBytes = data.SecretBytes.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Update Resource",
-			"An unexpected error occurred while attempting to update the resource. "+
-				"Please retry the operation or report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Delete is called when the provider must delete the resource. Config
-// values may be read from the DeleteRequest.
-//
-// If execution completes without error, the framework will automatically
-// call DeleteResponse.State.RemoveResource(), so it can be omitted
-// from provider logic.
-func (r *credentialSecretFileResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data credentialSecretFileResourceModel
-
-	// Read Terraform prior state data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }
