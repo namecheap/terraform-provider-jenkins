@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/namecheap/terraform-provider-jenkins/actions/workflows/test.yml/badge.svg)](https://github.com/namecheap/terraform-provider-jenkins/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/namecheap/terraform-provider-jenkins/branch/main/graph/badge.svg)](https://app.codecov.io/gh/namecheap/terraform-provider-jenkins)
-[![Go Report Card](https://goreportcard.com/badge/github.com/namecheap/terraform-provider-jenkins)](https://goreportcard.com/report/github.com/namecheap/terraform-provider-jenkins)
+[![golangci-lint](https://img.shields.io/badge/lint-golangci--lint-4b9be3?logo=go&logoColor=white)](https://golangci-lint.run/)
 [![GitHub release](https://img.shields.io/github/v/release/namecheap/terraform-provider-jenkins?label=release)](https://github.com/namecheap/terraform-provider-jenkins/releases/latest)
 [![Terraform Registry](https://img.shields.io/badge/Terraform%20Registry-namecheap%2Fjenkins-623CE4?logo=terraform)](https://registry.terraform.io/providers/namecheap/jenkins)
 [![License](https://img.shields.io/github/license/namecheap/terraform-provider-jenkins)](LICENSE)
