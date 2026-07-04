@@ -7,7 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // GitHubAppCredentials represents a Jenkins GitHub App credential.
@@ -36,7 +35,7 @@ type credentialGitHubAppResourceModel struct {
 }
 
 type credentialGitHubAppResource struct {
-	*resourceHelper
+	*credentialCRUD[credentialGitHubAppResourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -46,7 +45,48 @@ var _ resource.ResourceWithConfigValidators = &credentialGitHubAppResource{}
 
 func newCredentialGitHubAppResource() resource.Resource {
 	return &credentialGitHubAppResource{
-		resourceHelper: newResourceHelper(),
+		credentialCRUD: newCredentialCRUD(gitHubAppCredentialSpec()),
+	}
+}
+
+// gitHubAppCredentialSpec supplies the type-specific mapping for the shared
+// credential CRUD flow (see credential_crud.go). Uses the local
+// GitHubAppCredentials XML struct (the GitHub Branch Source plugin type).
+func gitHubAppCredentialSpec() credentialSpec[credentialGitHubAppResourceModel] {
+	return credentialSpec[credentialGitHubAppResourceModel]{
+		identity: func(m *credentialGitHubAppResourceModel) (string, string, string) {
+			return m.Folder.ValueString(), m.Domain.ValueString(), m.Name.ValueString()
+		},
+		setID: func(m *credentialGitHubAppResourceModel, id string) {
+			m.ID = types.StringValue(id)
+		},
+		secretFields: []credentialSecretField[credentialGitHubAppResourceModel]{{
+			name:         "private_key",
+			hasWriteOnly: true,
+			plainValue:   func(m *credentialGitHubAppResourceModel) types.String { return m.PrivateKey },
+			woVersion:    func(m *credentialGitHubAppResourceModel) types.String { return m.PrivateKeyWoVersion },
+		}},
+		build: func(m *credentialGitHubAppResourceModel, secrets map[string]string) interface{} {
+			cred := &GitHubAppCredentials{
+				ID:          m.Name.ValueString(),
+				Scope:       m.Scope.ValueString(),
+				Description: m.Description.ValueString(),
+				AppID:       m.AppID.ValueString(),
+			}
+			if k, ok := secrets["private_key"]; ok {
+				cred.PrivateKey = k
+			}
+			return cred
+		},
+		newAPIValue: func() interface{} { return &GitHubAppCredentials{} },
+		fromAPI: func(api interface{}, m *credentialGitHubAppResourceModel) {
+			// NOTE: the private key is intentionally not read back — GetSingle returns
+			// a placeholder. Only Create/Update send it.
+			cred := api.(*GitHubAppCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.AppID = types.StringValue(cred.AppID)
+		},
 	}
 }
 
@@ -81,158 +121,4 @@ Manages a GitHub App credential within Jenkins. This credential may then be refe
 // ConfigValidators enforces the plain/write-only secret constraints.
 func (r *credentialGitHubAppResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
 	return writeOnlySecretConfigValidators("private_key")
-}
-
-// Create is called when the provider must create a new resource.
-func (r *credentialGitHubAppResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	tflog.Debug(ctx, "credentialGitHubAppResource.Create")
-	var data credentialGitHubAppResourceModel
-
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
-	if cm == nil {
-		return
-	}
-
-	privateKey := data.PrivateKey.ValueString()
-	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "private_key_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
-		privateKey = privateKeyWo.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cred := GitHubAppCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		AppID:       data.AppID.ValueString(),
-		PrivateKey:  privateKey,
-	}
-
-	err := cm.Add(ctx, data.Domain.ValueString(), cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create Resource",
-			"An unexpected error occurred while creating the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Read is called when the provider must read resource values in order to update state.
-func (r *credentialGitHubAppResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	tflog.Debug(ctx, "credentialGitHubAppResource.Read")
-	var data credentialGitHubAppResourceModel
-
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := GitHubAppCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		if isNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
-		}
-
-		resp.Diagnostics.AddError(
-			"Unable to Refresh Resource",
-			"An unexpected error occurred while parsing the resource read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.AppID = types.StringValue(cred.AppID)
-
-	// NOTE: We are NOT setting private_key here, as the value returned by GetSingle is garbage.
-	// private_key only applies to Create/Update operations if the property is non-empty.
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Update is called to update the state of the resource.
-func (r *credentialGitHubAppResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	tflog.Debug(ctx, "credentialGitHubAppResource.Update")
-	var data credentialGitHubAppResourceModel
-	var state credentialGitHubAppResourceModel
-
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := GitHubAppCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		AppID:       data.AppID.ValueString(),
-	}
-
-	// Only send private_key if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [private_key].
-	// Send the private_key only when it should change; omitting it leaves the
-	// Jenkins-stored value untouched (also correct for lifecycle.ignore_changes).
-	// Write-only: re-send when the version trigger changed. Plain: re-send when
-	// the value changed.
-	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "private_key_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
-		if !data.PrivateKeyWoVersion.Equal(state.PrivateKeyWoVersion) {
-			cred.PrivateKey = privateKeyWo.ValueString()
-		}
-	} else if !data.PrivateKey.Equal(state.PrivateKey) {
-		cred.PrivateKey = data.PrivateKey.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Update Resource",
-			"An unexpected error occurred while attempting to update the resource. "+
-				"Please retry the operation or report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Delete is called when the provider must delete the resource.
-func (r *credentialGitHubAppResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data credentialGitHubAppResourceModel
-
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }
