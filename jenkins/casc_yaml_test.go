@@ -85,6 +85,65 @@ func TestYAMLSubset(t *testing.T) {
 	}
 }
 
+func TestWrapSection(t *testing.T) {
+	t.Run("wraps a subtree under its section key", func(t *testing.T) {
+		doc, err := wrapSection("jenkins", "systemMessage: hi")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		v, err := parseYAML(doc)
+		if err != nil {
+			t.Fatalf("wrapped doc is not valid YAML: %v", err)
+		}
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected a mapping, got %T", v)
+		}
+		inner, ok := m["jenkins"].(map[string]interface{})
+		if !ok || inner["systemMessage"] != "hi" {
+			t.Errorf("unexpected wrapped structure: %#v", m)
+		}
+	})
+
+	t.Run("invalid YAML errors", func(t *testing.T) {
+		if _, err := wrapSection("jenkins", "a: [bad\n"); err == nil {
+			t.Error("expected an error for malformed YAML")
+		}
+	})
+}
+
+func TestExtractSectionYAML(t *testing.T) {
+	exported := "jenkins:\n  systemMessage: hi\nsecurity:\n  x: 1\n"
+
+	t.Run("extracts and round-trips a section", func(t *testing.T) {
+		sub, found, err := extractSectionYAML(exported, "jenkins")
+		if err != nil || !found {
+			t.Fatalf("found=%v err=%v", found, err)
+		}
+		v, _ := parseYAML(sub)
+		m, ok := v.(map[string]interface{})
+		if !ok || m["systemMessage"] != "hi" {
+			t.Errorf("unexpected extracted subtree: %#v", v)
+		}
+	})
+
+	t.Run("absent section", func(t *testing.T) {
+		_, found, err := extractSectionYAML(exported, "tool")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found {
+			t.Error("expected found=false for an absent section")
+		}
+	})
+
+	t.Run("invalid YAML errors", func(t *testing.T) {
+		if _, _, err := extractSectionYAML("a: [bad\n", "jenkins"); err == nil {
+			t.Error("expected an error for malformed YAML")
+		}
+	})
+}
+
 func TestCASCInSync(t *testing.T) {
 	exported := `
 jenkins:
