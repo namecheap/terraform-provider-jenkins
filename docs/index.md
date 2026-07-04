@@ -1,12 +1,23 @@
 ---
 page_title: "Provider: Jenkins"
 description: |-
-  The Jenkins provider is used to interact with the Jenkins API.
+  Manage Jenkins as code with Terraform or OpenTofu — jobs, pipelines, credentials, folders, views, agents, plugins, users, RBAC, and Configuration-as-Code (JCasC).
 ---
 
 # Jenkins Provider
 
-The Jenkins provider is used to interact with the Jenkins API. The provider needs to be configured with the proper credentials before it can be used.
+Manage your entire Jenkins controller as code. This provider covers the full delivery surface — jobs, pipelines (defined through typed resources, no hand-written XML), multibranch projects, folders, and views — alongside the complete credentials catalog, whose write-only secret arguments keep secret material out of Terraform state. It reaches beyond job definitions into controller administration: Configuration-as-Code (JCasC), plugin management, static agents and nodes, user accounts, and Role-Strategy RBAC. Everything is expressed declaratively, so a single `terraform apply` can stand up or reconcile a controller end to end. The provider targets both Terraform and OpenTofu (>= 1.11), the baseline required by its write-only attributes.
+
+## Battle-tested at scale
+
+This is a community provider (not supported by HashiCorp), but it is far from experimental. Namecheap has used it internally for many years to run its Jenkins CI entirely as code, and it continues to manage that estate today:
+
+- **50+** engineering teams
+- **100+** projects
+- **500+** services
+- up to **~4,000** builds per day
+
+Operating continuously at this size has exercised the full range of workflows the provider models — from folder and RBAC hierarchies to credentials and controller configuration — and hardened them against the edge cases that only show up in production.
 
 ## Requirements
 
@@ -27,6 +38,199 @@ provider "jenkins" {
   # retry_wait_min  = "1s"  # Minimum backoff between retries. Or JENKINS_RETRY_WAIT_MIN
   # retry_wait_max  = "30s" # Maximum backoff between retries. Or JENKINS_RETRY_WAIT_MAX
   # request_timeout = "30s" # Per-operation timeout including retries; unset means no timeout. Or JENKINS_REQUEST_TIMEOUT
+}
+```
+
+## Capabilities
+
+The provider manages the full lifecycle of Jenkins objects as code — from jobs and pipelines to credentials, plugins, agents, and controller-wide configuration — and can also read existing objects for reference or gradual adoption.
+
+### Jobs & Pipelines
+
+Define build jobs, pipelines, and the folders and views that organize them.
+
+| Resource | Manages |
+| --- | --- |
+| `jenkins_job` | A job defined from a config-XML template. |
+| `jenkins_pipeline_job` | A pipeline job whose definition is an inline Groovy script — no hand-written job XML. |
+| `jenkins_multibranch_pipeline` | A multibranch pipeline backed by a Git branch source; branches are auto-discovered and their `Jenkinsfile` run. |
+| `jenkins_folder` | A folder for nesting and organizing jobs (Cloudbees Folders plugin). |
+| `jenkins_view` | A view that filters and presents jobs on the dashboard. |
+
+### Credentials
+
+Manage every common credential type in the Jenkins credentials store, grouped into domains. All secret arguments offer a **write-only** variant (`<secret>_wo`, Terraform/OpenTofu >= 1.11) so secrets are sent during apply but never persisted to state or plan.
+
+| Resource | Manages |
+| --- | --- |
+| `jenkins_credential_username` | Username-and-password credential. |
+| `jenkins_credential_secret_text` | Secret text (token/API key) credential. |
+| `jenkins_credential_secret_file` | Secret file credential. |
+| `jenkins_credential_ssh` | SSH username-with-private-key credential. |
+| `jenkins_credential_certificate` | Certificate credential backed by an uploaded PKCS#12 keystore. |
+| `jenkins_credential_aws` | AWS access-key credential (AWS Credentials plugin). |
+| `jenkins_credential_azure_service_principal` | Azure Service Principal credential (Azure Credentials plugin). |
+| `jenkins_credential_github_app` | GitHub App credential (GitHub Branch Source plugin). |
+| `jenkins_credential_vault_approle` | HashiCorp Vault AppRole credential (Vault plugin). |
+| `jenkins_credential_domain` | A credentials domain that groups credentials within a store. |
+
+### Controller administration
+
+Configure the controller itself — its plugins, agents, users, authorization, and JCasC sections.
+
+| Resource | Manages |
+| --- | --- |
+| `jenkins_configuration_as_code` | One top-level Configuration-as-Code (JCasC) section, merged into the running config. |
+| `jenkins_plugin` | Idempotent plugin installation via the update center. |
+| `jenkins_node` | A permanent (static) agent node, launched as an inbound (JNLP) agent. |
+| `jenkins_user` | A user account in Jenkins' own (local) user database. |
+| `jenkins_role` | A role in the Role-Based Authorization Strategy, with authoritative user/group assignments. |
+
+### Data sources
+
+Read existing Jenkins objects to reference their attributes or adopt them incrementally.
+
+**Look up a single object:** `jenkins_job`, `jenkins_folder`, `jenkins_view`, `jenkins_node`, `jenkins_plugin`, and `jenkins_credential_*` (for `aws`, `azure_service_principal`, `certificate`, `secret_file`, `secret_text`, `ssh`, `username`, and `vault_approle`).
+
+**List objects for iteration:** `jenkins_jobs` (jobs in a folder), `jenkins_folders` (folders in a folder), `jenkins_nodes` (all agent nodes), and `jenkins_credentials` (credential IDs in a store domain).
+
+## Use cases
+
+The examples below are end-to-end and use only real resource and attribute names. They assume a configured `provider "jenkins"` block (see above).
+
+### Onboard a team
+
+Give a team its own workspace, a folder-scoped role in the Role-Based Authorization Strategy, and a shared credential — all created together. The `jenkins_role` `pattern` matches every job under the folder, and the credential uses the write-only `password_wo` argument so the secret never lands in Terraform state (bump `password_wo_version` to rotate).
+
+```terraform
+resource "jenkins_folder" "platform" {
+  name        = "platform-team"
+  description = "Workspace for the platform team"
+}
+
+# Item-scoped role: read/build/configure only within the team's folder.
+resource "jenkins_role" "platform_dev" {
+  type    = "item"
+  name    = "platform-developer"
+  pattern = "${jenkins_folder.platform.name}/.*"
+  permissions = [
+    "hudson.model.Item.Read",
+    "hudson.model.Item.Build",
+    "hudson.model.Item.Configure",
+    "hudson.model.Item.Cancel",
+  ]
+  assignments = ["alice", "bob", "platform-team-group"]
+}
+
+# Folder-scoped credential; password_wo is never persisted to state.
+resource "jenkins_credential_username" "deploy_bot" {
+  name                = "deploy-bot"
+  folder              = jenkins_folder.platform.id
+  username            = "deploy-bot"
+  password_wo         = var.deploy_bot_token # e.g. from a vault/ephemeral source
+  password_wo_version = "1"
+}
+```
+
+### Pipeline as code
+
+Author a Declarative pipeline directly in HCL with `jenkins_pipeline_job` — no hand-written `config.xml`. The job lives in the team folder and consumes the credential from the previous example via Jenkins' `credentials()` helper, so the reference forms an implicit dependency and the token is injected at build time.
+
+```terraform
+resource "jenkins_pipeline_job" "build" {
+  name        = "backend-build"
+  folder      = jenkins_folder.platform.id
+  description = "Managed by Terraform"
+  sandbox     = true
+
+  script = <<-EOT
+    pipeline {
+      agent { label 'linux' }
+      environment {
+        GH_TOKEN = credentials('${jenkins_credential_username.deploy_bot.name}')
+      }
+      stages {
+        stage('checkout') {
+          steps {
+            git url: 'https://github.com/example/backend.git', branch: 'main'
+          }
+        }
+        stage('build') {
+          steps {
+            sh 'make build'
+          }
+        }
+      }
+    }
+  EOT
+}
+```
+
+If your pipeline definition must be raw job XML, `jenkins_job` accepts a `template` (typically fed by `templatefile(...)`) instead.
+
+### Multibranch pipeline
+
+Point Jenkins at a Git repository and let it discover branches, running the `Jenkinsfile` (`script_path`) found in each. `credentials_id` references a credential by name for private repos.
+
+```terraform
+resource "jenkins_multibranch_pipeline" "service" {
+  name           = "my-service"
+  folder         = jenkins_folder.platform.id
+  description    = "Auto-discovers branches and PRs"
+  remote         = "https://github.com/example/my-service.git"
+  credentials_id = jenkins_credential_username.deploy_bot.name
+  script_path    = "ci/Jenkinsfile"
+}
+```
+
+### Controller as code (JCasC)
+
+Manage controller configuration through the `configuration-as-code` plugin. Each `jenkins_configuration_as_code` instance owns one top-level `section` and applies a `yaml` subtree (built with `yamlencode` for type safety). Applies are a merge, not a replace. Use JCasC `${VAR}` interpolation for secrets: the controller resolves them at apply time, so the resolved value is never stored in state or compared for drift.
+
+```terraform
+# System banner — a safe first step for JCasC adoption.
+resource "jenkins_configuration_as_code" "system_message" {
+  section = "jenkins"
+  yaml = yamlencode({
+    systemMessage = "Managed by Terraform — do not edit in the UI."
+  })
+}
+
+# Unclassified section wiring a Slack notifier; the token stays a ${VAR}
+# reference that Jenkins resolves from its own secret store at apply time.
+resource "jenkins_configuration_as_code" "slack" {
+  section = "unclassified"
+  yaml = yamlencode({
+    slackNotifier = {
+      teamDomain        = "example"
+      tokenCredentialId = "slack-token"
+      token             = "$${SLACK_TOKEN}" # JCasC interpolation, kept out of state
+    }
+  })
+}
+```
+
+### Static agents and plugins
+
+Declare a permanent (inbound/JNLP) agent and pin the plugins the controller depends on. Nodes are immutable — changing an attribute replaces the node. Plugin installs are idempotent; pin a `version` for reproducibility.
+
+```terraform
+resource "jenkins_node" "linux_agent" {
+  name          = "linux-agent-01"
+  num_executors = 2
+  remote_fs     = "/home/jenkins/agent"
+  labels        = "linux docker"
+  description   = "Managed by Terraform"
+}
+
+resource "jenkins_plugin" "git" {
+  name    = "git"
+  version = "5.2.0"
+}
+
+resource "jenkins_plugin" "role_strategy" {
+  name    = "role-strategy"
+  version = "743.v142ea_b_d5f1d3"
 }
 ```
 
