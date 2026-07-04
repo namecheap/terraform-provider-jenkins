@@ -25,6 +25,10 @@ import (
 // and the resolved secret must never influence drift or leak into state.
 var reSecretPlaceholder = regexp.MustCompile(`^\s*\$\{[^}]+\}\s*$`)
 
+// reCASCSection matches a valid top-level JCasC section key: a bare identifier
+// of letters, digits, underscores, or hyphens (e.g. "jenkins", "unclassified").
+var reCASCSection = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 // isSecretPlaceholder reports whether v is a scalar JCasC ${...} secret
 // expression.
 func isSecretPlaceholder(v interface{}) bool {
@@ -122,4 +126,43 @@ func cascInSync(declaredSectionYAML, exportedFullYAML, section string) (bool, er
 	}
 
 	return yamlSubset(declared, actual), nil
+}
+
+// wrapSection wraps a declared section subtree under its top-level section key,
+// producing the single-section YAML document POSTed to JCasC configure. For
+// example wrapSection("jenkins", "systemMessage: hi") yields
+// "jenkins:\n  systemMessage: hi\n".
+func wrapSection(section, declaredSectionYAML string) (string, error) {
+	subtree, err := parseYAML(declaredSectionYAML)
+	if err != nil {
+		return "", fmt.Errorf("parsing declared YAML: %w", err)
+	}
+	out, err := yaml.Marshal(map[string]interface{}{section: subtree})
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// extractSectionYAML returns the given top-level section's subtree from a full
+// exported JCasC document, marshaled back to YAML. found is false when the
+// section is absent from the export.
+func extractSectionYAML(exportedFullYAML, section string) (yamlDoc string, found bool, err error) {
+	exported, err := parseYAML(exportedFullYAML)
+	if err != nil {
+		return "", false, fmt.Errorf("parsing exported YAML: %w", err)
+	}
+	m, ok := exported.(map[string]interface{})
+	if !ok {
+		return "", false, fmt.Errorf("exported configuration is not a YAML mapping")
+	}
+	sub, ok := m[section]
+	if !ok {
+		return "", false, nil
+	}
+	out, err := yaml.Marshal(sub)
+	if err != nil {
+		return "", false, err
+	}
+	return string(out), true, nil
 }
