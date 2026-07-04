@@ -86,6 +86,13 @@ type frameworkClient interface {
 	CreateUser(ctx context.Context, username, password, fullName, email string) error
 	GetUser(ctx context.Context, username string, out interface{}) error
 	DeleteUser(ctx context.Context, username string) error
+
+	// Configuration-as-Code operations back the jenkins_configuration_as_code
+	// resource. ApplyCASC POSTs a raw YAML document to the JCasC configure
+	// endpoint; ExportCASC returns the controller's full current configuration
+	// as YAML. Both require the configuration-as-code plugin.
+	ApplyCASC(ctx context.Context, yamlDoc string) error
+	ExportCASC(ctx context.Context) (string, error)
 }
 
 // Ensure the concrete adapter satisfies the framework client surface.
@@ -700,6 +707,64 @@ func (j *jenkinsAdapter) DeleteUser(ctx context.Context, username string) error 
 		return fmt.Errorf("invalid response code %d deleting user %q", resp.StatusCode, username)
 	}
 	return nil
+}
+
+// cascBase is the REST base path of the Configuration-as-Code plugin.
+const cascBase = "/configuration-as-code"
+
+// ApplyCASC applies a raw YAML document to the controller via
+// POST /configuration-as-code/configure (requires ADMINISTER). JCasC returns
+// 200 with a plain-text confirmation on success, or 400 with a JSON error array
+// on a validation/apply failure, which is surfaced verbatim.
+//
+// It calls Requester.Do directly with a *string target because the configure
+// endpoint returns text/plain (success) or a JSON error array (failure), never
+// a decodable success object — so Requester.Post, which forces a JSON decode of
+// the body, cannot be used here. SetCrumb attaches the CSRF crumb.
+func (j *jenkinsAdapter) ApplyCASC(ctx context.Context, yamlDoc string) error {
+	r, ok := j.Requester.(*jenkins.Requester)
+	if !ok {
+		return fmt.Errorf("unexpected requester type %T", j.Requester)
+	}
+	ar := jenkins.NewAPIRequest(http.MethodPost, cascBase+"/configure", strings.NewReader(yamlDoc))
+	if err := r.SetCrumb(ctx, ar); err != nil {
+		return err
+	}
+	ar.SetHeader("Content-Type", "application/x-yaml")
+
+	var body string
+	resp, err := r.Do(ctx, ar, &body, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("JCasC apply failed (status %d): %s", resp.StatusCode, strings.TrimSpace(body))
+	}
+	return nil
+}
+
+// ExportCASC returns the controller's full current configuration as YAML via
+// POST /configuration-as-code/export (requires SYSTEM_READ). Like ApplyCASC it
+// reads the raw application/x-yaml body via a *string target.
+func (j *jenkinsAdapter) ExportCASC(ctx context.Context) (string, error) {
+	r, ok := j.Requester.(*jenkins.Requester)
+	if !ok {
+		return "", fmt.Errorf("unexpected requester type %T", j.Requester)
+	}
+	ar := jenkins.NewAPIRequest(http.MethodPost, cascBase+"/export", nil)
+	if err := r.SetCrumb(ctx, ar); err != nil {
+		return "", err
+	}
+
+	var body string
+	resp, err := r.Do(ctx, ar, &body, map[string]string{})
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("JCasC export failed (status %d): %s", resp.StatusCode, strings.TrimSpace(body))
+	}
+	return body, nil
 }
 
 // GetPlugin returns the installed plugin with the given short name, or an error if not found.

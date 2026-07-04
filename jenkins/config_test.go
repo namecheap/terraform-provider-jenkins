@@ -39,6 +39,22 @@ type mockJenkinsClient struct {
 	mockCreateUser        func(ctx context.Context, username, password, fullName, email string) error
 	mockGetUser           func(ctx context.Context, username string, out interface{}) error
 	mockDeleteUser        func(ctx context.Context, username string) error
+	mockApplyCASC         func(ctx context.Context, yamlDoc string) error
+	mockExportCASC        func(ctx context.Context) (string, error)
+}
+
+func (m *mockJenkinsClient) ApplyCASC(ctx context.Context, yamlDoc string) error {
+	if m.mockApplyCASC == nil {
+		return nil
+	}
+	return m.mockApplyCASC(ctx, yamlDoc)
+}
+
+func (m *mockJenkinsClient) ExportCASC(ctx context.Context) (string, error) {
+	if m.mockExportCASC == nil {
+		return "", nil
+	}
+	return m.mockExportCASC(ctx)
 }
 
 func (m *mockJenkinsClient) CreateUser(ctx context.Context, username, password, fullName, email string) error {
