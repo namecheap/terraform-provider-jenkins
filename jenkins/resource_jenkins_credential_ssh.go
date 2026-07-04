@@ -7,7 +7,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type credentialSSHResourceModel struct {
@@ -25,7 +24,7 @@ type credentialSSHResourceModel struct {
 }
 
 type credentialSSHResource struct {
-	*resourceHelper
+	*credentialCRUD[credentialSSHResourceModel]
 }
 
 // Ensure the implementation satisfies the desired interfaces.
@@ -35,7 +34,63 @@ var _ resource.ResourceWithConfigValidators = &credentialSSHResource{}
 
 func newCredentialSSHResource() resource.Resource {
 	return &credentialSSHResource{
-		resourceHelper: newResourceHelper(),
+		credentialCRUD: newCredentialCRUD(sshCredentialSpec()),
+	}
+}
+
+// sshCredentialSpec supplies the type-specific mapping for the shared credential
+// CRUD flow (see credential_crud.go).
+func sshCredentialSpec() credentialSpec[credentialSSHResourceModel] {
+	return credentialSpec[credentialSSHResourceModel]{
+		identity: func(m *credentialSSHResourceModel) (string, string, string) {
+			return m.Folder.ValueString(), m.Domain.ValueString(), m.Name.ValueString()
+		},
+		setID: func(m *credentialSSHResourceModel, id string) {
+			m.ID = types.StringValue(id)
+		},
+		secretFields: []credentialSecretField[credentialSSHResourceModel]{
+			{
+				// The private-key source is structural and must be present in every
+				// create/update payload, so it is always sent (its value may come
+				// from the write-only companion).
+				name:         "privatekey",
+				hasWriteOnly: true,
+				alwaysSend:   true,
+				plainValue:   func(m *credentialSSHResourceModel) types.String { return m.PrivateKey },
+				woVersion:    func(m *credentialSSHResourceModel) types.String { return m.PrivateKeyWoVersion },
+			},
+			{
+				// The passphrase has no write-only companion; it is sent on create
+				// and, on update, only when it changed.
+				name:       "passphrase",
+				plainValue: func(m *credentialSSHResourceModel) types.String { return m.Passphrase },
+			},
+		},
+		build: func(m *credentialSSHResourceModel, secrets map[string]string) interface{} {
+			cred := &jenkins.SSHCredentials{
+				ID:          m.Name.ValueString(),
+				Scope:       m.Scope.ValueString(),
+				Description: m.Description.ValueString(),
+				Username:    m.Username.ValueString(),
+				PrivateKeySource: &jenkins.PrivateKey{
+					Class: jenkins.KeySourceDirectEntryType,
+					Value: secrets["privatekey"],
+				},
+			}
+			if p, ok := secrets["passphrase"]; ok {
+				cred.Passphrase = p
+			}
+			return cred
+		},
+		newAPIValue: func() interface{} { return &jenkins.SSHCredentials{} },
+		fromAPI: func(api interface{}, m *credentialSSHResourceModel) {
+			// NOTE: the secrets are intentionally not read back — GetSingle returns
+			// placeholders. Only Create/Update send them.
+			cred := api.(*jenkins.SSHCredentials)
+			m.Scope = types.StringValue(cred.Scope)
+			m.Description = types.StringValue(cred.Description)
+			m.Username = types.StringValue(cred.Username)
+		},
 	}
 }
 
@@ -73,192 +128,4 @@ Manages a SSH credential within Jenkins. This SSH credential may then be referen
 // ConfigValidators enforces the plain/write-only secret constraints.
 func (r *credentialSSHResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
 	return writeOnlySecretConfigValidators("privatekey")
-}
-
-// Create is called when the provider must create a new resource. Config
-// and planned state values should be read from the
-// CreateRequest and new state values set on the CreateResponse.
-func (r *credentialSSHResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	tflog.Debug(ctx, "credentialSSHResource.Create")
-	var data credentialSSHResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManagerForFolder(ctx, data.Folder.ValueString(), &resp.Diagnostics)
-	if cm == nil {
-		return
-	}
-
-	privateKey := data.PrivateKey.ValueString()
-	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "privatekey_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
-		privateKey = privateKeyWo.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cred := jenkins.SSHCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Username:    data.Username.ValueString(),
-		PrivateKeySource: &jenkins.PrivateKey{
-			Class: jenkins.KeySourceDirectEntryType,
-			Value: privateKey,
-		},
-	}
-
-	passphrase := data.Passphrase.ValueString()
-	if len(passphrase) > 0 {
-		cred.Passphrase = passphrase
-	}
-
-	err := cm.Add(ctx, data.Domain.ValueString(), cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create Resource",
-			"An unexpected error occurred while creating the resource. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	// Convert from the API data model to the Terraform data model
-	// and set any unknown attribute values.
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-
-	// Save data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Read is called when the provider must read resource values in order
-// to update state. Planned state values should be read from the
-// ReadRequest and new state values set on the ReadResponse.
-func (r *credentialSSHResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	tflog.Debug(ctx, "credentialSSHResource.Read")
-	var data credentialSSHResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	cred := jenkins.SSHCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		if isNotFound(err) {
-			// Job does not exist
-			resp.State.RemoveResource(ctx)
-			return
-		}
-
-		resp.Diagnostics.AddError(
-			"Unable to Refresh Resource",
-			"An unexpected error occurred while parsing the resource read response. "+
-				"Please report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	data.ID = types.StringValue(generateCredentialID(data.Folder.ValueString(), cred.ID))
-	data.Scope = types.StringValue(cred.Scope)
-	data.Description = types.StringValue(cred.Description)
-	data.Username = types.StringValue(cred.Username)
-
-	// NOTE: We are NOT setting the secrets here, as the secrets returned by GetSingle are garbage
-	// Secret only applies to Create/Update operations if the "privatekey" or "passphrase" properties are non-empty
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Update is called to update the state of the resource. Config, planned
-// state, and prior state values should be read from the
-// UpdateRequest and new state values set on the UpdateResponse.
-func (r *credentialSSHResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	tflog.Debug(ctx, "credentialSSHResource.Update")
-	var data credentialSSHResourceModel
-	var state credentialSSHResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cm := r.credentialManager(data.Folder.ValueString())
-
-	// The private key is always re-sent on update (its source must be supplied).
-	// With a write-only key the value is read from config, where it is available
-	// on every apply; a plan/update is only triggered when privatekey_wo_version
-	// (or another attribute) changes.
-	privateKey := data.PrivateKey.ValueString()
-	if privateKeyWo := r.readWriteOnly(ctx, req.Config, "privatekey_wo", &resp.Diagnostics); !privateKeyWo.IsNull() {
-		privateKey = privateKeyWo.ValueString()
-	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	cred := jenkins.SSHCredentials{
-		ID:          data.Name.ValueString(),
-		Scope:       data.Scope.ValueString(),
-		Description: data.Description.ValueString(),
-		Username:    data.Username.ValueString(),
-		PrivateKeySource: &jenkins.PrivateKey{
-			Class: jenkins.KeySourceDirectEntryType,
-			Value: privateKey,
-		},
-	}
-
-	// Only send the passphrase if it changed; omitting it leaves the Jenkins-stored
-	// value untouched, which is correct when lifecycle.ignore_changes = [passphrase].
-	if !data.Passphrase.Equal(state.Passphrase) {
-		cred.Passphrase = data.Passphrase.ValueString()
-	}
-
-	err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Update Resource",
-			"An unexpected error occurred while attempting to update the resource. "+
-				"Please retry the operation or report this issue to the provider developers.\n\n"+
-				"Error: "+err.Error(),
-		)
-
-		return
-	}
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// Delete is called when the provider must delete the resource. Config
-// values may be read from the DeleteRequest.
-//
-// If execution completes without error, the framework will automatically
-// call DeleteResponse.State.RemoveResource(), so it can be omitted
-// from provider logic.
-func (r *credentialSSHResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data credentialSSHResourceModel
-
-	// Read Terraform prior state data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	r.deleteCredential(ctx, data.Folder.ValueString(), data.Domain.ValueString(), data.Name.ValueString(), &resp.Diagnostics)
 }
