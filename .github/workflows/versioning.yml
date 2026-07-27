@@ -1,0 +1,43 @@
+name: Versioning
+
+# Runs release-please after every successful CI run on main: it walks the
+# Conventional Commits since the last tag, computes the next SemVer bump
+# (fix: -> patch, feat: -> minor, feat!/BREAKING CHANGE -> major) and opens or
+# updates a long-lived Release PR. Merging that PR creates the vX.Y.Z tag,
+# which triggers release.yml (GoReleaser). See RELEASE.md for the full flow.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      # A dedicated GitHub App token instead of GITHUB_TOKEN: events authored
+      # by GITHUB_TOKEN do not trigger other workflows, so a token-authored
+      # Release PR would never run CI and its tag would never run release.yml.
+      # App-authored events do. Same app as terraform-provider-spaceship.
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SPS_RELEASE_CLIENT_ID }}
+          private-key: ${{ secrets.SPS_RELEASE_PRIVATE_KEY }}
+
+      - name: Release Please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ steps.generate-token.outputs.token }}
