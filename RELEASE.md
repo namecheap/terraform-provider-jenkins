@@ -123,6 +123,29 @@ Dependabot commit prefixes are deliberately split (see
 | `github-actions` | `ci(deps):` | no | CI-only, never touches the binary |
 | `gomod` (`/tools`), `terraform`/`docker` (`/integration`) | `chore(deps):` | no | Dev tooling and test fixtures only |
 
+### If a release doesn't appear (troubleshooting)
+
+`versioning.yml` only runs after a successful CI run on `main`, and
+release-please state is **cumulative** — every run re-scans all commits since
+the last tag, so a missed trigger delays a release rather than losing it.
+Known cases:
+
+- **CI failed or was flaky on a merge commit** (including the Release PR's
+  own merge commit): re-run the failed CI run — `workflow_run` fires again
+  when a re-run completes — or trigger versioning manually (Actions →
+  Versioning → Run workflow). A merged Release PR whose tag was never created
+  is reconciled the same way on the next successful run.
+- **The commit touched only files CI ignores** (`**.md`, `docs/**`, `LICENSE`
+  — see `paths-ignore` in `test.yml`): no CI run means no versioning run. The
+  commit is picked up by the next CI-triggering push (weekly Dependabot PRs
+  guarantee one within days) or a manual dispatch. Note the Release PR merge
+  itself always triggers CI — it touches `.release-please-manifest.json`,
+  which is not ignored.
+- **GoReleaser failed after the tag was created** (bad GPG key, upload
+  error): the GitHub Release exists without binaries. The Terraform Registry
+  will not ingest an artifact-less version, so nothing broken is served —
+  fix the cause and re-run the failed `release.yml` run for the tag.
+
 ### Manual / emergency release
 
 Prefer the normal flow. If release-please is unavailable or an out-of-band
