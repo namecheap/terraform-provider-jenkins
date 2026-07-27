@@ -1,6 +1,6 @@
 module github.com/namecheap/terraform-provider-jenkins
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/bndr/gojenkins v1.2.0
@@ -60,7 +60,7 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260615183401-62b3387ff324 // indirect
