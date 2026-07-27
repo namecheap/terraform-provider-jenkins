@@ -72,7 +72,11 @@ token-authored Release PR would never run CI and its tag would never trigger
 
 One-time setup:
 
-1. Install the release GitHub App on this repository (org admins manage it).
+1. Install the release GitHub App on this repository (org admins manage it),
+   granting it **Repository contents: Read & write** and **Pull requests:
+   Read & write** — these App-installation scopes (not the workflow's
+   `permissions:` block, which only governs the unused `GITHUB_TOKEN`) gate
+   release-please's branch push, Release PR, tag, and publish operations.
 2. Add the variable `APP_CLIENT_ID` (the App's client ID) and the secret
    `APP_PRIVATE_KEY` (the App's private key) — either at repository level
    under **Settings → Secrets and variables → Actions**, or org-level with
@@ -125,18 +129,25 @@ Prefer the normal flow. If release-please is unavailable or an out-of-band
 hotfix is needed:
 
 ```bash
+# 1. Bump the version in .release-please-manifest.json and update
+#    CHANGELOG.md via a PR, and MERGE IT BEFORE TAGGING — if the tag is
+#    pushed first, the next release-please run recomputes the same version
+#    from the stale manifest and fails on the already-existing tag.
+# 2. Re-sync so the tag includes the bump commit:
 git checkout main
 git pull origin main
-
-# 1. Bump the version in .release-please-manifest.json and update
-#    CHANGELOG.md, commit via a PR.
-# 2. Tag and push (replace X.Y.Z):
+# 3. Tag and push (replace X.Y.Z):
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
 `release.yml` runs on the pushed tag as usual, and the next release-please run
 reconciles its state with the updated manifest.
+
+One caveat: in the manual path GoReleaser is the release *creator*, and its
+changelog is disabled (release-please owns release notes in the normal flow),
+so the GitHub Release is published with an **empty body**. Edit the Release
+afterwards and paste the CHANGELOG entry in by hand.
 
 ### Verify the release
 
@@ -172,3 +183,4 @@ for release-please state).
 | New resources or non-breaking fields               | `feat:`                  | Minor (Y)   |
 | Bug fixes, shipped dependency bumps                | `fix:`                   | Patch (Z)   |
 | Docs, tests, CI, tooling                           | `docs:`/`test:`/`ci:`/`chore:` | none  |
+| Refactor / perf / revert / build (⚠ may change the binary but do **not** release — type binary-affecting changes as `fix:`/`feat:` instead) | `refactor:`/`perf:`/`revert:`/`build:` | none |

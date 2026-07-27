@@ -18,6 +18,13 @@ permissions:
   contents: write
   pull-requests: write
 
+# Two quick merges to main each complete CI and would run release-please
+# concurrently, racing on the release branch/tag. Serialize; never cancel a
+# running release job.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release-please:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}

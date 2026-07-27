@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 pulls full history and all tags — required by goreleaser
-      # to compute changelogs and identify the previous tag.
+      # to identify the previous tag (changelog is owned by release-please).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
