@@ -1,33 +1,59 @@
 version: 2
 updates:
+  # Action bumps are CI-only and never touch the shipped provider binary, so
+  # they use a NON-releasing Conventional Commit type (`ci`) and must not cut
+  # a release. `include: scope` yields `ci(deps): ...`.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     groups:
       gha:
         patterns: ["*"]
 
+  # Go module bumps change the SHIPPED provider binary, so they must land as
+  # a releasing Conventional Commit type. release-please maps `fix:` -> patch,
+  # which opens/refreshes the Release PR and actually ships the dependency.
+  # Dependabot's default `chore(deps):` is NON-releasing, so without this
+  # bumps would sit unreleased until an unrelated fix:/feat: swept them in.
+  # `include: scope` yields `fix(deps): ...`. See RELEASE.md.
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "fix"
+      include: "scope"
     groups:
       gomod:
         patterns: ["*"]
 
+  # /tools is dev tooling (lint, docs generation) — never shipped, so
+  # non-releasing `chore(deps):`.
   - package-ecosystem: "gomod"
     directory: "/tools"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     groups:
       tools:
         patterns: ["*"]
 
+  # Integration-test fixtures only — never shipped, non-releasing.
   - package-ecosystem: "terraform"
     directory: "/integration"
     schedule:
       interval: "monthly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     groups:
       integration:
         patterns: ["*"]
@@ -36,6 +62,9 @@ updates:
     directory: "/integration"
     schedule:
       interval: "monthly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     groups:
       docker:
         patterns: ["*"]

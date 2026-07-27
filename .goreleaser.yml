@@ -58,23 +58,7 @@ release:
   # If you want to manually examine the release before its live, uncomment this line:
   # draft: true
 changelog:
-  # Generate release notes from Conventional-Commit messages (PR titles are already
-  # enforced to Conventional Commits via .github/workflows/pr-title.yml, and PRs are
-  # squash-merged, so each commit on the release branch is a conventional message).
-  sort: asc
-  use: git
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "Merge pull request"
-      - "Merge branch"
-  groups:
-    - title: Features
-      regexp: '^.*?feat(\(.+\))??!?:.+$'
-      order: 0
-    - title: Bug fixes
-      regexp: '^.*?fix(\(.+\))??!?:.+$'
-      order: 1
-    - title: Others
-      order: 999
+  # release-please owns the changelog: it writes CHANGELOG.md and the GitHub
+  # Release notes when the Release PR is merged (see .github/workflows/
+  # versioning.yml and RELEASE.md). GoReleaser must not overwrite them.
+  disable: true
