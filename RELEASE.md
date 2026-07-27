@@ -65,18 +65,18 @@ is pushed.
 ### 4. Release automation credentials (GitHub App)
 
 `.github/workflows/versioning.yml` authenticates release-please with a
-dedicated GitHub App — the same app used by
-`namecheap/terraform-provider-spaceship` — instead of the default
-`GITHUB_TOKEN`. This is required: events authored by `GITHUB_TOKEN` do not
-trigger other workflows, so a token-authored Release PR would never run CI and
-its tag would never trigger `release.yml`.
+dedicated GitHub App instead of the default `GITHUB_TOKEN`. This is required:
+events authored by `GITHUB_TOKEN` do not trigger other workflows, so a
+token-authored Release PR would never run CI and its tag would never trigger
+`release.yml`.
 
 One-time setup:
 
 1. Install the release GitHub App on this repository (org admins manage it).
-2. Make the org-level variable `SPS_RELEASE_CLIENT_ID` and secret
-   `SPS_RELEASE_PRIVATE_KEY` visible to this repository (they already exist
-   for `terraform-provider-spaceship`).
+2. Add the variable `APP_CLIENT_ID` (the App's client ID) and the secret
+   `APP_PRIVATE_KEY` (the App's private key) — either at repository level
+   under **Settings → Secrets and variables → Actions**, or org-level with
+   visibility extended to this repository.
 
 ---
 
