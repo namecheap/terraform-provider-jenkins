@@ -1,10 +1,30 @@
-name: CodeQL (scheduled)
+name: CodeQL (advanced)
 
-# Runs a weekly deep scan on main. PR/push scans are handled by the CI workflow.
+# The org-enforced default setup ("Analyze (go)") is skipped entirely on
+# Dependabot pull requests: Dependabot-triggered runs get a read-only
+# GITHUB_TOKEN, which cannot upload code scanning results. Its status check is
+# then never reported, so a Dependabot PR with a required "Analyze (go)" check
+# can never merge. This repo-owned advanced setup owns the "CodeQL (go)" merge
+# gate instead: the pull_request event is always permitted to upload results,
+# so it reports on every PR, Dependabot's and forks' included.
 on:
+  # Do NOT add paths/paths-ignore filters here. This job is a required status
+  # check, and a path-filtered required check is never reported on PRs that
+  # touch only excluded files, which blocks them from merging permanently.
+  pull_request:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+
+# Cancel an in-progress PR run when a new commit is pushed to the same branch.
+# Main and scheduled runs are never cancelled, so every commit on main keeps
+# its own analysis for pull request alert diffing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   GIT_CONFIG_COUNT: '1'
@@ -13,7 +33,7 @@ env:
 
 jobs:
   analyze:
-    name: Analyze (go)
+    name: CodeQL (go)
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -40,7 +60,9 @@ jobs:
       - name: Build
         run: go build .
 
+      # Uploads under a category of its own so this analysis and the
+      # org default-setup analysis never overwrite each other.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
-          category: "/language:go"
+          category: "/language:go/config:advanced"
