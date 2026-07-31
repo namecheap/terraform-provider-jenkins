@@ -47,11 +47,10 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
 
-  # NOTE: per-PR CodeQL (Go) is provided by the org-enforced default-setup
-  # scan ("Analyze (go)", the required status check). A second advanced CodeQL
-  # job here uploaded to the same /language:go category, overwriting it for no
-  # benefit (GitHub advises against running default + advanced setup together).
-  # Extended security-and-quality queries still run weekly via codeql.yml.
+  # NOTE: CodeQL (Go) lives in codeql.yml, which owns the "CodeQL (go)"
+  # required status check. Don't add a CodeQL job here: this workflow is
+  # path-filtered, and a path-filtered required check is never reported on PRs
+  # that touch only excluded files, which blocks them from merging.
 
   unit:
     name: Unit Tests
