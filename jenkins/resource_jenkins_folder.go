@@ -25,7 +25,7 @@ const defaultFolderInheritanceStrategy = "org.jenkinsci.plugins.matrixauth.inher
 var folderSecurityObjectType = types.ObjectType{
 	AttrTypes: map[string]attr.Type{
 		"inheritance_strategy": types.StringType,
-		"permissions":          types.ListType{ElemType: types.StringType},
+		"permissions":          types.SetType{ElemType: types.StringType},
 	},
 }
 
@@ -41,7 +41,7 @@ type folderResourceModel struct {
 
 type folderSecurityBlockModel struct {
 	InheritanceStrategy types.String `tfsdk:"inheritance_strategy"`
-	Permissions         types.List   `tfsdk:"permissions"`
+	Permissions         types.Set    `tfsdk:"permissions"`
 }
 
 type folderResource struct {
@@ -124,7 +124,7 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 							Default:             stringdefault.StaticString(defaultFolderInheritanceStrategy),
 							MarkdownDescription: "The strategy for applying these permissions sets to existing inherited permissions.",
 						},
-						"permissions": schema.ListAttribute{
+						"permissions": schema.SetAttribute{
 							Required:            true,
 							ElementType:         types.StringType,
 							MarkdownDescription: "The Jenkins permissions sets that provide access to this folder.",
@@ -381,7 +381,7 @@ func securityToSet(ctx context.Context, sec *folderSecurity, diags *diag.Diagnos
 		return types.SetValueMust(folderSecurityObjectType, []attr.Value{})
 	}
 
-	permissions, d := types.ListValueFrom(ctx, types.StringType, sec.Permission)
+	permissions, d := types.SetValueFrom(ctx, types.StringType, sec.Permission)
 	diags.Append(d...)
 
 	set, d := types.SetValueFrom(ctx, folderSecurityObjectType, []folderSecurityBlockModel{
