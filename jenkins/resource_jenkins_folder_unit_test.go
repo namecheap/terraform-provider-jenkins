@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // TestSecurityRoundtrip exercises the securityToSet/securityFromModel pair that
@@ -18,6 +19,19 @@ func TestSecurityRoundtrip(t *testing.T) {
 		in   *folderSecurity
 	}{
 		{name: "nil", in: nil},
+		{
+			// Reproduces what encoding/xml actually produces when Jenkins persists
+			// an AuthorizationMatrixProperty with zero <permission> elements: a nil
+			// (not empty-but-non-nil) slice. securityToSet must still yield a
+			// non-null "permissions" Set, matching a "permissions = []" config —
+			// a null Set there causes Terraform's post-apply consistency check to
+			// fail with "does not correlate with any element in actual".
+			name: "nil-permissions",
+			in: &folderSecurity{
+				InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+				Permission:          nil,
+			},
+		},
 		{
 			name: "single-permission",
 			in: &folderSecurity{
@@ -44,6 +58,24 @@ func TestSecurityRoundtrip(t *testing.T) {
 			set := securityToSet(ctx, tt.in, &diags)
 			if diags.HasError() {
 				t.Fatalf("securityToSet: %v", diags)
+			}
+
+			if tt.in != nil {
+				// A Required attribute must never come back null: Terraform's
+				// post-apply consistency check treats a null Set and an empty
+				// (non-null) Set as non-correlating values, so a "permissions = []"
+				// config would fail apply if this ever regresses to null.
+				elems := set.Elements()
+				if len(elems) != 1 {
+					t.Fatalf("expected exactly 1 set element, got %d", len(elems))
+				}
+				obj, ok := elems[0].(types.Object)
+				if !ok {
+					t.Fatalf("expected set element to be types.Object, got %T", elems[0])
+				}
+				if perms := obj.Attributes()["permissions"]; perms.IsNull() {
+					t.Fatalf("permissions attribute is null, want non-null (possibly empty) Set")
+				}
 			}
 
 			got := securityFromModel(ctx, set, &diags)

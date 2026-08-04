@@ -381,7 +381,18 @@ func securityToSet(ctx context.Context, sec *folderSecurity, diags *diag.Diagnos
 		return types.SetValueMust(folderSecurityObjectType, []attr.Value{})
 	}
 
-	permissions, d := types.SetValueFrom(ctx, types.StringType, sec.Permission)
+	// sec.Permission may be a nil slice when Jenkins persisted zero <permission>
+	// elements (encoding/xml leaves it nil rather than an empty-but-non-nil
+	// slice). types.SetValueFrom would turn a nil slice into a *null* Set,
+	// which is a different value than the *empty* Set a "permissions = []"
+	// config produces — and Terraform's post-apply consistency check treats
+	// null and empty as non-correlating. Normalize to a non-nil empty slice so
+	// the round-trip always yields an empty (not null) Set.
+	perms := sec.Permission
+	if perms == nil {
+		perms = []string{}
+	}
+	permissions, d := types.SetValueFrom(ctx, types.StringType, perms)
 	diags.Append(d...)
 
 	set, d := types.SetValueFrom(ctx, folderSecurityObjectType, []folderSecurityBlockModel{
