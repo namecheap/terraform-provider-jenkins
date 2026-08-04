@@ -112,7 +112,7 @@ func TestCovG_FolderWithSecurity(t *testing.T) {
 
 	secObj := types.ObjectValueMust(folderSecurityObjectType.AttrTypes, map[string]attr.Value{
 		"inheritance_strategy": types.StringValue("org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"),
-		"permissions":          types.ListValueMust(types.StringType, []attr.Value{types.StringValue("hudson.model.Item.Read:alice")}),
+		"permissions":          types.SetValueMust(types.StringType, []attr.Value{types.StringValue("hudson.model.Item.Read:alice")}),
 	})
 	model := &folderResourceModel{
 		Name: types.StringValue("f"), Folder: types.StringNull(),
