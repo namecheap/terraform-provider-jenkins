@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.2...v1.2.3) (2026-08-04)
+
+
+### Bug Fixes
+
+* **folder:** preserve empty-permissions security block on read ([#190](https://github.com/namecheap/terraform-provider-jenkins/issues/190)) ([8757b5d](https://github.com/namecheap/terraform-provider-jenkins/commit/8757b5d2d5e637deab86ec8183fcbdfe61849096))
+
 ## [1.2.2](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.1...v1.2.2) (2026-08-04)
 
 
