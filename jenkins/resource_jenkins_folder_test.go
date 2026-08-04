@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -125,12 +126,31 @@ func TestAccJenkinsFolder_withSecurity(t *testing.T) {
 					resource.TestCheckTypeSetElemNestedAttrs("jenkins_folder.foo", "security.*", map[string]string{
 						"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
 						"permissions.#":        "1",
-						"permissions.0":        "hudson.model.Item.Discover:anonymous",
 					}),
+					testAccCheckJenkinsFolderHasPermission("jenkins_folder.foo", "hudson.model.Item.Discover:anonymous"),
 				),
 			},
 		},
 	})
+}
+
+// testAccCheckJenkinsFolderHasPermission asserts that one of the resource's
+// "security.*.permissions.*" attributes (a set nested inside a set, so the
+// exact flatmap keys are hash-based rather than index-based) equals want.
+func testAccCheckJenkinsFolderHasPermission(resourceName, want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", resourceName)
+		}
+
+		for k, v := range rs.Primary.Attributes {
+			if strings.Contains(k, "permissions.") && v == want {
+				return nil
+			}
+		}
+		return fmt.Errorf("no %q attribute matching %q found on %s; attributes: %v", "security.*.permissions.*", want, resourceName, rs.Primary.Attributes)
+	}
 }
 
 func testAccCheckJenkinsFolderDestroy(s *terraform.State) error {
