@@ -10,9 +10,9 @@ the CI mechanics.
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, unit, acceptance, integration and docs checks |
-| CodeQL (advanced) | `.github/workflows/codeql.yml` | PR, push to `main`, weekly cron | Static security analysis, owns the "CodeQL (go)" check |
+| CodeQL (advanced) | `.github/workflows/codeql.yml` | PR, push to `main`, weekly cron, manual | Static security analysis, provides the "CodeQL (go)" check (note: branch protection currently requires the org default-setup "Analyze (go)" check, not this one) |
 | PR Title Check | `.github/workflows/pr-title.yml` | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads) |
-| Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`) | release-please: opens/updates the Release PR; creates the tag when it merges |
+| Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
 | Release | `.github/workflows/release.yml` | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries |
 | Stale | `.github/workflows/stale.yml` | Daily cron | Labels inactive issues/PRs |
 
@@ -79,9 +79,12 @@ any of them failed or was cancelled ("skipped" is fine). It exists because:
 - a run whose jobs were **all** skipped needs at least one executed job for
   the run-level conclusion — which gates Versioning — to be a deterministic
   `success`;
-- branch protection can require just "CI OK" instead of enumerating every
-  job name (today it still lists the individual jobs; both work, since
-  skipped checks satisfy protection).
+- **"CI OK" must be a required status check** (it is, alongside the
+  individual job names). The individual checks alone cannot be relied on:
+  if the `changes` gate job itself *fails* (API flake, runner loss), every
+  test job is `skipped`, and skipped checks satisfy branch protection — a
+  failing "CI OK" is the only thing that blocks such a PR from merging
+  untested.
 
 ## How docs reach the Terraform Registry
 
@@ -118,9 +121,9 @@ repository's Actions consumption accordingly.
 
 - **Don't add `paths`/`paths-ignore` to `test.yml` or `codeql.yml` triggers**
   (see above; `codeql.yml` has the same required-check constraint).
-- **Keep `ci-ok` in `needs` sync**: a new job in `test.yml` must be added to
-  the `ci-ok` `needs:` list, or its failure won't block merges once branch
-  protection points at "CI OK".
+- **Keep `ci-ok` in `needs` sync**: every job added to `test.yml` must also
+  be added to the `ci-ok` `needs:` list. "CI OK" is a required status check
+  and only guards the jobs it watches.
 - **New "expensive" jobs should take the gate**: `needs: changes` +
   `if: needs.changes.outputs.code == 'true'`.
 - **The gate's ignore list must stay a subset of "files that can't affect
