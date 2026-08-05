@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.4](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.3...v1.2.4) (2026-08-05)
+
+
+### Bug Fixes
+
+* **folder:** normalize nil permissions slice to empty Set ([#192](https://github.com/namecheap/terraform-provider-jenkins/issues/192)) ([50a4ae5](https://github.com/namecheap/terraform-provider-jenkins/commit/50a4ae5d484ac546b202f0a45582858cc516fef9))
+
 ## [1.2.3](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.2...v1.2.3) (2026-08-04)
 
 
