@@ -33,6 +33,16 @@ func TestSecurityRoundtrip(t *testing.T) {
 			},
 		},
 		{
+			// Distinct from "nil-permissions" above: an empty-but-non-nil slice.
+			// Both must produce the same non-null empty Set, so this pins down
+			// that the fix isn't accidentally keyed off nil-ness specifically.
+			name: "empty-permissions",
+			in: &folderSecurity{
+				InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+				Permission:          []string{},
+			},
+		},
+		{
 			name: "single-permission",
 			in: &folderSecurity{
 				InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
@@ -108,5 +118,78 @@ func TestSecurityRoundtrip(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSecurityPermissionsOrderIndependent pins down the reason permissions is
+// a Set rather than a List: Jenkins re-groups permissions by permission type
+// when it persists config.xml, so the order read back after apply rarely
+// matches the order configured in HCL. If permissions were order-sensitive,
+// that reordering alone would make Terraform report "Provider produced
+// inconsistent result after apply" even though the same permissions are
+// granted.
+func TestSecurityPermissionsOrderIndependent(t *testing.T) {
+	ctx := context.Background()
+
+	configured := &folderSecurity{
+		InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+		Permission: []string{
+			"hudson.model.Item.Build:dev",
+			"hudson.model.Item.Read:authenticated",
+			"hudson.model.Item.Cancel:admin",
+		},
+	}
+	// Same permissions, reordered and regrouped the way Jenkins actually
+	// returns them (by permission type) after a save/reload round trip.
+	returnedByJenkins := &folderSecurity{
+		InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+		Permission: []string{
+			"hudson.model.Item.Cancel:admin",
+			"hudson.model.Item.Build:dev",
+			"hudson.model.Item.Read:authenticated",
+		},
+	}
+
+	var diags diag.Diagnostics
+	planned := securityToSet(ctx, configured, &diags)
+	actual := securityToSet(ctx, returnedByJenkins, &diags)
+	if diags.HasError() {
+		t.Fatalf("securityToSet: %v", diags)
+	}
+
+	if !planned.Equal(actual) {
+		t.Fatalf("planned and actual security sets should be equal regardless of permission order:\nplanned: %#v\nactual:  %#v", planned, actual)
+	}
+}
+
+// TestSecurityPermissionsDeduplicates documents that, because permissions is a
+// Set, duplicate entries collapse to one. If the config or the Jenkins
+// response ever contains the same permission twice, callers should not expect
+// a distinct duplicate to survive the round trip.
+func TestSecurityPermissionsDeduplicates(t *testing.T) {
+	ctx := context.Background()
+
+	sec := &folderSecurity{
+		InheritanceStrategy: folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+		Permission: []string{
+			"hudson.model.Item.Build:dev",
+			"hudson.model.Item.Build:dev",
+			"hudson.model.Item.Read:authenticated",
+		},
+	}
+
+	var diags diag.Diagnostics
+	set := securityToSet(ctx, sec, &diags)
+	if diags.HasError() {
+		t.Fatalf("securityToSet: %v", diags)
+	}
+
+	got := securityFromModel(ctx, set, &diags)
+	if diags.HasError() {
+		t.Fatalf("securityFromModel: %v", diags)
+	}
+
+	if len(got.Permission) != 2 {
+		t.Fatalf("expected duplicate permission to collapse to 2 entries, got %d: %v", len(got.Permission), got.Permission)
 	}
 }
