@@ -204,5 +204,6 @@ for release-please state).
 | Breaking resource/attribute changes                | `feat!:` / `fix!:`       | Major (X)   |
 | New resources or non-breaking fields               | `feat:`                  | Minor (Y)   |
 | Bug fixes, shipped dependency bumps                | `fix:`                   | Patch (Z)   |
-| Docs, tests, CI, tooling                           | `docs:`/`test:`/`ci:`/`chore:` | none  |
+| Registry-published docs corrections (`docs/`, `templates/`) | `fix(docs):`    | Patch (Z)   |
+| Repo-internal docs, tests, CI, tooling             | `docs:`/`test:`/`ci:`/`chore:` | none  |
 | Refactor / perf / revert / build (⚠ may change the binary but do **not** release — type binary-affecting changes as `fix:`/`feat:` instead) | `refactor:`/`perf:`/`revert:`/`build:` | none |
