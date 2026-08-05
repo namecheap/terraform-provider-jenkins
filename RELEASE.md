@@ -135,11 +135,11 @@ Known cases:
   when a re-run completes — or trigger versioning manually (Actions →
   Versioning → Run workflow). A merged Release PR whose tag was never created
   is reconciled the same way on the next successful run.
-- **The commit touched only docs/markdown/release files**: CI still runs —
-  the `changes` gate in `test.yml` skips the test jobs, but the always-run
-  `CI OK` job completes the run successfully, so versioning fires as usual
-  (see [CI.md](CI.md)). If versioning didn't run, look for an actual CI
-  failure rather than a missing trigger.
+- **The commit touched only root-level markdown / LICENSE / the manifest**:
+  CI still runs — the `changes` gate in `test.yml` skips the test jobs, but
+  the always-run `CI OK` job completes the run successfully, so versioning
+  fires as usual (see [CI.md](CI.md)). If versioning didn't run, look for an
+  actual CI failure rather than a missing trigger.
 - **GoReleaser failed after the tag was created** (bad GPG key, upload
   error): the GitHub Release exists without binaries. The Terraform Registry
   will not ingest an artifact-less version, so nothing broken is served —
