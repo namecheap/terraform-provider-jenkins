@@ -381,16 +381,24 @@ func securityToSet(ctx context.Context, sec *folderSecurity, diags *diag.Diagnos
 		return types.SetValueMust(folderSecurityObjectType, []attr.Value{})
 	}
 
-	// sec.Permission may be a nil slice when Jenkins persisted zero <permission>
-	// elements (encoding/xml leaves it nil rather than an empty-but-non-nil
-	// slice). types.SetValueFrom would turn a nil slice into a *null* Set,
-	// which is a different value than the *empty* Set a "permissions = []"
-	// config produces — and Terraform's post-apply consistency check treats
-	// null and empty as non-correlating. Normalize to a non-nil empty slice so
-	// the round-trip always yields an empty (not null) Set.
-	perms := sec.Permission
-	if perms == nil {
-		perms = []string{}
+	// sec.Permission comes straight from Jenkins' config.xml, which the
+	// provider does not control: it may be a nil slice (encoding/xml leaves it
+	// nil when zero <permission> elements were persisted) or contain repeated
+	// entries (e.g. a hand-edited config.xml). Both break SetValueFrom: a nil
+	// slice becomes a *null* Set, which Terraform's post-apply consistency
+	// check treats as non-correlating with the *empty* Set a "permissions = []"
+	// config produces, and duplicate elements fail Set validation with a
+	// "Duplicate Set Element" error instead of collapsing. Rebuild the slice
+	// deduplicated and non-nil so the round trip always yields a valid,
+	// empty-not-null Set.
+	perms := make([]string, 0, len(sec.Permission))
+	seen := make(map[string]struct{}, len(sec.Permission))
+	for _, p := range sec.Permission {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		perms = append(perms, p)
 	}
 	permissions, d := types.SetValueFrom(ctx, types.StringType, perms)
 	diags.Append(d...)

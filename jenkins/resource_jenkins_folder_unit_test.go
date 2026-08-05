@@ -162,10 +162,11 @@ func TestSecurityPermissionsOrderIndependent(t *testing.T) {
 	}
 }
 
-// TestSecurityPermissionsDeduplicates documents that, because permissions is a
-// Set, duplicate entries collapse to one. If the config or the Jenkins
-// response ever contains the same permission twice, callers should not expect
-// a distinct duplicate to survive the round trip.
+// TestSecurityPermissionsDeduplicates documents that securityToSet collapses
+// duplicate permissions before building the Set. The framework's SetValueFrom
+// does not deduplicate — it rejects duplicates with a "Duplicate Set Element"
+// diagnostic — so if Jenkins' config.xml ever contains the same permission
+// twice (e.g. hand-edited), the provider must dedupe or every refresh fails.
 func TestSecurityPermissionsDeduplicates(t *testing.T) {
 	ctx := context.Background()
 
