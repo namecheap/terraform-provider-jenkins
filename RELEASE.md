@@ -135,12 +135,11 @@ Known cases:
   when a re-run completes — or trigger versioning manually (Actions →
   Versioning → Run workflow). A merged Release PR whose tag was never created
   is reconciled the same way on the next successful run.
-- **The commit touched only files CI ignores** (`**.md`, `docs/**`, `LICENSE`
-  — see `paths-ignore` in `test.yml`): no CI run means no versioning run. The
-  commit is picked up by the next CI-triggering push (weekly Dependabot PRs
-  guarantee one within days) or a manual dispatch. Note the Release PR merge
-  itself always triggers CI — it touches `.release-please-manifest.json`,
-  which is not ignored.
+- **The commit touched only root-level markdown / LICENSE / the manifest**:
+  CI still runs — the `changes` gate in `test.yml` skips the test jobs, but
+  the always-run `CI OK` job completes the run successfully, so versioning
+  fires as usual (see [CI.md](CI.md)). If versioning didn't run, look for an
+  actual CI failure rather than a missing trigger.
 - **GoReleaser failed after the tag was created** (bad GPG key, upload
   error): the GitHub Release exists without binaries. The Terraform Registry
   will not ingest an artifact-less version, so nothing broken is served —
@@ -205,5 +204,6 @@ for release-please state).
 | Breaking resource/attribute changes                | `feat!:` / `fix!:`       | Major (X)   |
 | New resources or non-breaking fields               | `feat:`                  | Minor (Y)   |
 | Bug fixes, shipped dependency bumps                | `fix:`                   | Patch (Z)   |
-| Docs, tests, CI, tooling                           | `docs:`/`test:`/`ci:`/`chore:` | none  |
+| Registry-published docs corrections (`docs/`, `templates/`) | `fix(docs):`    | Patch (Z)   |
+| Repo-internal docs, tests, CI, tooling             | `docs:`/`test:`/`ci:`/`chore:` | none  |
 | Refactor / perf / revert / build (⚠ may change the binary but do **not** release — type binary-affecting changes as `fix:`/`feat:` instead) | `refactor:`/`perf:`/`revert:`/`build:` | none |
