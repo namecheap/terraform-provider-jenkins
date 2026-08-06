@@ -73,8 +73,12 @@ What runs for typical changes:
 
 ### The CI OK job
 
-`ci-ok` runs `if: always()`, checks every other job's result, and fails if
-any of them failed or was cancelled ("skipped" is fine). It exists because:
+`ci-ok` runs on every non-cancelled run (`if: ${{ !cancelled() }}` — a
+superseded PR run cancelled by the concurrency group skips it instead of
+posting a red check on a dead SHA), checks every other job's result, and
+fails if any of them failed or was cancelled ("skipped" is fine). It also
+asserts that its own `needs:` list matches the workflow's job list, so a
+newly added job can't silently escape its watch. It exists because:
 
 - a run whose jobs were **all** skipped needs at least one executed job for
   the run-level conclusion — which gates Versioning — to be a deterministic
@@ -123,7 +127,9 @@ repository's Actions consumption accordingly.
   (see above; `codeql.yml` has the same required-check constraint).
 - **Keep `ci-ok` in `needs` sync**: every job added to `test.yml` must also
   be added to the `ci-ok` `needs:` list. "CI OK" is a required status check
-  and only guards the jobs it watches.
+  and only guards the jobs it watches. This is enforced — `ci-ok`'s first
+  step diffs its `needs:` against the workflow's job list and fails on
+  drift.
 - **New "expensive" jobs should take the gate**: `needs: changes` +
   `if: needs.changes.outputs.code == 'true'`.
 - **The gate's ignore list must stay a subset of "files that can't affect
