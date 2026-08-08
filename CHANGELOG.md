@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.5](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.4...v1.2.5) (2026-08-08)
+
+
+### Bug Fixes
+
+* **deps:** bump github.com/go-git/go-git/v5 from 5.19.1 to 5.19.2 ([#203](https://github.com/namecheap/terraform-provider-jenkins/issues/203)) ([41cac77](https://github.com/namecheap/terraform-provider-jenkins/commit/41cac772710724c0308ffb01466138c27a74a689))
+* **deps:** bump github.com/hashicorp/terraform-plugin-log from 0.10.0 to 0.11.0 in the gomod group ([#202](https://github.com/namecheap/terraform-provider-jenkins/issues/202)) ([491c0fd](https://github.com/namecheap/terraform-provider-jenkins/commit/491c0fdc41fddff75ec20ec908b5b2dfa2d76954))
+
 ## [1.2.4](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.3...v1.2.4) (2026-08-05)
 
 
