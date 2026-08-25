@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.6](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.5...v1.2.6) (2026-08-25)
+
+
+### Bug Fixes
+
+* bump Go to 1.26.6 to pick up stdlib security fixes flagged by govulncheck ([#208](https://github.com/namecheap/terraform-provider-jenkins/issues/208)) ([c9d8f75](https://github.com/namecheap/terraform-provider-jenkins/commit/c9d8f75e7083becbe001f3893eaa19bf423c4c92))
+* **deps:** update transitive Go dependencies to latest versions ([#209](https://github.com/namecheap/terraform-provider-jenkins/issues/209)) ([f4221d3](https://github.com/namecheap/terraform-provider-jenkins/commit/f4221d366ed5c8f0f020362683a5cdca0333ad36))
+
 ## [1.2.5](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.4...v1.2.5) (2026-08-08)
 
 
