@@ -62,6 +62,17 @@ jobs:
 
       # Uploads under a category of its own so this analysis and the
       # org default-setup analysis never overwrite each other.
+      #
+      # Do NOT change this value. Code scanning identifies a configuration
+      # by (tool, workflow job, category), so editing the category does not
+      # rename the existing configuration — it creates a new one and orphans
+      # the old. GitHub keeps expecting the orphan on refs/heads/main, never
+      # finds it on a PR head, and reports "N configurations not found"
+      # instead of the alert diff on every pull request. Recovering means
+      # deleting the orphan's analyses through
+      # DELETE /repos/{owner}/{repo}/code-scanning/analyses/{id}, newest
+      # first: only one is deletable at a time, in timestamp order across
+      # every analysis that shares the abandoned category.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
