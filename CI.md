@@ -10,7 +10,7 @@ the CI mechanics.
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, unit, acceptance, integration and docs checks |
-| CodeQL (advanced) | `.github/workflows/codeql.yml` | PR, push to `main`, weekly cron, manual | Static security analysis, provides the "CodeQL (go)" check (note: branch protection currently requires the org default-setup "Analyze (go)" check, not this one) |
+| CodeQL (advanced) | `.github/workflows/codeql.yml` | PR, push to `main`, weekly cron, manual | Static security analysis; provides the required "CodeQL (go)" check |
 | PR Title Check | `.github/workflows/pr-title.yml` | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads) |
 | Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
 | Release | `.github/workflows/release.yml` | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries |
@@ -130,6 +130,14 @@ repository's Actions consumption accordingly.
   and only guards the jobs it watches. This is enforced — `ci-ok`'s first
   step diffs its `needs:` against the workflow's job list and fails on
   drift.
+- **A required status check must always be produced by a job.** Branch
+  protection matches a check by its display name (a job's `name:`), and
+  nothing else in the repository references those strings — `needs:` uses job
+  *ids* — so renaming a job orphans the required check. GitHub then waits for
+  a check nobody reports and the pull request is unmergeable while looking
+  green. This is enforced — `test.yml`'s `required-checks` job diffs the
+  contexts protection requires against the job names the workflows produce
+  and fails on any orphan. Rename a job only together with branch protection.
 - **New "expensive" jobs should take the gate**: `needs: changes` +
   `if: needs.changes.outputs.code == 'true'`.
 - **The gate's ignore list must stay a subset of "files that can't affect
