@@ -33,6 +33,9 @@ env:
 
 jobs:
   analyze:
+    # This name is a required status check in branch protection on main, so
+    # renaming it here orphans that check and blocks every PR. Rename it only
+    # together with protection; CI's `required-checks` job fails on orphans.
     name: CodeQL (go)
     runs-on: ubuntu-latest
     permissions:
@@ -52,7 +55,7 @@ jobs:
           check-latest: true
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           languages: go
           queries: security-and-quality
@@ -74,6 +77,6 @@ jobs:
       # first: only one is deletable at a time, in timestamp order across
       # every analysis that shares the abandoned category.
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           category: "/language:go/config:advanced"
