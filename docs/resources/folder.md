@@ -26,6 +26,18 @@ resource "jenkins_folder" "example_child" {
     ]
   }
 }
+
+resource "jenkins_folder" "azure_ad" {
+  name = "entra-folder"
+
+  security {
+    authorization_strategy = "azure_ad"
+    permissions = [
+      "USER:hudson.model.Item.Create:9beb5590-e50a-4d84-bf1b-2aa01c537ba5",
+      "GROUP:hudson.model.View.Read:authenticated",
+    ]
+  }
+}
 ```
 
 ## Argument Reference
@@ -42,8 +54,9 @@ The following arguments are supported:
 
 ~> This block may need the [Matrix Authorization Strategy Plugin](https://plugins.jenkins.io/matrix-auth/) installed and enabled in the system's Global Security settings in order to function properly.
 
+* `authorization_strategy` - The folder authorization property to manage. Supported values are `matrix` (default) and `azure_ad`. `azure_ad` requires the [Microsoft Entra ID Plugin](https://plugins.jenkins.io/azure-ad/) and Entra ID Matrix-based security as the controller's authorization strategy.
 * `inheritance_strategy` - The strategy for applying these permissions sets to existing inherited permissions. Defaults to "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy".
-* `permissions` - A list of strings containing Jenkins permissions assigments to users and groups for the folder. For example:
+* `permissions` - A list of strings containing Jenkins permission assignments to users and groups for the folder. Entra ID permissions may use the `USER:` and `GROUP:` prefixes; use object IDs for Entra ID groups. For example:
 
 ```hcl
   permissions = [

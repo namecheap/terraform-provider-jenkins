@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+const (
+	folderAuthorizationStrategyMatrix  = "matrix"
+	folderAuthorizationStrategyAzureAD = "azure_ad"
+)
+
 type folder struct {
 	XMLName       xml.Name         `xml:"com.cloudbees.hudson.plugins.folder.Folder"`
 	Description   string           `xml:"description"`
@@ -16,13 +21,43 @@ type folder struct {
 }
 
 type folderProperties struct {
-	Security *folderSecurity  `xml:"com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty,omitempty"`
-	Other    []xmlRawProperty `xml:",any"`
+	Security        *folderSecurity  `xml:"com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty,omitempty"`
+	AzureADSecurity *folderSecurity  `xml:"com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty,omitempty"`
+	Other           []xmlRawProperty `xml:",any"`
 }
 
 type folderSecurity struct {
-	InheritanceStrategy folderPermissionInheritanceStrategy `xml:"inheritanceStrategy"`
-	Permission          []string                            `xml:"permission"`
+	AuthorizationStrategy string                              `xml:"-"`
+	InheritanceStrategy   folderPermissionInheritanceStrategy `xml:"inheritanceStrategy"`
+	Permission            []string                            `xml:"permission"`
+}
+
+func (p *folderProperties) security(strategy string) *folderSecurity {
+	if strategy == folderAuthorizationStrategyAzureAD {
+		return p.AzureADSecurity
+	}
+	return p.Security
+}
+
+// setSecurity replaces only the property type previously managed by Terraform.
+// Other authorization properties may have been configured outside this resource.
+func (p *folderProperties) setSecurity(previous, desired *folderSecurity) {
+	if previous != nil {
+		if previous.AuthorizationStrategy == folderAuthorizationStrategyAzureAD {
+			p.AzureADSecurity = nil
+		} else {
+			p.Security = nil
+		}
+	}
+
+	if desired == nil {
+		return
+	}
+	if desired.AuthorizationStrategy == folderAuthorizationStrategyAzureAD {
+		p.AzureADSecurity = desired
+	} else {
+		p.Security = desired
+	}
 }
 
 type folderPermissionInheritanceStrategy struct {
@@ -41,6 +76,12 @@ func parseFolder(config string) (*folder, error) {
 	doc := handleXml(config)
 	if err := xml.Unmarshal(doc, &ret); err != nil {
 		return ret, fmt.Errorf("could not parse job XML: %w", err)
+	}
+	if ret.Properties.Security != nil {
+		ret.Properties.Security.AuthorizationStrategy = folderAuthorizationStrategyMatrix
+	}
+	if ret.Properties.AzureADSecurity != nil {
+		ret.Properties.AzureADSecurity.AuthorizationStrategy = folderAuthorizationStrategyAzureAD
 	}
 
 	return ret, nil

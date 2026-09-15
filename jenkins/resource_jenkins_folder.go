@@ -24,8 +24,9 @@ const defaultFolderInheritanceStrategy = "org.jenkinsci.plugins.matrixauth.inher
 // must match the block's nested attributes so the set can be (de)serialized.
 var folderSecurityObjectType = types.ObjectType{
 	AttrTypes: map[string]attr.Type{
-		"inheritance_strategy": types.StringType,
-		"permissions":          types.SetType{ElemType: types.StringType},
+		"authorization_strategy": types.StringType,
+		"inheritance_strategy":   types.StringType,
+		"permissions":            types.SetType{ElemType: types.StringType},
 	},
 }
 
@@ -40,8 +41,9 @@ type folderResourceModel struct {
 }
 
 type folderSecurityBlockModel struct {
-	InheritanceStrategy types.String `tfsdk:"inheritance_strategy"`
-	Permissions         types.Set    `tfsdk:"permissions"`
+	AuthorizationStrategy types.String `tfsdk:"authorization_strategy"`
+	InheritanceStrategy   types.String `tfsdk:"inheritance_strategy"`
+	Permissions           types.Set    `tfsdk:"permissions"`
 }
 
 type folderResource struct {
@@ -118,6 +120,13 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				MarkdownDescription: "The Jenkins project-based security configuration.",
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
+						"authorization_strategy": schema.StringAttribute{
+							Optional:            true,
+							MarkdownDescription: "The folder authorization property to manage. Supported values are `matrix` and `azure_ad`.",
+							Validators: []validator.String{
+								stringvalidator.OneOf(folderAuthorizationStrategyMatrix, folderAuthorizationStrategyAzureAD),
+							},
+						},
 						"inheritance_strategy": schema.StringAttribute{
 							Optional:            true,
 							Computed:            true,
@@ -158,10 +167,11 @@ func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest,
 		Description: data.Description.ValueString(),
 		DisplayName: data.DisplayName.ValueString(),
 	}
-	f.Properties.Security = securityFromModel(ctx, data.Security, &resp.Diagnostics)
+	desiredSecurity := securityFromModel(ctx, data.Security, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	f.Properties.setSecurity(nil, desiredSecurity)
 
 	xml, err := f.Render()
 	if err != nil {
@@ -177,7 +187,7 @@ func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	if found := r.populate(ctx, &data, f.Properties.Security, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
+	if found := r.populate(ctx, &data, desiredSecurity, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
 		resp.Diagnostics.AddError("Unable to Read Created Resource", "the folder was created but could not be read back")
 	}
 	if resp.Diagnostics.HasError() {
@@ -216,8 +226,15 @@ func (r *folderResource) Read(ctx context.Context, req resource.ReadRequest, res
 func (r *folderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	tflog.Debug(ctx, "folderResource.Update")
 	var data folderResourceModel
+	var previousData folderResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &previousData)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	previousSecurity := securityFromModel(ctx, previousData.Security, &resp.Diagnostics)
+	desiredSecurity := securityFromModel(ctx, data.Security, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -244,10 +261,7 @@ func (r *folderResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	f.Description = data.Description.ValueString()
 	f.DisplayName = data.DisplayName.ValueString()
-	f.Properties.Security = securityFromModel(ctx, data.Security, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	f.Properties.setSecurity(previousSecurity, desiredSecurity)
 
 	xml, err := f.Render()
 	if err != nil {
@@ -260,7 +274,7 @@ func (r *folderResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	if found := r.populate(ctx, &data, f.Properties.Security, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
+	if found := r.populate(ctx, &data, desiredSecurity, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
 		resp.Diagnostics.AddError("Unable to Read Updated Resource", "the folder was updated but could not be read back")
 	}
 	if resp.Diagnostics.HasError() {
@@ -326,9 +340,18 @@ func (r *folderResource) populate(ctx context.Context, data *folderResourceModel
 		return false
 	}
 
-	actualSecurity := f.Properties.Security
+	strategy := ""
+	if wantSecurity != nil {
+		strategy = wantSecurity.AuthorizationStrategy
+	}
+	actualSecurity := f.Properties.security(strategy)
 	if actualSecurity == nil && wantSecurity != nil && len(wantSecurity.Permission) == 0 {
 		actualSecurity = wantSecurity
+	}
+	if actualSecurity != nil {
+		// Preserve whether the optional selector was omitted, so existing matrix
+		// configurations and state written by older provider versions stay stable.
+		actualSecurity.AuthorizationStrategy = strategy
 	}
 
 	data.ID = types.StringValue(job.Base)
@@ -366,10 +389,10 @@ func securityFromModel(ctx context.Context, set types.Set, diags *diag.Diagnosti
 	if strategy == "" {
 		strategy = defaultFolderInheritanceStrategy
 	}
-
 	return &folderSecurity{
-		InheritanceStrategy: folderPermissionInheritanceStrategy{Class: strategy},
-		Permission:          permissions,
+		AuthorizationStrategy: b.AuthorizationStrategy.ValueString(),
+		InheritanceStrategy:   folderPermissionInheritanceStrategy{Class: strategy},
+		Permission:            permissions,
 	}
 }
 
@@ -402,11 +425,16 @@ func securityToSet(ctx context.Context, sec *folderSecurity, diags *diag.Diagnos
 	}
 	permissions, d := types.SetValueFrom(ctx, types.StringType, perms)
 	diags.Append(d...)
+	authorizationStrategy := types.StringValue(sec.AuthorizationStrategy)
+	if sec.AuthorizationStrategy == "" {
+		authorizationStrategy = types.StringNull()
+	}
 
 	set, d := types.SetValueFrom(ctx, folderSecurityObjectType, []folderSecurityBlockModel{
 		{
-			InheritanceStrategy: types.StringValue(sec.InheritanceStrategy.Class),
-			Permissions:         permissions,
+			AuthorizationStrategy: authorizationStrategy,
+			InheritanceStrategy:   types.StringValue(sec.InheritanceStrategy.Class),
+			Permissions:           permissions,
 		},
 	})
 	diags.Append(d...)

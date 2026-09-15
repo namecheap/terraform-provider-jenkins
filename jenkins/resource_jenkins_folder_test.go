@@ -134,6 +134,39 @@ func TestAccJenkinsFolder_withSecurity(t *testing.T) {
 	})
 }
 
+func TestAccJenkinsFolder_withAzureADSecurity(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsFolderDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+				resource jenkins_folder foo {
+				  name = "tf-acc-test-%s"
+				  security {
+				    authorization_strategy = "azure_ad"
+				    permissions = [
+				      "USER:hudson.model.Item.Create:9beb5590-e50a-4d84-bf1b-2aa01c537ba5",
+				      "GROUP:hudson.model.View.Read:authenticated",
+				    ]
+				  }
+				}`, randString),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("jenkins_folder.foo", "security.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("jenkins_folder.foo", "security.*", map[string]string{
+						"authorization_strategy": "azure_ad",
+						"permissions.#":          "2",
+					}),
+					testAccCheckJenkinsFolderTemplateContains("jenkins_folder.foo", "<com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>"),
+				),
+			},
+		},
+	})
+}
+
 // testAccCheckJenkinsFolderHasPermission asserts that one of the resource's
 // "security.*.permissions.*" attributes (a set nested inside a set, so the
 // exact flatmap keys are hash-based rather than index-based) equals want.
@@ -150,6 +183,19 @@ func testAccCheckJenkinsFolderHasPermission(resourceName, want string) resource.
 			}
 		}
 		return fmt.Errorf("no %q attribute matching %q found on %s; attributes: %v", "security.*.permissions.*", want, resourceName, rs.Primary.Attributes)
+	}
+}
+
+func testAccCheckJenkinsFolderTemplateContains(resourceName, want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", resourceName)
+		}
+		if !strings.Contains(rs.Primary.Attributes["template"], want) {
+			return fmt.Errorf("template for %s does not contain %q", resourceName, want)
+		}
+		return nil
 	}
 }
 

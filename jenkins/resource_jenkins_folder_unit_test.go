@@ -52,11 +52,23 @@ func TestSecurityRoundtrip(t *testing.T) {
 		{
 			name: "multiple-permissions",
 			in: &folderSecurity{
-				InheritanceStrategy: folderPermissionInheritanceStrategy{Class: "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy"},
+				AuthorizationStrategy: folderAuthorizationStrategyMatrix,
+				InheritanceStrategy:   folderPermissionInheritanceStrategy{Class: "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy"},
 				Permission: []string{
 					"hudson.model.Item.Build:dev",
 					"hudson.model.Item.Read:authenticated",
 					"hudson.model.Item.Cancel:admin",
+				},
+			},
+		},
+		{
+			name: "azure-ad",
+			in: &folderSecurity{
+				AuthorizationStrategy: folderAuthorizationStrategyAzureAD,
+				InheritanceStrategy:   folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+				Permission: []string{
+					"USER:hudson.model.Item.Create:9beb5590-e50a-4d84-bf1b-2aa01c537ba5",
+					"GROUP:hudson.model.View.Read:authenticated",
 				},
 			},
 		},
@@ -105,6 +117,9 @@ func TestSecurityRoundtrip(t *testing.T) {
 
 			if got == nil {
 				t.Fatalf("expected non-nil security")
+			}
+			if got.AuthorizationStrategy != tt.in.AuthorizationStrategy {
+				t.Errorf("authorization_strategy = %q, want %q", got.AuthorizationStrategy, tt.in.AuthorizationStrategy)
 			}
 			if got.InheritanceStrategy.Class != tt.in.InheritanceStrategy.Class {
 				t.Errorf("inheritance_strategy = %q, want %q", got.InheritanceStrategy.Class, tt.in.InheritanceStrategy.Class)

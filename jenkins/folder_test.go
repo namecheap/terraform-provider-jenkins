@@ -91,6 +91,7 @@ func Test_parseFolder(t *testing.T) {
 				DisplayName: "Example Display Name",
 				Properties: folderProperties{
 					Security: &folderSecurity{
+						AuthorizationStrategy: folderAuthorizationStrategyMatrix,
 						InheritanceStrategy: folderPermissionInheritanceStrategy{
 							Class: "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy",
 						},
@@ -186,6 +187,36 @@ func Test_parseFolder(t *testing.T) {
 				t.Errorf("parseFolder() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_parseFolderAzureADSecurity(t *testing.T) {
+	f, err := parseFolder(`<com.cloudbees.hudson.plugins.folder.Folder>
+  <properties>
+    <com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
+      <permission>hudson.model.Item.Read:authenticated</permission>
+    </com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+    <com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
+      <permission>USER:hudson.model.Item.Create:9beb5590-e50a-4d84-bf1b-2aa01c537ba5</permission>
+      <permission>GROUP:hudson.model.View.Read:authenticated</permission>
+    </com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.Properties.security(folderAuthorizationStrategyAzureAD); got == nil {
+		t.Fatal("Azure AD security property was not parsed")
+	} else if got.AuthorizationStrategy != folderAuthorizationStrategyAzureAD {
+		t.Errorf("authorization strategy = %q, want %q", got.AuthorizationStrategy, folderAuthorizationStrategyAzureAD)
+	} else if len(got.Permission) != 2 {
+		t.Errorf("permissions len = %d, want 2", len(got.Permission))
+	}
+	if got := f.Properties.security(folderAuthorizationStrategyMatrix); got == nil {
+		t.Fatal("matrix security property was not parsed")
 	}
 }
 
@@ -357,6 +388,53 @@ func Test_folder_Render(t *testing.T) {
 				t.Errorf("folder.Render() = %v, want %v", strGot, want)
 			}
 		})
+	}
+}
+
+func Test_folder_RenderAzureADSecurity(t *testing.T) {
+	f := &folder{}
+	f.Properties.setSecurity(nil, &folderSecurity{
+		AuthorizationStrategy: folderAuthorizationStrategyAzureAD,
+		InheritanceStrategy: folderPermissionInheritanceStrategy{
+			Class: defaultFolderInheritanceStrategy,
+		},
+		Permission: []string{"GROUP:hudson.model.View.Read:authenticated"},
+	})
+
+	got, err := f.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "<com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>") {
+		t.Fatalf("Azure AD authorization property was not rendered:\n%s", got)
+	}
+	if strings.Contains(string(got), "<com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>") {
+		t.Fatalf("matrix authorization property was also rendered:\n%s", got)
+	}
+}
+
+func TestFolderPropertiesSetSecurity(t *testing.T) {
+	matrix := &folderSecurity{AuthorizationStrategy: folderAuthorizationStrategyMatrix}
+	azureAD := &folderSecurity{AuthorizationStrategy: folderAuthorizationStrategyAzureAD}
+
+	properties := folderProperties{Security: matrix, AzureADSecurity: azureAD}
+	properties.setSecurity(matrix, azureAD)
+	if properties.Security != nil {
+		t.Fatal("previously managed matrix property was not removed")
+	}
+	if properties.AzureADSecurity != azureAD {
+		t.Fatal("Azure AD property was not configured")
+	}
+
+	properties = folderProperties{AzureADSecurity: azureAD}
+	properties.setSecurity(nil, nil)
+	if properties.AzureADSecurity != azureAD {
+		t.Fatal("unmanaged Azure AD property was removed")
+	}
+
+	properties.setSecurity(azureAD, nil)
+	if properties.AzureADSecurity != nil {
+		t.Fatal("previously managed Azure AD property was not removed")
 	}
 }
 func TestHandleXml(t *testing.T) {

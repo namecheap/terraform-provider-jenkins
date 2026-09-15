@@ -33,6 +33,10 @@ run "jobs" {
     error_message = "${data.jenkins_folder.example.name} did not match description"
   }
   assert {
+    condition     = strcontains(data.jenkins_folder.azure_ad.template, "<com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>")
+    error_message = "${data.jenkins_folder.azure_ad.name} did not use the Azure AD authorization property"
+  }
+  assert {
     condition     = chomp(data.jenkins_folder.example_subfolder.template) == chomp(jenkins_folder.example_subfolder.template)
     error_message = "${data.jenkins_folder.example_subfolder.name} produced inconsistent XML"
   }

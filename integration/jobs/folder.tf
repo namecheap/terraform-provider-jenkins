@@ -17,6 +17,23 @@ data "jenkins_folder" "example" {
   name       = jenkins_folder.example.name
 }
 
+resource "jenkins_folder" "azure_ad" {
+  name = "azure-ad-folder"
+
+  security {
+    authorization_strategy = "azure_ad"
+    permissions = [
+      "USER:hudson.model.Item.Create:9beb5590-e50a-4d84-bf1b-2aa01c537ba5",
+      "GROUP:hudson.model.View.Read:authenticated",
+    ]
+  }
+}
+
+data "jenkins_folder" "azure_ad" {
+  depends_on = [jenkins_folder.azure_ad]
+  name       = jenkins_folder.azure_ad.name
+}
+
 resource "jenkins_folder" "example_subfolder" {
   name        = "subfolder"
   folder      = jenkins_folder.example.id
