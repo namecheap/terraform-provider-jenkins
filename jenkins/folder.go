@@ -28,20 +28,38 @@ type folderProperties struct {
 
 type folderSecurity struct {
 	AuthorizationStrategy string                              `xml:"-"`
+	Plugin                string                              `xml:"plugin,attr,omitempty"`
 	InheritanceStrategy   folderPermissionInheritanceStrategy `xml:"inheritanceStrategy"`
 	Permission            []string                            `xml:"permission"`
+	Extra                 []xmlRawProperty                    `xml:",any"`
 }
 
 func (p *folderProperties) security(strategy string) *folderSecurity {
-	if strategy == folderAuthorizationStrategyAzureAD {
+	switch strategy {
+	case folderAuthorizationStrategyAzureAD:
+		return p.AzureADSecurity
+	case folderAuthorizationStrategyMatrix:
+		return p.Security
+	default:
+		if p.Security != nil {
+			return p.Security
+		}
 		return p.AzureADSecurity
 	}
-	return p.Security
 }
 
 // setSecurity replaces only the property type previously managed by Terraform.
 // Other authorization properties may have been configured outside this resource.
 func (p *folderProperties) setSecurity(previous, desired *folderSecurity) {
+	var existing *folderSecurity
+	if desired != nil {
+		if desired.AuthorizationStrategy == folderAuthorizationStrategyAzureAD {
+			existing = p.AzureADSecurity
+		} else {
+			existing = p.Security
+		}
+	}
+
 	if previous != nil {
 		if previous.AuthorizationStrategy == folderAuthorizationStrategyAzureAD {
 			p.AzureADSecurity = nil
@@ -52,6 +70,12 @@ func (p *folderProperties) setSecurity(previous, desired *folderSecurity) {
 
 	if desired == nil {
 		return
+	}
+	if existing != nil {
+		next := *desired
+		next.Plugin = existing.Plugin
+		next.Extra = existing.Extra
+		desired = &next
 	}
 	if desired.AuthorizationStrategy == folderAuthorizationStrategyAzureAD {
 		p.AzureADSecurity = desired

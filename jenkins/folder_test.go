@@ -197,10 +197,11 @@ func Test_parseFolderAzureADSecurity(t *testing.T) {
       <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
       <permission>hudson.model.Item.Read:authenticated</permission>
     </com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
-    <com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>
+    <com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty plugin="azure-ad@580.v2f665882b_a_71">
       <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
       <permission>USER:hudson.model.Item.Create:9beb5590-e50a-4d84-bf1b-2aa01c537ba5</permission>
       <permission>GROUP:hudson.model.View.Read:authenticated</permission>
+      <entries><entry>keep-me</entry></entries>
     </com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>
   </properties>
 </com.cloudbees.hudson.plugins.folder.Folder>`)
@@ -214,9 +215,19 @@ func Test_parseFolderAzureADSecurity(t *testing.T) {
 		t.Errorf("authorization strategy = %q, want %q", got.AuthorizationStrategy, folderAuthorizationStrategyAzureAD)
 	} else if len(got.Permission) != 2 {
 		t.Errorf("permissions len = %d, want 2", len(got.Permission))
+	} else if got.Plugin != "azure-ad@580.v2f665882b_a_71" {
+		t.Errorf("plugin = %q, want Azure AD plugin version", got.Plugin)
+	} else if len(got.Extra) != 1 || got.Extra[0].XMLName.Local != "entries" || !strings.Contains(got.Extra[0].Raw, "keep-me") {
+		t.Errorf("extra children were not preserved: %#v", got.Extra)
 	}
 	if got := f.Properties.security(folderAuthorizationStrategyMatrix); got == nil {
 		t.Fatal("matrix security property was not parsed")
+	}
+	if got := f.Properties.security(""); got != f.Properties.Security {
+		t.Fatal("matrix security property was not preferred when no strategy was requested")
+	}
+	if got := (&folderProperties{AzureADSecurity: f.Properties.AzureADSecurity}).security(""); got == nil || got.AuthorizationStrategy != folderAuthorizationStrategyAzureAD {
+		t.Fatal("Azure AD security property was not detected without a requested strategy")
 	}
 }
 
@@ -415,21 +426,43 @@ func Test_folder_RenderAzureADSecurity(t *testing.T) {
 
 func TestFolderPropertiesSetSecurity(t *testing.T) {
 	matrix := &folderSecurity{AuthorizationStrategy: folderAuthorizationStrategyMatrix}
-	azureAD := &folderSecurity{AuthorizationStrategy: folderAuthorizationStrategyAzureAD}
+	azureAD := &folderSecurity{
+		AuthorizationStrategy: folderAuthorizationStrategyAzureAD,
+		Plugin:                "azure-ad@580.v2f665882b_a_71",
+		Extra: []xmlRawProperty{
+			{XMLName: xml.Name{Local: "entries"}, Raw: "<entry>keep-me</entry>"},
+		},
+	}
+	desiredAzureAD := &folderSecurity{
+		AuthorizationStrategy: folderAuthorizationStrategyAzureAD,
+		InheritanceStrategy:   folderPermissionInheritanceStrategy{Class: defaultFolderInheritanceStrategy},
+		Permission:            []string{"GROUP:hudson.model.View.Read:authenticated"},
+	}
 
 	properties := folderProperties{Security: matrix, AzureADSecurity: azureAD}
-	properties.setSecurity(matrix, azureAD)
+	properties.setSecurity(matrix, desiredAzureAD)
 	if properties.Security != nil {
 		t.Fatal("previously managed matrix property was not removed")
 	}
-	if properties.AzureADSecurity != azureAD {
-		t.Fatal("Azure AD property was not configured")
+	if properties.AzureADSecurity == nil || properties.AzureADSecurity.Plugin != azureAD.Plugin {
+		t.Fatal("Azure AD property metadata was not preserved")
+	}
+	rendered, err := (&folder{Properties: properties}).Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), `plugin="azure-ad@580.v2f665882b_a_71"`) || !strings.Contains(string(rendered), "<entries><entry>keep-me</entry></entries>") {
+		t.Fatalf("Azure AD property metadata was lost during render:\n%s", rendered)
 	}
 
 	properties = folderProperties{AzureADSecurity: azureAD}
 	properties.setSecurity(nil, nil)
-	if properties.AzureADSecurity != azureAD {
-		t.Fatal("unmanaged Azure AD property was removed")
+	rendered, err = (&folder{Properties: properties}).Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), `plugin="azure-ad@580.v2f665882b_a_71"`) || !strings.Contains(string(rendered), "<entries><entry>keep-me</entry></entries>") {
+		t.Fatalf("unmanaged Azure AD property was changed during render:\n%s", rendered)
 	}
 
 	properties.setSecurity(azureAD, nil)
@@ -437,6 +470,7 @@ func TestFolderPropertiesSetSecurity(t *testing.T) {
 		t.Fatal("previously managed Azure AD property was not removed")
 	}
 }
+
 func TestHandleXml(t *testing.T) {
 	tests := []struct {
 		name  string

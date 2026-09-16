@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -162,6 +163,37 @@ func TestAccJenkinsFolder_withAzureADSecurity(t *testing.T) {
 					}),
 					testAccCheckJenkinsFolderTemplateContains("jenkins_folder.foo", "<com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>"),
 				),
+			},
+			{
+				ResourceName:            "jenkins_folder.foo",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"template"},
+			},
+		},
+	})
+}
+
+func TestAccJenkinsFolder_rejectsMultipleSecurityBlocks(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "jenkins_folder" "foo" {
+  name = "tf-acc-test-multiple-security"
+
+  security {
+    permissions = ["hudson.model.Item.Read:authenticated"]
+  }
+
+  security {
+    authorization_strategy = "azure_ad"
+    permissions             = ["USER:hudson.model.Item.Read:reader"]
+  }
+}`,
+				ExpectError: regexp.MustCompile(`at most 1`),
 			},
 		},
 	})

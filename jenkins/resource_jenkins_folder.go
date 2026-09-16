@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -118,11 +119,14 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		Blocks: map[string]schema.Block{
 			"security": schema.SetNestedBlock{
 				MarkdownDescription: "The Jenkins project-based security configuration.",
+				Validators: []validator.Set{
+					setvalidator.SizeAtMost(1),
+				},
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"authorization_strategy": schema.StringAttribute{
 							Optional:            true,
-							MarkdownDescription: "The folder authorization property to manage. Supported values are `matrix` and `azure_ad`.",
+							MarkdownDescription: "The folder authorization property to manage. Supported values are `matrix` (the default when omitted) and `azure_ad`.",
 							Validators: []validator.String{
 								stringvalidator.OneOf(folderAuthorizationStrategyMatrix, folderAuthorizationStrategyAzureAD),
 							},
@@ -345,10 +349,18 @@ func (r *folderResource) populate(ctx context.Context, data *folderResourceModel
 		strategy = wantSecurity.AuthorizationStrategy
 	}
 	actualSecurity := f.Properties.security(strategy)
-	if actualSecurity == nil && wantSecurity != nil && len(wantSecurity.Permission) == 0 {
-		actualSecurity = wantSecurity
+	if wantSecurity != nil && strategy == folderAuthorizationStrategyAzureAD && actualSecurity == nil {
+		diags.AddError(
+			"Azure AD Authorization Property Not Persisted",
+			"Jenkins did not persist the Microsoft Entra ID folder authorization property. Ensure the azure-ad plugin is installed and Entra ID Matrix-based security is the active authorization strategy.",
+		)
+		return false
 	}
-	if actualSecurity != nil {
+	if actualSecurity == nil && wantSecurity != nil && len(wantSecurity.Permission) == 0 {
+		fallback := *wantSecurity
+		actualSecurity = &fallback
+	}
+	if actualSecurity != nil && wantSecurity != nil {
 		// Preserve whether the optional selector was omitted, so existing matrix
 		// configurations and state written by older provider versions stay stable.
 		actualSecurity.AuthorizationStrategy = strategy

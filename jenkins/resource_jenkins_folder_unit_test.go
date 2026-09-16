@@ -2,8 +2,10 @@ package jenkins
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -207,5 +209,50 @@ func TestSecurityPermissionsDeduplicates(t *testing.T) {
 
 	if len(got.Permission) != 2 {
 		t.Fatalf("expected duplicate permission to collapse to 2 entries, got %d: %v", len(got.Permission), got.Permission)
+	}
+}
+
+func TestFolderPopulateDetectsAzureADOnImport(t *testing.T) {
+	ctx := context.Background()
+	job := covKJob(t, "/job/f", `<com.cloudbees.hudson.plugins.folder.Folder>
+  <properties>
+    <com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy"/>
+      <permission>USER:hudson.model.Item.Read:reader</permission>
+    </com.microsoft.jenkins.azuread.AzureAdAuthorizationMatrixFolderProperty>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>`)
+	r := &folderResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+		mockGetJob: func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },
+	}}}
+	data := folderResourceModel{Name: types.StringValue("f"), Folder: types.StringNull()}
+	var diags diag.Diagnostics
+
+	if !r.populate(ctx, &data, nil, &diags) || diags.HasError() {
+		t.Fatalf("populate: %v", diags)
+	}
+	security := securityFromModel(ctx, data.Security, &diags)
+	if diags.HasError() {
+		t.Fatalf("securityFromModel: %v", diags)
+	}
+	if security == nil || security.AuthorizationStrategy != folderAuthorizationStrategyAzureAD {
+		t.Fatalf("authorization strategy = %#v, want %q", security, folderAuthorizationStrategyAzureAD)
+	}
+}
+
+func TestFolderPopulateReportsMissingAzureADProperty(t *testing.T) {
+	job := covKJob(t, "/job/f", `<com.cloudbees.hudson.plugins.folder.Folder><properties/></com.cloudbees.hudson.plugins.folder.Folder>`)
+	r := &folderResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+		mockGetJob: func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },
+	}}}
+	data := folderResourceModel{Name: types.StringValue("f"), Folder: types.StringNull()}
+	want := &folderSecurity{AuthorizationStrategy: folderAuthorizationStrategyAzureAD}
+	var diags diag.Diagnostics
+
+	if r.populate(context.Background(), &data, want, &diags) {
+		t.Fatal("populate succeeded after Jenkins dropped the Azure AD property")
+	}
+	if !diags.HasError() || !strings.Contains(diags.Errors()[0].Summary(), "Azure AD Authorization Property Not Persisted") {
+		t.Fatalf("missing Azure AD diagnostic: %v", diags)
 	}
 }
