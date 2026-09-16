@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.7](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.6...v1.2.7) (2026-09-09)
+
+
+### Bug Fixes
+
+* **deps:** bump google.golang.org/grpc from 1.83.1 to 1.83.2 ([#216](https://github.com/namecheap/terraform-provider-jenkins/issues/216)) ([dc81e78](https://github.com/namecheap/terraform-provider-jenkins/commit/dc81e78e541374091439d5929119dd38e303ec38))
+
 ## [1.2.6](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.5...v1.2.6) (2026-08-25)
 
 
