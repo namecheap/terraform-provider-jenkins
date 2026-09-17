@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -221,6 +223,77 @@ func TestAccJenkinsFolder_disappears(t *testing.T) {
 				},
 				Config: config,
 				Check:  resource.TestCheckResourceAttr("jenkins_folder.foo", "id", "/job/"+name),
+			},
+		},
+	})
+}
+
+// TestAccJenkinsView_disappears is the view counterpart of
+// TestAccJenkinsFolder_disappears, and covers the second half of the fix:
+// gojenkins' GetView ignores the poll status, so once the 404 body decodes it
+// would return an empty view and a nil error and the resource would report a
+// view that is not there — quieter than the refresh error it replaced, and
+// worse.
+func TestAccJenkinsView_disappears(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	name := "tf-acc-test-" + randString
+	config := fmt.Sprintf(`
+		resource jenkins_view foo {
+		  name = %q
+		}`, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsViewDestroy,
+		Steps: []resource.TestStep{
+			{Config: config},
+			{
+				PreConfig: func() {
+					if _, err := testAccClient.PostRequest(
+						context.Background(), "/view/"+url.PathEscape(name)+"/doDelete", nil, nil, nil,
+					); err != nil {
+						t.Fatalf("deleting view out of band: %v", err)
+					}
+				},
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("jenkins_view.foo", "id", name),
+			},
+		},
+	})
+}
+
+// TestAccJenkinsJob_disappears is the job counterpart. jenkins_job reads
+// through the same GetJob path as jenkins_folder.
+func TestAccJenkinsJob_disappears(t *testing.T) {
+	testDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(testDir, "test.xml"), testXML, 0o644); err != nil {
+		t.Fatalf("writing job template: %v", err)
+	}
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	name := "tf-acc-test-" + randString
+	config := fmt.Sprintf(`
+resource jenkins_job foo {
+	name = %q
+	template = templatefile("%s/test.xml", {
+		description = "Acceptance testing Jenkins provider"
+	})
+}`, name, testDir)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsJobDestroy,
+		Steps: []resource.TestStep{
+			{Config: config},
+			{
+				PreConfig: func() {
+					if _, err := testAccClient.DeleteJobInFolder(context.Background(), name); err != nil {
+						t.Fatalf("deleting job out of band: %v", err)
+					}
+				},
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("jenkins_job.foo", "id", "/job/"+name),
 			},
 		},
 	})
