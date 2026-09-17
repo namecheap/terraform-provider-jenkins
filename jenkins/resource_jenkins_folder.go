@@ -177,7 +177,7 @@ func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	if found := r.populate(ctx, &data, f.Properties.Security, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
+	if found := r.populate(ctx, &data, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
 		resp.Diagnostics.AddError("Unable to Read Created Resource", "the folder was created but could not be read back")
 	}
 	if resp.Diagnostics.HasError() {
@@ -196,12 +196,7 @@ func (r *folderResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	wantSecurity := securityFromModel(ctx, data.Security, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	found := r.populate(ctx, &data, wantSecurity, &resp.Diagnostics)
+	found := r.populate(ctx, &data, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -260,7 +255,7 @@ func (r *folderResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	if found := r.populate(ctx, &data, f.Properties.Security, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
+	if found := r.populate(ctx, &data, &resp.Diagnostics); !found && !resp.Diagnostics.HasError() {
 		resp.Diagnostics.AddError("Unable to Read Updated Resource", "the folder was updated but could not be read back")
 	}
 	if resp.Diagnostics.HasError() {
@@ -297,14 +292,12 @@ func (r *folderResource) ImportState(ctx context.Context, req resource.ImportSta
 // returns false (without an error diagnostic) when the folder no longer exists,
 // so Read can drop it from state.
 //
-// wantSecurity is the security value the caller just configured or rendered
-// (nil if none). Jenkins silently omits the AuthorizationMatrixProperty
-// element entirely when it would grant zero permissions, rather than
-// persisting an empty one. Since "permissions" is a Required attribute, its
-// value must round-trip exactly, so when the server reports no security at
-// all but wantSecurity asked for a strategy with zero permissions, populate
-// reports back wantSecurity instead of losing the block.
-func (r *folderResource) populate(ctx context.Context, data *folderResourceModel, wantSecurity *folderSecurity, diags *diag.Diagnostics) bool {
+// Everything it writes comes from the server's config.xml, never from the
+// configured or prior value: this is the refresh path, so reporting back a
+// desired value would make drift undetectable. A security block that Jenkins
+// does not report is therefore reported as absent, which is what lets
+// `terraform plan` see it and put it back.
+func (r *folderResource) populate(ctx context.Context, data *folderResourceModel, diags *diag.Diagnostics) bool {
 	job, err := r.client.GetJob(ctx, data.Name.ValueString(), extractFolders(data.Folder.ValueString())...)
 	if err != nil {
 		if isNotFound(err) {
@@ -326,16 +319,11 @@ func (r *folderResource) populate(ctx context.Context, data *folderResourceModel
 		return false
 	}
 
-	actualSecurity := f.Properties.Security
-	if actualSecurity == nil && wantSecurity != nil && len(wantSecurity.Permission) == 0 {
-		actualSecurity = wantSecurity
-	}
-
 	data.ID = types.StringValue(job.Base)
 	data.Template = types.StringValue(config)
 	data.DisplayName = types.StringValue(f.DisplayName)
 	data.Description = types.StringValue(f.Description)
-	data.Security = securityToSet(ctx, actualSecurity, diags)
+	data.Security = securityToSet(ctx, f.Properties.Security, diags)
 	return !diags.HasError()
 }
 
