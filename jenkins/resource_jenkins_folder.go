@@ -89,7 +89,7 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"folder": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The folder namespace that the folder will be added to as a subfolder.",
+				MarkdownDescription: "The folder namespace to create this folder in. Nested folders are separated with `/`, e.g. `parent/child`. Cannot be changed after creation, and every parent folder must already exist.",
 				PlanModifiers: []planmodifier.String{
 					folderPlanModifier{},
 				},
@@ -111,7 +111,7 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"template": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "The configuration file template, used to communicate with Jenkins.",
+				MarkdownDescription: "The Jenkins-compatible XML template describing the folder, as used to communicate with Jenkins. An existing folder's XML can be retrieved by appending `/config.xml` to its URL.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -132,12 +132,12 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 							Optional:            true,
 							Computed:            true,
 							Default:             stringdefault.StaticString(defaultFolderInheritanceStrategy),
-							MarkdownDescription: "The strategy for applying these permissions sets to existing inherited permissions.",
+							MarkdownDescription: "The strategy for applying these permission sets to permissions inherited from parent folders and the global configuration. Defaults to `org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy`.",
 						},
 						"permissions": schema.SetAttribute{
 							Required:            true,
 							ElementType:         types.StringType,
-							MarkdownDescription: "The Jenkins permissions sets that provide access to this folder.",
+							MarkdownDescription: "The Jenkins permission assignments granting access to this folder, each `<permission>:<user-or-group>`. Duplicates are collapsed and ordering is neither significant nor preserved, so elements cannot be referenced by index.",
 						},
 					},
 				},
