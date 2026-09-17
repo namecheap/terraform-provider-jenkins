@@ -169,3 +169,42 @@ func testAccCheckJenkinsFolderDestroy(s *terraform.State) error {
 
 	return nil
 }
+
+// TestAccJenkinsFolder_withEmptySecurityPermissions covers `permissions = []`
+// end to end. Jenkins persists an AuthorizationMatrixProperty with zero
+// <permission> children, which encoding/xml decodes into a nil slice —
+// reflected naively that becomes a *null* set and Terraform rejects the apply
+// with "planned set element ... does not correlate with any element in actual".
+// The second step re-applies the same config so a plan/refresh cycle has to
+// agree with the server too.
+func TestAccJenkinsFolder_withEmptySecurityPermissions(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	config := fmt.Sprintf(`
+				resource jenkins_folder foo {
+				  name        = "tf-acc-test-%s"
+				  description = "Terraform acceptance tests %s"
+				  security {
+				    inheritance_strategy = "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy"
+				    permissions          = []
+				  }
+				}`, randString, randString)
+
+	check := resource.ComposeTestCheckFunc(
+		resource.TestCheckResourceAttr("jenkins_folder.foo", "id", "/job/tf-acc-test-"+randString),
+		resource.TestCheckResourceAttr("jenkins_folder.foo", "security.#", "1"),
+		resource.TestCheckTypeSetElemNestedAttrs("jenkins_folder.foo", "security.*", map[string]string{
+			"inheritance_strategy": "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy",
+			"permissions.#":        "0",
+		}),
+	)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsFolderDestroy,
+		Steps: []resource.TestStep{
+			{Config: config, Check: check},
+			{Config: config, Check: check},
+		},
+	})
+}

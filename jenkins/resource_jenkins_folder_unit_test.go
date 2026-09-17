@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	jenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -193,4 +195,122 @@ func TestSecurityPermissionsDeduplicates(t *testing.T) {
 	if len(got.Permission) != 2 {
 		t.Fatalf("expected duplicate permission to collapse to 2 entries, got %d: %v", len(got.Permission), got.Permission)
 	}
+}
+
+// TestFolderPopulateReportsServerSecurity pins the refresh path to the server's
+// answer. populate() used to substitute the desired security value whenever the
+// server reported no AuthorizationMatrixProperty and the desired block had zero
+// permissions — and on Read the "desired" value is the prior state, so the
+// substitution re-justified itself on every refresh and the block could never
+// drift. Verified against jenkins/jenkins:2.579 + matrix-auth: a zero-permission
+// property IS persisted, so an absent property genuinely means absent.
+func TestFolderPopulateReportsServerSecurity(t *testing.T) {
+	ctx := context.Background()
+
+	const noSecurity = `<?xml version='1.1' encoding='UTF-8'?>
+<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>d</description>
+  <properties/>
+</com.cloudbees.hudson.plugins.folder.Folder>`
+
+	// What Jenkins actually writes for permissions = [] — the property is
+	// present, it just has no <permission> children.
+	const emptyPermissions = `<?xml version='1.1' encoding='UTF-8'?>
+<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>d</description>
+  <properties>
+    <com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+      <inheritanceStrategy class="org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy"/>
+    </com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>`
+
+	tests := []struct {
+		name            string
+		config          string
+		wantBlocks      int
+		wantStrategy    string
+		wantPermissions int
+	}{
+		{
+			// The regression: prior state carries a NonInheritingStrategy block,
+			// the server reports no property at all. Refresh must report the
+			// block as gone so `terraform plan` offers to put it back.
+			name:       "absent property drifts",
+			config:     noSecurity,
+			wantBlocks: 0,
+		},
+		{
+			name:            "zero-permission property round-trips",
+			config:          emptyPermissions,
+			wantBlocks:      1,
+			wantStrategy:    "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy",
+			wantPermissions: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := covcLiveJob(t, "/job/f", tt.config)
+			r := &folderResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockGetJob: func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },
+			}}}
+
+			// Prior state asserts a block the server may not have.
+			data := &folderResourceModel{
+				Name:   types.StringValue("f"),
+				Folder: types.StringNull(),
+				Security: types.SetValueMust(folderSecurityObjectType, []attr.Value{
+					folderSecurityBlockValue(t, "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy"),
+				}),
+			}
+
+			var diags diag.Diagnostics
+			if ok := r.populate(ctx, data, &diags); !ok || diags.HasError() {
+				t.Fatalf("populate failed: ok=%v diags=%v", ok, diags)
+			}
+
+			var blocks []folderSecurityBlockModel
+			if d := data.Security.ElementsAs(ctx, &blocks, false); d.HasError() {
+				t.Fatalf("reading security blocks: %v", d)
+			}
+			if len(blocks) != tt.wantBlocks {
+				t.Fatalf("security blocks = %d, want %d (%v)", len(blocks), tt.wantBlocks, data.Security)
+			}
+			if tt.wantBlocks == 0 {
+				return
+			}
+
+			if got := blocks[0].InheritanceStrategy.ValueString(); got != tt.wantStrategy {
+				t.Errorf("inheritance_strategy = %q, want %q", got, tt.wantStrategy)
+			}
+			if blocks[0].Permissions.IsNull() {
+				t.Error("permissions is null; a `permissions = []` config cannot correlate with a null set")
+			}
+			if got := len(blocks[0].Permissions.Elements()); got != tt.wantPermissions {
+				t.Errorf("permissions = %d elements, want %d", got, tt.wantPermissions)
+			}
+		})
+	}
+}
+
+// folderSecurityBlockValue builds one "security" block object matching
+// folderSecurityObjectType.
+func folderSecurityBlockValue(t *testing.T, strategy string, permissions ...string) attr.Value {
+	t.Helper()
+
+	perms, d := types.SetValueFrom(context.Background(), types.StringType, permissions)
+	if d.HasError() {
+		t.Fatalf("building permissions set: %v", d)
+	}
+
+	obj, d := types.ObjectValue(folderSecurityObjectType.AttrTypes, map[string]attr.Value{
+		"inheritance_strategy": types.StringValue(strategy),
+		"permissions":          perms,
+	})
+	if d.HasError() {
+		t.Fatalf("building security block object: %v", d)
+	}
+
+	return obj
 }
