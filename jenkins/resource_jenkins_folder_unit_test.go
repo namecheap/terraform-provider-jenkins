@@ -7,6 +7,10 @@ import (
 	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -313,4 +317,71 @@ func folderSecurityBlockValue(t *testing.T, strategy string, permissions ...stri
 	}
 
 	return obj
+}
+
+// TestFolderSecurityBlockSizeAtMostOne pins the plan-time rejection of a second
+// "security" block. config.xml carries a single AuthorizationMatrixProperty and
+// securityFromModel only ever reads blocks[0], so without this validator the
+// extra block is dropped silently: Jenkins receives half the permissions and
+// the apply then fails with "Provider produced inconsistent result after apply"
+// against an already-created folder.
+func TestFolderSecurityBlockSizeAtMostOne(t *testing.T) {
+	ctx := context.Background()
+
+	schemaResp := &fwresource.SchemaResponse{}
+	(&folderResource{}).Schema(ctx, fwresource.SchemaRequest{}, schemaResp)
+	if schemaResp.Diagnostics.HasError() {
+		t.Fatalf("Schema() produced diagnostics: %v", schemaResp.Diagnostics)
+	}
+
+	block, ok := schemaResp.Schema.Blocks["security"].(schema.SetNestedBlock)
+	if !ok {
+		t.Fatalf("security block is %T, want schema.SetNestedBlock", schemaResp.Schema.Blocks["security"])
+	}
+	if len(block.Validators) == 0 {
+		t.Fatal("security block has no validators; a second block would be dropped silently")
+	}
+
+	tests := []struct {
+		name      string
+		blocks    []attr.Value
+		wantError bool
+	}{
+		{name: "none", blocks: []attr.Value{}},
+		{
+			name:   "one",
+			blocks: []attr.Value{folderSecurityBlockValue(t, defaultFolderInheritanceStrategy, "hudson.model.Item.Read:devs")},
+		},
+		{
+			name: "two",
+			blocks: []attr.Value{
+				folderSecurityBlockValue(t, defaultFolderInheritanceStrategy, "hudson.model.Item.Read:devs"),
+				folderSecurityBlockValue(t, "org.jenkinsci.plugins.matrixauth.inheritance.NonInheritingStrategy", "hudson.model.Item.Build:ci"),
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, d := types.SetValue(folderSecurityObjectType, tt.blocks)
+			if d.HasError() {
+				t.Fatalf("building security set: %v", d)
+			}
+
+			var diags diag.Diagnostics
+			for _, v := range block.Validators {
+				resp := &validator.SetResponse{}
+				v.ValidateSet(ctx, validator.SetRequest{
+					Path:        path.Root("security"),
+					ConfigValue: value,
+				}, resp)
+				diags.Append(resp.Diagnostics...)
+			}
+
+			if got := diags.HasError(); got != tt.wantError {
+				t.Fatalf("validation error = %t, want %t (diagnostics: %v)", got, tt.wantError, diags)
+			}
+		})
+	}
 }
