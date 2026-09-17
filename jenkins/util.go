@@ -3,9 +3,11 @@ package jenkins
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html"
 	"io"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -181,11 +183,41 @@ func generateCredentialID(folder, name string) string {
 	return fmt.Sprintf("%s/%s", folder, name)
 }
 
-// isNotFound reports whether err represents an HTTP 404 response.
-// gojenkins formats credential errors as "invalid response code 404" and job
-// errors as the bare string "404"; strings.Contains handles both forms. This is
-// the single 404 matcher used by every resource path so the SDKv2 and framework
-// providers cannot silently diverge. It is nil-safe: a nil error is not a 404.
+// notFoundStatusRe matches the shapes a Jenkins 404 actually takes when it
+// reaches the provider as text. The status must open the message or follow a
+// wrapper's ": " separator, so that a "404" appearing incidentally elsewhere —
+// in a host:port, a path, a resource name or a response-body excerpt — is not
+// mistaken for one:
+//
+//	404                                gojenkins: errors.New(strconv.Itoa(status))
+//	404 Not Found                      an http.Response.Status string
+//	404 plugin "git" not installed     config.go: GetPlugin
+//	<wrapper>: 404 …                   any of the above wrapped with %w or %v
+//	invalid status code returned: 404  gojenkins
+//	invalid response code 404          gojenkins, credential paths
+var notFoundStatusRe = regexp.MustCompile(`(?:^|: )404\b|invalid response code 404$`)
+
+// isNotFound reports whether err represents an HTTP 404 response. This is the
+// single 404 matcher used by every resource path, and a false positive is
+// expensive: the caller drops the resource from state, so Terraform plans a
+// recreate of something that is still there.
+//
+// Errors raised by the provider's own transport carry the status code as a
+// field, so they are tested exactly. Everything else is matched against the
+// status-string shapes gojenkins produces, never by searching the whole
+// message: the enriched errors embed the request URL (host, port and path) and
+// a body excerpt, any of which may legitimately contain "404".
+//
+// It is nil-safe: a nil error is not a 404.
 func isNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "404")
+	if err == nil {
+		return false
+	}
+
+	var statusErr *statusError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == http.StatusNotFound
+	}
+
+	return notFoundStatusRe.MatchString(err.Error())
 }
