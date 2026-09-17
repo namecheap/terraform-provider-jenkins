@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.8](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.7...v1.2.8) (2026-09-17)
+
+
+### Bug Fixes
+
+* **folder:** reject a second security block at plan time ([#219](https://github.com/namecheap/terraform-provider-jenkins/issues/219)) ([71009e8](https://github.com/namecheap/terraform-provider-jenkins/commit/71009e807bd3931f1a75e08bc774395e242d8f25))
+* **folder:** report the server's security block on refresh ([#220](https://github.com/namecheap/terraform-provider-jenkins/issues/220)) ([e8498f0](https://github.com/namecheap/terraform-provider-jenkins/commit/e8498f076fbb21f5d1f876bebc5b287f3886158c))
+* let a Jenkins 404 reach the caller as a status, not a decode error ([#228](https://github.com/namecheap/terraform-provider-jenkins/issues/228)) ([a7484ff](https://github.com/namecheap/terraform-provider-jenkins/commit/a7484ffa3bceec54cb3eea6ae00770c95727504c))
+
 ## [1.2.7](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.6...v1.2.7) (2026-09-09)
 
 
