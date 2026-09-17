@@ -42,8 +42,10 @@ The following arguments are supported:
 
 ~> This block may need the [Matrix Authorization Strategy Plugin](https://plugins.jenkins.io/matrix-auth/) installed and enabled in the system's Global Security settings in order to function properly.
 
-* `inheritance_strategy` - The strategy for applying these permissions sets to existing inherited permissions. Defaults to "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy".
-* `permissions` - A list of strings containing Jenkins permissions assigments to users and groups for the folder. For example:
+~> `permissions` was a list before **v1.2.2** and is a set from v1.2.2 onward. Existing `permissions = [...]` configuration keeps working unchanged, but expressions that index into the attribute do not — see [Upgrading to v1.2.2](../guides/upgrading-to-1.2.2).
+
+* `inheritance_strategy` - (Optional) The strategy for applying these permissions sets to existing inherited permissions. Defaults to "org.jenkinsci.plugins.matrixauth.inheritance.InheritParentStrategy".
+* `permissions` - (Required) A set of strings containing Jenkins permission assignments to users and groups for the folder. Being a set, duplicate entries are collapsed and ordering is neither significant nor preserved, so individual elements cannot be referenced by index. For example:
 
 ```hcl
   permissions = [
