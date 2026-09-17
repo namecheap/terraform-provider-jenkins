@@ -268,6 +268,25 @@ func (t *retryRoutingTransport) RoundTrip(req *http.Request) (*http.Response, er
 	return t.direct.RoundTrip(req)
 }
 
+// statusError is the error enrichErrorHandler returns for a failed request. It
+// keeps the status code as a field so callers can test it with errors.As
+// instead of searching the message, which also carries the request URL and a
+// body excerpt and therefore cannot be pattern-matched safely.
+type statusError struct {
+	StatusCode int
+	Attempts   int
+	Method     string
+	URL        string
+	Body       string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf(
+		"jenkins API request failed after %d attempt(s): %s %s: status %d: %s",
+		e.Attempts, e.Method, e.URL, e.StatusCode, e.Body,
+	)
+}
+
 // enrichErrorHandler is the retryablehttp.ErrorHandler invoked once retries are
 // exhausted. gojenkins surfaces a failed request as a bare status string; this
 // rebuilds the error with the request method, URL, final status code, and a
@@ -288,10 +307,13 @@ func enrichErrorHandler(resp *http.Response, err error, numTries int) (*http.Res
 	if excerpt == "" {
 		excerpt = "(empty response body)"
 	}
-	return nil, fmt.Errorf(
-		"jenkins API request failed after %d attempt(s): %s %s: status %d: %s",
-		numTries, method, reqURL, resp.StatusCode, excerpt,
-	)
+	return nil, &statusError{
+		StatusCode: resp.StatusCode,
+		Attempts:   numTries,
+		Method:     method,
+		URL:        reqURL,
+		Body:       excerpt,
+	}
 }
 
 // retryLogHook emits a DEBUG line via terraform-plugin-log on each retry (the
