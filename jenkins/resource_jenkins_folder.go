@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -115,7 +116,16 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		},
 		Blocks: map[string]schema.Block{
 			"security": schema.SetNestedBlock{
-				MarkdownDescription: "The Jenkins project-based security configuration.",
+				MarkdownDescription: "The Jenkins project-based security configuration. At most one block may be specified.",
+				// config.xml holds a single AuthorizationMatrixProperty, and both
+				// securityFromModel and securityToSet are single-valued, so a
+				// second block would be written to neither Jenkins nor state —
+				// surfacing as "Provider produced inconsistent result after
+				// apply" once the folder had already been half-configured.
+				// Reject it while it is still a plan.
+				Validators: []validator.Set{
+					setvalidator.SizeAtMost(1),
+				},
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"inheritance_strategy": schema.StringAttribute{
