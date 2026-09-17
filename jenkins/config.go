@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -239,6 +240,49 @@ func (t *jenkinsPostRedirectTransport) RoundTrip(req *http.Request) (*http.Respo
 	return resp, nil
 }
 
+// jenkinsNotFoundTransport replaces the body of a 404 response with an empty
+// JSON object, keeping the 404 status.
+//
+// Jenkins answers a missing job, folder or view with an HTML error page.
+// gojenkins v1.2.0 decodes the body before it inspects the status, so the HTML
+// surfaces as `invalid character '<' looking for beginning of value` and the
+// 404 never reaches the caller. Every resource Read then treats a deleted
+// object as an unreadable one: it raises "Unable to Refresh Resource" instead
+// of dropping it from state, and because Delete fails the same way the entry
+// cannot be removed without `terraform state rm`.
+//
+// Swapping in a JSON body lets the decode succeed so gojenkins reports the
+// status it already has, which isNotFound recognises. The response body of an
+// error page carries no information the provider uses.
+type jenkinsNotFoundTransport struct {
+	base http.RoundTripper
+}
+
+func (t *jenkinsNotFoundTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	if resp.StatusCode == http.StatusNotFound && !isJSONResponse(resp) {
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(strings.NewReader("{}"))
+		resp.ContentLength = 2
+		resp.Header.Set("Content-Type", "application/json")
+	}
+	return resp, nil
+}
+
+// isJSONResponse reports whether resp declares a JSON body, which is left
+// untouched so a Jenkins endpoint that answers 404 in JSON still reaches the
+// caller intact.
+func isJSONResponse(resp *http.Response) bool {
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
 // idempotentMethods lists the HTTP methods that are safe to transparently retry:
 // repeating them has the same effect as a single successful call. POST and PATCH
 // are excluded because Jenkins drives its state-changing operations (createView,
@@ -364,6 +408,7 @@ func newHTTPClient(c *Config) (*http.Client, error) {
 		transport = &userAgentTransport{inner: transport, userAgent: c.UserAgent}
 	}
 	transport = &jenkinsPostRedirectTransport{base: transport}
+	transport = &jenkinsNotFoundTransport{base: transport}
 
 	retryMax := c.RetryMax
 	if retryMax < 0 {
@@ -388,6 +433,31 @@ func newHTTPClient(c *Config) (*http.Client, error) {
 		},
 		Timeout: c.RequestTimeout,
 	}, nil
+}
+
+// GetView looks up a view by name.
+//
+// gojenkins' own GetView discards the poll status and returns a non-nil view
+// whatever the server answered, so a missing view comes back as an empty one
+// with no error — the resource then reports a view that is not there instead of
+// dropping it from state. Its sibling GetJob and GetFolder both check the
+// status; this restores that behaviour for views, following the same
+// "404 <kind> %q not found" wording as GetUser and GetNodeConfig.
+func (j *jenkinsAdapter) GetView(ctx context.Context, name string) (*jenkins.View, error) {
+	view := &jenkins.View{Jenkins: j.Jenkins, Raw: new(jenkins.ViewResponse), Base: "/view/" + name}
+
+	status, err := view.Poll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, fmt.Errorf("404 view %q not found", name)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("unexpected status %d fetching view %q", status, name)
+	}
+
+	return view, nil
 }
 
 func (j *jenkinsAdapter) Credentials() *jenkins.CredentialsManager {
