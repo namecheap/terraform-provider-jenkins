@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"testing"
 
@@ -287,18 +288,56 @@ func TestIsNotFound(t *testing.T) {
 		err  error
 		want bool
 	}{
+		{"bare status", errors.New("404"), true},
 		{"404 prefix", errors.New("404 Not Found"), true},
 		{"404 suffix", errors.New("error: 404"), true},
-		{"404 in middle", errors.New("got 404 response"), true},
+		{"wrapped status line", fmt.Errorf("could not read job: %w", errors.New("404")), true},
+		{"gojenkins invalid status code", errors.New("invalid status code returned: 404"), true},
+		{"plugin not installed", errors.New(`404 plugin "git" not installed`), true},
+		{"wrapped plugin not installed", fmt.Errorf("could not read plugin: %w", errors.New(`404 plugin "git" not installed`)), true},
+		{"gojenkins invalid response code", errors.New("invalid response code 404"), true},
 		{"200 ok", errors.New("200 OK"), false},
 		{"500 error", errors.New("500 Internal Server Error"), false},
 		{"unrelated", errors.New("connection refused"), false},
 		{"nil error", nil, false},
+
+		// A 404 anywhere else in the message is not a 404 response. Each of
+		// these used to return true and make the caller drop a live resource
+		// from state, so Terraform planned a recreate of something still there.
+		{
+			"404 in the server port",
+			&statusError{
+				StatusCode: http.StatusInternalServerError,
+				Attempts:   1,
+				Method:     http.MethodGet,
+				URL:        "http://127.0.0.1:40412/credentials/store/system/domain/_/credential/c/config.xml/",
+				Body:       "(empty response body)",
+			},
+			false,
+		},
+		{"404 in the resource name", errors.New("job \"build-404\" could not be read: 500"), false},
+		{"404 in the response body", errors.New("proxy error: upstream returned 404 for /health: 502"), false},
+		{"404 in the middle", errors.New("got 404 response"), false},
+
+		// The status field, not the message, decides for transport errors.
+		{
+			"status error 404",
+			&statusError{
+				StatusCode: http.StatusNotFound,
+				Attempts:   1,
+				Method:     http.MethodGet,
+				URL:        "http://jenkins.example.com:8080/job/gone/config.xml",
+				Body:       "(empty response body)",
+			},
+			true,
+		},
 	}
 	for _, tt := range tests {
-		if got := isNotFound(tt.err); got != tt.want {
-			t.Errorf("isNotFound(%q) = %v, want %v", tt.err.Error(), got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNotFound(tt.err); got != tt.want {
+				t.Errorf("isNotFound(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 
