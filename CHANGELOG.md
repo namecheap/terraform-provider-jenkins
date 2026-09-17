@@ -44,6 +44,11 @@
 
 * **folder:** use a Set for security.permissions to avoid apply-time consistency errors ([#188](https://github.com/namecheap/terraform-provider-jenkins/issues/188)) ([bf64936](https://github.com/namecheap/terraform-provider-jenkins/commit/bf649365a75873c628bbd7b6824b2707fc9e2dec))
 
+
+### Notes
+
+* **folder:** `security.permissions` changed from a list to a set in this release. Configuration and existing state are unaffected, but expressions that index into the attribute (`...permissions[0]`) and policy checks keyed on the `security.0.permissions.0` flatmap path stop working. See the [Upgrading to v1.2.2](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/guides/upgrading-to-1.2.2) guide. This note was added retroactively ([#196](https://github.com/namecheap/terraform-provider-jenkins/issues/196)); a schema type change warrants a `!`/`BREAKING CHANGE:` footer so the release automation cuts a minor rather than a patch.
+
 ## [1.2.1](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.0...v1.2.1) (2026-07-27)
 
 
