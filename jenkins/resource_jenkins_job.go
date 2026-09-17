@@ -69,7 +69,7 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"folder": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The folder namespace that the job will be added to.",
+				MarkdownDescription: "The folder namespace to create this job in. Nested folders are separated with `/`, e.g. `parent/child`. Cannot be changed after creation, and every parent folder must already exist.",
 				PlanModifiers: []planmodifier.String{
 					folderPlanModifier{},
 				},
@@ -79,7 +79,7 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"template": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The configuration file template, used to communicate with Jenkins. Semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff.",
+				MarkdownDescription: "The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff.",
 				Validators: []validator.String{
 					jobXMLValidator{},
 				},
