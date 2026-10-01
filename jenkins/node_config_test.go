@@ -41,6 +41,9 @@ func TestNodeConfigParse(t *testing.T) {
 	if cfg.Label != "linux docker" {
 		t.Errorf("Label = %q, want 'linux docker'", cfg.Label)
 	}
+	if cfg.Mode != "NORMAL" {
+		t.Errorf("Mode = %q, want NORMAL", cfg.Mode)
+	}
 }
 
 func TestStripXMLDeclaration(t *testing.T) {

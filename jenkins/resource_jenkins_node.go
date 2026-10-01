@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -11,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
@@ -22,6 +24,7 @@ type nodeResourceModel struct {
 	Description  types.String `tfsdk:"description"`
 	RemoteFS     types.String `tfsdk:"remote_fs"`
 	Labels       types.String `tfsdk:"labels"`
+	Mode         types.String `tfsdk:"mode"`
 }
 
 // nodeConfig maps the subset of a node's config.xml that this resource manages.
@@ -33,6 +36,7 @@ type nodeConfig struct {
 	RemoteFS     string `xml:"remoteFS"`
 	NumExecutors int64  `xml:"numExecutors"`
 	Label        string `xml:"label"`
+	Mode         string `xml:"mode"`
 }
 
 type nodeResource struct {
@@ -110,6 +114,18 @@ the rest to describe the agent as code; connect the agent out-of-band with the i
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
+			"mode": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString("NORMAL"),
+				MarkdownDescription: "How Jenkins schedules builds on the node: `NORMAL` (the default) uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node. Changing this forces a new node to be created.",
+				Validators: []validator.String{
+					stringvalidator.OneOf("NORMAL", "EXCLUSIVE"),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 		},
 	}
 }
@@ -130,6 +146,7 @@ func (r *nodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 		data.Description.ValueString(),
 		data.RemoteFS.ValueString(),
 		data.Labels.ValueString(),
+		map[string]string{"method": "JNLPLauncher", "mode": data.Mode.ValueString()},
 	)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -171,6 +188,7 @@ func (r *nodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	data.Description = types.StringValue(cfg.Description)
 	data.RemoteFS = types.StringValue(cfg.RemoteFS)
 	data.Labels = types.StringValue(cfg.Label)
+	data.Mode = types.StringValue(cfg.Mode)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
