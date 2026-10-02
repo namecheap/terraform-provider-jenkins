@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.9](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.8...v1.2.9) (2026-10-02)
+
+
+### Bug Fixes
+
+* **folder:** keep the folderViews class attribute on create and update ([#236](https://github.com/namecheap/terraform-provider-jenkins/issues/236)) ([e5751dc](https://github.com/namecheap/terraform-provider-jenkins/commit/e5751dcd0e55ec06682c1949063c6b217cf4142f))
+
 ## [1.2.8](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.7...v1.2.8) (2026-09-17)
 
 
