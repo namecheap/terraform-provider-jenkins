@@ -3,8 +3,12 @@ package jenkins
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -207,4 +211,86 @@ func TestAccJenkinsFolder_withEmptySecurityPermissions(t *testing.T) {
 			{Config: config, Check: check},
 		},
 	})
+}
+
+// TestAccJenkinsFolder_folderViewsReadable guards #233. A <folderViews>
+// without its class attribute cannot be deserialized (AbstractFolderViewHolder
+// is abstract), and Jenkins lists the folder under Manage Old Data. The problem
+// only surfaces when Jenkins loads the item from disk, so each step reloads the
+// configuration before checking. Step 1 creates the folder, step 2 updates it,
+// which covers both render paths, and step 3 re-applies step 2 so a
+// plan/refresh cycle has to agree with the server too.
+func TestAccJenkinsFolder_folderViewsReadable(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	name := "tf-acc-test-" + randString
+	config := func(description string) string {
+		return fmt.Sprintf(`
+				resource jenkins_folder foo {
+				  name        = %q
+				  description = %q
+				}`, name, description)
+	}
+	check := resource.ComposeTestCheckFunc(
+		resource.TestCheckResourceAttrWith("jenkins_folder.foo", "template", func(v string) error {
+			if !strings.Contains(v, `<folderViews class="`) {
+				return fmt.Errorf("config.xml has no <folderViews class=...>:\n%s", v)
+			}
+			return nil
+		}),
+		testAccCheckJenkinsFolderReadable(name),
+	)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsFolderDestroy,
+		Steps: []resource.TestStep{
+			{Config: config("created"), Check: check},
+			{Config: config("updated"), Check: check},
+			{Config: config("updated"), Check: check},
+		},
+	})
+}
+
+// testAccCheckJenkinsFolderReadable reloads Jenkins from disk and fails if the
+// folder is listed as unreadable data under Manage Old Data.
+func testAccCheckJenkinsFolderReadable(name string) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		ctx := context.Background()
+		if _, err := testAccClient.PostRequest(ctx, "/reload", nil, nil, map[string]string{}); err != nil {
+			return fmt.Errorf("reload Jenkins: %w", err)
+		}
+
+		// The reload runs in the background and the page is served again once it
+		// is done. Fetched directly: gojenkins appends a trailing slash to GETs,
+		// and Jenkins answers /manage/ with a 404.
+		url := strings.TrimSuffix(os.Getenv("JENKINS_URL"), "/") + "/administrativeMonitor/OldData/manage"
+		var page string
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+			req.SetBasicAuth(os.Getenv("JENKINS_USERNAME"), os.Getenv("JENKINS_PASSWORD"))
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil {
+				body, readErr := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				page, err = string(body), readErr
+				if err == nil && resp.StatusCode == http.StatusOK && strings.Contains(page, "Manage Old Data") {
+					break
+				}
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("Manage Old Data did not come back after reload (err=%v)", err)
+			}
+			time.Sleep(2 * time.Second)
+		}
+
+		if strings.Contains(page, "<td>"+name+"</td>") && strings.Contains(page, "AbstractFolderViewHolder") {
+			return fmt.Errorf("folder %s is listed as unreadable data (AbstractFolderViewHolder)", name)
+		}
+		return nil
+	}
 }

@@ -6,13 +6,17 @@ import (
 	"strings"
 )
 
+// FolderViews and HealthMetrics are pointers so a folder built from scratch
+// omits both elements and Jenkins fills in its defaults. An empty
+// <folderViews/> has no class attribute, and Jenkins cannot instantiate the
+// abstract AbstractFolderViewHolder (#233).
 type folder struct {
 	XMLName       xml.Name         `xml:"com.cloudbees.hudson.plugins.folder.Folder"`
 	Description   string           `xml:"description"`
 	DisplayName   string           `xml:"displayName,omitempty"`
 	Properties    folderProperties `xml:"properties"`
-	FolderViews   xmlRawProperty   `xml:"folderViews"`
-	HealthMetrics xmlRawProperty   `xml:"healthMetrics"`
+	FolderViews   *xmlRawProperty  `xml:"folderViews,omitempty"`
+	HealthMetrics *xmlRawProperty  `xml:"healthMetrics,omitempty"`
 }
 
 type folderProperties struct {
@@ -29,10 +33,13 @@ type folderPermissionInheritanceStrategy struct {
 	Class string `xml:"class,attr"`
 }
 
+// xmlRawProperty carries an element we do not manage through a read-modify-
+// write unchanged. All attributes are kept, not just plugin: XStream needs
+// class to pick the concrete type of an abstract field such as folderViews.
 type xmlRawProperty struct {
 	XMLName xml.Name
-	Plugin  string `xml:"plugin,attr,omitempty"`
-	Raw     string `xml:",innerxml"`
+	Attrs   []xml.Attr `xml:",any,attr"`
+	Raw     string     `xml:",innerxml"`
 }
 
 func parseFolder(config string) (*folder, error) {

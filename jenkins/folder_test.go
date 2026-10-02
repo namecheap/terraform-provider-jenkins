@@ -104,7 +104,7 @@ func Test_parseFolder(t *testing.T) {
 					Other: []xmlRawProperty{
 						{
 							XMLName: xml.Name{Local: "org.jenkinsci.plugins.workflow.libs.FolderLibraries"},
-							Plugin:  "workflow-cps-global-lib@2.17",
+							Attrs:   []xml.Attr{{Name: xml.Name{Local: "plugin"}, Value: "workflow-cps-global-lib@2.17"}},
 							Raw: `
       <libraries>
         <org.jenkinsci.plugins.workflow.libs.LibraryConfiguration>
@@ -118,8 +118,9 @@ func Test_parseFolder(t *testing.T) {
 						},
 					},
 				},
-				FolderViews: xmlRawProperty{
+				FolderViews: &xmlRawProperty{
 					XMLName: xml.Name{Local: "folderViews"},
+					Attrs:   []xml.Attr{{Name: xml.Name{Local: "class"}, Value: "com.cloudbees.hudson.plugins.folder.views.DefaultFolderViewHolder"}},
 					Raw: `
     <views>
       <hudson.model.AllView>
@@ -155,7 +156,7 @@ func Test_parseFolder(t *testing.T) {
     <tabBar class="hudson.views.DefaultViewsTabBar"/>
   `,
 				},
-				HealthMetrics: xmlRawProperty{
+				HealthMetrics: &xmlRawProperty{
 					XMLName: xml.Name{Local: "healthMetrics"},
 					Raw: `
     <com.cloudbees.hudson.plugins.folder.health.WorstChildHealthMetric>
@@ -293,7 +294,7 @@ func Test_folder_Render(t *testing.T) {
 					Other: []xmlRawProperty{
 						{
 							XMLName: xml.Name{Local: "org.jenkinsci.plugins.workflow.libs.FolderLibraries"},
-							Plugin:  "workflow-cps-global-lib@2.17",
+							Attrs:   []xml.Attr{{Name: xml.Name{Local: "plugin"}, Value: "workflow-cps-global-lib@2.17"}},
 							Raw: `
       <libraries>
         <org.jenkinsci.plugins.workflow.libs.LibraryConfiguration>
@@ -328,8 +329,6 @@ func Test_folder_Render(t *testing.T) {
       </libraries>
     </org.jenkinsci.plugins.workflow.libs.FolderLibraries>
 	</properties>
-	<folderViews></folderViews>
-	<healthMetrics></healthMetrics>
 </com.cloudbees.hudson.plugins.folder.Folder>`),
 		},
 	}
@@ -359,6 +358,81 @@ func Test_folder_Render(t *testing.T) {
 		})
 	}
 }
+
+// Test_folder_Render_folderViewsClass guards #233. Jenkins cannot instantiate
+// the abstract AbstractFolderViewHolder, so a <folderViews> without class is
+// reported as unreadable data. A new folder must omit the element so Jenkins
+// supplies its default, and a parsed folder must render it back with every
+// attribute it was read with.
+func Test_folder_Render_folderViewsClass(t *testing.T) {
+	const holder = `class="com.cloudbees.hudson.plugins.folder.views.DefaultFolderViewHolder"`
+
+	tests := []struct {
+		name        string
+		config      string
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name:       "new folder omits folderViews and healthMetrics",
+			wantAbsent: []string{"<folderViews", "<healthMetrics"},
+		},
+		{
+			name: "update keeps folderViews class and plugin attributes",
+			config: `<?xml version='1.1' encoding='UTF-8'?>
+<com.cloudbees.hudson.plugins.folder.Folder plugin="cloudbees-folder@6.1106.v3a_d9a_6d2465e">
+  <description>d</description>
+  <properties>
+    <org.jenkinsci.plugins.workflow.libs.FolderLibraries plugin="workflow-cps-global-lib@2.17" class="example.Libraries"/>
+  </properties>
+  <folderViews ` + holder + `>
+    <tabBar class="hudson.views.DefaultViewsTabBar"/>
+  </folderViews>
+  <healthMetrics/>
+</com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantContain: []string{
+				`<folderViews ` + holder + `>`,
+				`<tabBar class="hudson.views.DefaultViewsTabBar"/>`,
+				`<healthMetrics></healthMetrics>`,
+				`<org.jenkinsci.plugins.workflow.libs.FolderLibraries plugin="workflow-cps-global-lib@2.17" class="example.Libraries">`,
+			},
+		},
+		{
+			name: "update of a config without folderViews does not add one",
+			config: `<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>d</description>
+  <properties/>
+</com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantAbsent: []string{"<folderViews", "<healthMetrics"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &folder{Description: "d"}
+			if tt.config != "" {
+				var err error
+				if f, err = parseFolder(tt.config); err != nil {
+					t.Fatalf("parseFolder() error = %v", err)
+				}
+			}
+			got, err := f.Render()
+			if err != nil {
+				t.Fatalf("folder.Render() error = %v", err)
+			}
+			for _, s := range tt.wantContain {
+				if !strings.Contains(string(got), s) {
+					t.Errorf("folder.Render() is missing %s\ngot:\n%s", s, got)
+				}
+			}
+			for _, s := range tt.wantAbsent {
+				if strings.Contains(string(got), s) {
+					t.Errorf("folder.Render() contains %s\ngot:\n%s", s, got)
+				}
+			}
+		})
+	}
+}
+
 func TestHandleXml(t *testing.T) {
 	tests := []struct {
 		name  string
