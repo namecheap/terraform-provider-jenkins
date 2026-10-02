@@ -42,6 +42,26 @@ type xmlRawProperty struct {
 	Raw     string     `xml:",innerxml"`
 }
 
+// UnmarshalXML drops namespace declarations from Attrs. encoding/xml cannot
+// re-marshal them: it emits the element's own xmlns as well, producing a
+// duplicate attribute that Jenkins rejects. The encoder declares any
+// namespace an element or attribute needs by itself.
+func (p *xmlRawProperty) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	type plain xmlRawProperty
+	if err := d.DecodeElement((*plain)(p), &start); err != nil {
+		return err
+	}
+	attrs := p.Attrs[:0]
+	for _, a := range p.Attrs {
+		if a.Name.Space == "xmlns" || (a.Name.Space == "" && a.Name.Local == "xmlns") {
+			continue
+		}
+		attrs = append(attrs, a)
+	}
+	p.Attrs = attrs
+	return nil
+}
+
 func parseFolder(config string) (*folder, error) {
 	ret := &folder{}
 

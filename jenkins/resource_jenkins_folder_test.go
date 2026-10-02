@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
+	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -257,40 +257,72 @@ func TestAccJenkinsFolder_folderViewsReadable(t *testing.T) {
 func testAccCheckJenkinsFolderReadable(name string) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		ctx := context.Background()
+		r, ok := testAccClient.Requester.(*jenkins.Requester)
+		if !ok {
+			return fmt.Errorf("unexpected requester type %T", testAccClient.Requester)
+		}
 		if _, err := testAccClient.PostRequest(ctx, "/reload", nil, nil, map[string]string{}); err != nil {
 			return fmt.Errorf("reload Jenkins: %w", err)
 		}
 
 		// The reload runs in the background and the page is served again once it
-		// is done. Fetched directly: gojenkins appends a trailing slash to GETs,
-		// and Jenkins answers /manage/ with a 404.
-		url := strings.TrimSuffix(os.Getenv("JENKINS_URL"), "/") + "/administrativeMonitor/OldData/manage"
+		// is done. Fetched with the adapter's own client rather than through
+		// Requester.Do, which appends a trailing slash that Jenkins answers with
+		// a 404. Each attempt has its own timeout so a stalled request cannot
+		// outlive the deadline.
+		endpoint := strings.TrimRight(r.Base, "/") + "/administrativeMonitor/OldData/manage"
 		var page string
+		var lastStatus int
+		var lastErr error
 		deadline := time.Now().Add(60 * time.Second)
 		for {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				return err
-			}
-			req.SetBasicAuth(os.Getenv("JENKINS_USERNAME"), os.Getenv("JENKINS_PASSWORD"))
-			resp, err := http.DefaultClient.Do(req)
-			if err == nil {
-				body, readErr := io.ReadAll(resp.Body)
-				_ = resp.Body.Close()
-				page, err = string(body), readErr
-				if err == nil && resp.StatusCode == http.StatusOK && strings.Contains(page, "Manage Old Data") {
-					break
-				}
+			page, lastStatus, lastErr = testAccGetPage(ctx, r, endpoint)
+			if lastErr == nil && lastStatus == http.StatusOK && strings.Contains(page, "Manage Old Data") {
+				break
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("Manage Old Data did not come back after reload (err=%v)", err)
+				return fmt.Errorf("Manage Old Data did not come back after reload (status=%d, err=%v)", lastStatus, lastErr)
 			}
 			time.Sleep(2 * time.Second)
 		}
 
-		if strings.Contains(page, "<td>"+name+"</td>") && strings.Contains(page, "AbstractFolderViewHolder") {
+		// Matched on the folder name and the error that follows it in the same
+		// row, without depending on the cell markup. If the page stops using
+		// table rows, the rest of the page is checked instead, which can only
+		// make the check stricter.
+		i := strings.Index(page, name)
+		if i < 0 {
+			return nil
+		}
+		row := page[i:]
+		if j := strings.Index(row, "</tr>"); j >= 0 {
+			row = row[:j]
+		}
+		if strings.Contains(row, "AbstractFolderViewHolder") {
 			return fmt.Errorf("folder %s is listed as unreadable data (AbstractFolderViewHolder)", name)
 		}
 		return nil
 	}
+}
+
+// testAccGetPage GETs endpoint with the requester's authenticated client and a
+// per-request timeout, and returns the body and status code.
+func testAccGetPage(ctx context.Context, r *jenkins.Requester, endpoint string) (string, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	if r.BasicAuth != nil {
+		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
+	}
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	return string(body), resp.StatusCode, err
 }

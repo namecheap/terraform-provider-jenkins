@@ -398,6 +398,19 @@ func Test_folder_Render_folderViewsClass(t *testing.T) {
 			},
 		},
 		{
+			// encoding/xml re-emits the element's own xmlns, so a captured
+			// xmlns attribute would appear twice, which Jenkins rejects.
+			name: "update does not duplicate namespace declarations",
+			config: `<com.cloudbees.hudson.plugins.folder.Folder>
+  <description>d</description>
+  <properties>
+    <example.Property xmlns="urn:d" xmlns:j="urn:j" j:k="v" plugin="p@1"/>
+  </properties>
+</com.cloudbees.hudson.plugins.folder.Folder>`,
+			wantContain: []string{`<example.Property xmlns="urn:d" xmlns:_="urn:j" _:k="v" plugin="p@1">`},
+			wantAbsent:  []string{`_xmlns`},
+		},
+		{
 			name: "update of a config without folderViews does not add one",
 			config: `<com.cloudbees.hudson.plugins.folder.Folder>
   <description>d</description>
