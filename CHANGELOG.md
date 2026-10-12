@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.10](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.9...v1.2.10) (2026-10-12)
+
+
+### Bug Fixes
+
+* **deps:** bump Go toolchain to 1.26.9 and golang.org/x/net to v0.60.0 ([#239](https://github.com/namecheap/terraform-provider-jenkins/issues/239)) ([ca0109b](https://github.com/namecheap/terraform-provider-jenkins/commit/ca0109b59516c48484e07d7e45da3139633c6942))
+
 ## [1.2.9](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.8...v1.2.9) (2026-10-02)
 
 
