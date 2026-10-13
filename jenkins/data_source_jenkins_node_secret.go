@@ -34,6 +34,9 @@ func (d *nodeSecretDataSource) Schema(_ context.Context, _ datasource.SchemaRequ
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Get the connection secret of an inbound (JNLP) agent node, as passed to `agent.jar -secret`. " +
 			"Requires the Agent/Connect permission on the node.\n\n" +
+			"The secret is read from `/computer/<name>/jenkins-agent.jnlp`. Jenkins has deprecated that endpoint and " +
+			"logs a WARNING on the controller every time it is fetched, so each plan or apply emits one such line per " +
+			"`jenkins_node_secret`. Jenkins has no supported replacement yet; this data source will switch to it once one ships.\n\n" +
 			"The secret is marked sensitive but is stored in plain text in the Terraform state; secure the state backend accordingly.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{

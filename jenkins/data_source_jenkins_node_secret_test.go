@@ -2,10 +2,12 @@ package jenkins
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -76,6 +78,18 @@ func TestGetNodeSecret(t *testing.T) {
 		}
 	})
 
+	t.Run("whitespace around the secret", func(t *testing.T) {
+		srv := covBServer(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, jnlpDocument("\n  "+fakeNodeSecret+"\n", "agent1"))
+		})
+		defer srv.Close()
+
+		got, err := covBClient(t, srv).GetNodeSecret(context.Background(), "agent1")
+		if err != nil || got != fakeNodeSecret {
+			t.Fatalf("GetNodeSecret = %q, %v", got, err)
+		}
+	})
+
 	t.Run("XML declaration", func(t *testing.T) {
 		srv := covBServer(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, "<?xml version='1.1' encoding='UTF-8'?>\n"+jnlpDocument(fakeNodeSecret, "agent1"))
@@ -100,8 +114,13 @@ func TestGetNodeSecret(t *testing.T) {
 		{"forbidden", "agent1", http.StatusForbidden, fakeNodeSecret, "Agent/Connect"},
 		{"not found", "agent1", http.StatusNotFound, "<html>" + fakeNodeSecret + "</html>", "not an inbound (JNLP) agent"},
 		{"server error", "agent1", http.StatusBadRequest, fakeNodeSecret, "unexpected status 400"},
-		{"HTML login page", "agent1", http.StatusOK, "<html><body>" + fakeNodeSecret + "</body></html>", "invalid JNLP document"},
+		// An UnmarshalError names element types only, so it is kept: it is what
+		// tells a user they got a login or proxy page instead of the descriptor.
+		{"HTML login page", "agent1", http.StatusOK, "<html><body>" + fakeNodeSecret + "</body></html>", "expected element type <jnlp> but have <html>"},
 		{"malformed XML", "agent1", http.StatusOK, "<jnlp><argument>" + fakeNodeSecret, "invalid JNLP document"},
+		// A SyntaxError quotes document text ("invalid character entity &x...;"),
+		// so it must be replaced by the fixed message.
+		{"syntax error quoting the body", "agent1", http.StatusOK, "<jnlp>&x" + fakeNodeSecret + ";</jnlp>", "invalid JNLP document"},
 		{"no arguments", "agent1", http.StatusOK, "<jnlp><application-desc/></jnlp>", "contains no agent secret"},
 		{"blank secret", "agent1", http.StatusOK, jnlpDocument(" ", "agent1"), "contains no agent secret"},
 		{"other node", "agent1", http.StatusOK, jnlpDocument(fakeNodeSecret, "agent2"), "belongs to a different node"},
@@ -154,8 +173,12 @@ func TestGetNodeSecret(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newJenkinsClient: %v", err)
 		}
-		if _, err := c.GetNodeSecret(context.Background(), "agent1"); err == nil {
-			t.Fatal("expected a connection error")
+		_, err = c.GetNodeSecret(context.Background(), "agent1")
+		// The transport error carries no body, so it is wrapped as is and
+		// keeps the cause (refused connection, TLS failure, timeout).
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			t.Fatalf("error = %v, want it to wrap the *url.Error", err)
 		}
 	})
 
@@ -166,7 +189,7 @@ func TestGetNodeSecret(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := covBClient(t, srv).GetNodeSecret(ctx, "agent1")
-		if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context canceled", err)
 		}
 	})
@@ -175,16 +198,19 @@ func TestGetNodeSecret(t *testing.T) {
 func TestNodeSecretDataSourceRead(t *testing.T) {
 	ctx := context.Background()
 
-	run := func(client *mockJenkinsClient) (datasource.ReadResponse, nodeSecretDataSourceModel) {
+	run := func(t *testing.T, client *mockJenkinsClient) (datasource.ReadResponse, nodeSecretDataSourceModel) {
+		t.Helper()
 		d := &nodeSecretDataSource{dataSourceHelper: &dataSourceHelper{client: client}}
 		var sr datasource.SchemaResponse
 		d.Schema(ctx, datasource.SchemaRequest{}, &sr)
 
 		cfg := tfsdk.State{Schema: sr.Schema}
-		cfg.Set(ctx, nodeSecretDataSourceModel{
+		if diags := cfg.Set(ctx, nodeSecretDataSourceModel{
 			Name:   types.StringValue("agent1"),
 			Secret: types.StringNull(),
-		})
+		}); diags.HasError() {
+			t.Fatalf("config: %v", diags)
+		}
 		resp := datasource.ReadResponse{State: tfsdk.State{Schema: sr.Schema}}
 		d.Read(ctx, datasource.ReadRequest{Config: tfsdk.Config{Schema: sr.Schema, Raw: cfg.Raw}}, &resp)
 
@@ -206,7 +232,7 @@ func TestNodeSecretDataSourceRead(t *testing.T) {
 
 	t.Run("happy", func(t *testing.T) {
 		var gotName string
-		resp, got := run(&mockJenkinsClient{
+		resp, got := run(t, &mockJenkinsClient{
 			mockGetNodeSecret: func(_ context.Context, name string) (string, error) {
 				gotName = name
 				return fakeNodeSecret, nil
@@ -224,7 +250,7 @@ func TestNodeSecretDataSourceRead(t *testing.T) {
 	})
 
 	t.Run("client error", func(t *testing.T) {
-		resp, _ := run(&mockJenkinsClient{
+		resp, _ := run(t, &mockJenkinsClient{
 			mockGetNodeSecret: func(context.Context, string) (string, error) { return "", fmt.Errorf("boom") },
 		})
 		if !resp.Diagnostics.HasError() {

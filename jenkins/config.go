@@ -476,28 +476,34 @@ func (j *jenkinsAdapter) PostRequest(ctx context.Context, endpoint string, paylo
 	return j.Requester.Post(ctx, endpoint, payload, responseStruct, querystring)
 }
 
-// GetNodeConfig fetches /computer/<name>/config.xml and XML-decodes it into out.
+// computerGet issues a GET for /computer/<name>/<file> on the adapter's
+// authenticated, retry-wrapped HTTP client and returns the response unread.
 //
-// It issues the GET directly rather than via the gojenkins Requester because
-// Requester.Do appends a trailing slash to non-POST endpoints, turning
-// ".../config.xml" into ".../config.xml/" which Jenkins does not serve. The
-// request reuses the adapter's authenticated, retry-wrapped HTTP client.
-func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out interface{}) error {
+// It bypasses the gojenkins Requester because Requester.Do appends a trailing
+// slash to non-POST endpoints, turning ".../config.xml" into ".../config.xml/"
+// which Jenkins does not serve. The name is path-escaped and the server's
+// context path in r.Base is kept.
+func (j *jenkinsAdapter) computerGet(ctx context.Context, name, file string) (*http.Response, error) {
 	r, ok := j.Requester.(*jenkins.Requester)
 	if !ok {
-		return fmt.Errorf("unexpected requester type %T", j.Requester)
+		return nil, fmt.Errorf("unexpected requester type %T", j.Requester)
 	}
 
-	endpoint := strings.TrimRight(r.Base, "/") + "/computer/" + url.PathEscape(name) + "/config.xml"
+	endpoint := strings.TrimRight(r.Base, "/") + "/computer/" + url.PathEscape(name) + "/" + file
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if r.BasicAuth != nil {
 		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
 	}
 
-	resp, err := r.Client.Do(req)
+	return r.Client.Do(req)
+}
+
+// GetNodeConfig fetches /computer/<name>/config.xml and XML-decodes it into out.
+func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out interface{}) error {
+	resp, err := j.computerGet(ctx, name, "config.xml")
 	if err != nil {
 		return err
 	}
@@ -521,6 +527,13 @@ func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out int
 	return xml.Unmarshal(stripXMLDeclaration(body), out)
 }
 
+// nodeSecretFile is the per-computer document GetNodeSecret reads the secret
+// from. Jenkins core deprecated it (jenkinsci/jenkins#27331) and logs a
+// WARNING on the controller for every fetch. The supported replacement,
+// /computer/<name>/agent-secret (jenkinsci/jenkins#26017), is not released
+// yet; once it is, try it first here and fall back to this document on 404.
+const nodeSecretFile = "jenkins-agent.jnlp"
+
 // maxNodeSecretDocumentSize bounds the JNLP document read by GetNodeSecret.
 // Jenkins serves a few hundred bytes; anything larger is not a JNLP document.
 const maxNodeSecretDocumentSize = 1 << 20
@@ -531,37 +544,24 @@ const maxNodeSecretDocumentSize = 1 << 20
 // 404 for any other node.
 //
 // The response body carries the secret, so no error returned here may include
-// it: transport errors drop the body excerpt enrichErrorHandler attaches, and
-// XML decoding errors are replaced by a fixed message.
+// it. Only statusError carries a body excerpt (enrichErrorHandler attaches it
+// after exhausted retries), so that one is reduced to its status while other
+// transport errors are wrapped as is. Of the XML errors, UnmarshalError names
+// element types only and is kept because it is what tells a user they got a
+// login or proxy page; SyntaxError can quote document text and is replaced by
+// a fixed message.
 func (j *jenkinsAdapter) GetNodeSecret(ctx context.Context, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("node name must not be empty")
 	}
 
-	r, ok := j.Requester.(*jenkins.Requester)
-	if !ok {
-		return "", fmt.Errorf("unexpected requester type %T", j.Requester)
-	}
-
-	endpoint := strings.TrimRight(r.Base, "/") + "/computer/" + url.PathEscape(name) + "/jenkins-agent.jnlp"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	resp, err := j.computerGet(ctx, name, nodeSecretFile)
 	if err != nil {
-		return "", err
-	}
-	if r.BasicAuth != nil {
-		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
-	}
-
-	resp, err := r.Client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("node secret request for %q failed: %w", name, ctx.Err())
-		}
 		var se *statusError
 		if errors.As(err, &se) {
 			return "", fmt.Errorf("unexpected status %d fetching secret for node %q", se.StatusCode, name)
 		}
-		return "", fmt.Errorf("node secret request for %q failed; check connectivity, TLS and request timeout", name)
+		return "", fmt.Errorf("node secret request for %q failed: %w", name, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -589,19 +589,27 @@ func (j *jenkinsAdapter) GetNodeSecret(ctx context.Context, name string) (string
 		Arguments []string `xml:"application-desc>argument"`
 	}
 	if err := xml.Unmarshal(stripXMLDeclaration(body), &doc); err != nil {
+		var ue xml.UnmarshalError
+		if errors.As(err, &ue) {
+			return "", fmt.Errorf("invalid JNLP document returned for node %q: %w", name, err)
+		}
 		return "", fmt.Errorf("invalid JNLP document returned for node %q", name)
 	}
 
 	// Jenkins emits the secret first and the node name second, followed by
 	// launcher flags such as -workDir and -url.
-	if len(doc.Arguments) < 2 || strings.TrimSpace(doc.Arguments[0]) == "" {
+	if len(doc.Arguments) < 2 {
+		return "", fmt.Errorf("the JNLP document of node %q contains no agent secret", name)
+	}
+	secret := strings.TrimSpace(doc.Arguments[0])
+	if secret == "" {
 		return "", fmt.Errorf("the JNLP document of node %q contains no agent secret", name)
 	}
 	if doc.Arguments[1] != name {
 		return "", fmt.Errorf("the JNLP document returned for node %q belongs to a different node", name)
 	}
 
-	return doc.Arguments[0], nil
+	return secret, nil
 }
 
 // stripXMLDeclaration removes a leading <?xml ... ?> processing instruction from
