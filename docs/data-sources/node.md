@@ -30,6 +30,7 @@ data "jenkins_node" "example" {
 - `description` (String) A human readable description of the node.
 - `id` (String) The name of the node, which is also its unique identifier.
 - `labels` (String) A space-separated list of labels assigned to the node.
+- `mode` (String) How Jenkins schedules builds on the node: `NORMAL` uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node.
 - `num_executors` (Number) The number of concurrent builds the node can run.
 - `online` (Boolean) Whether the node is currently connected and online.
 - `remote_fs` (String) The absolute path to the agent's root/working directory on the agent machine.

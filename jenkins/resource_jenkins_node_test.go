@@ -56,10 +56,15 @@ func TestAccJenkinsNode_exclusive(t *testing.T) {
 				  remote_fs = "/home/jenkins/agent"
 				  labels    = "team-a"
 				  mode      = "EXCLUSIVE"
+				}
+
+				data jenkins_node foo {
+				  name = jenkins_node.foo.name
 				}`,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckJenkinsNodeExists("jenkins_node.foo"),
 					resource.TestCheckResourceAttr("jenkins_node.foo", "mode", "EXCLUSIVE"),
+					resource.TestCheckResourceAttr("data.jenkins_node.foo", "mode", "EXCLUSIVE"),
 				),
 			},
 			{

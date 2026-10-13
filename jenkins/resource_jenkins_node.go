@@ -39,6 +39,16 @@ type nodeConfig struct {
 	Mode         string `xml:"mode"`
 }
 
+// mode returns the node usage, falling back to NORMAL (Jenkins' own default)
+// when config.xml has no <mode> element, so Read agrees with the schema
+// default instead of planning a replacement.
+func (c nodeConfig) mode() string {
+	if c.Mode == "" {
+		return "NORMAL"
+	}
+	return c.Mode
+}
+
 type nodeResource struct {
 	*resourceHelper
 }
@@ -188,7 +198,7 @@ func (r *nodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	data.Description = types.StringValue(cfg.Description)
 	data.RemoteFS = types.StringValue(cfg.RemoteFS)
 	data.Labels = types.StringValue(cfg.Label)
-	data.Mode = types.StringValue(cfg.Mode)
+	data.Mode = types.StringValue(cfg.mode())
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
