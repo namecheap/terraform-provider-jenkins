@@ -3,21 +3,23 @@
 page_title: "jenkins_node Resource - jenkins"
 subcategory: ""
 description: |-
-  Manages a permanent (static) agent node within Jenkins, launched as an inbound (JNLP) agent.
-  Nodes are immutable: because Jenkins exposes no in-place update for a node's core
-  configuration, changing any attribute replaces the node. Use num_executors, labels and
-  the rest to describe the agent as code; connect the agent out-of-band with the inbound
-  (JNLP) secret Jenkins issues for it, which the jenkins_node_secret data source reads.
+  Manages a permanent (static) agent node within Jenkins, launched as an inbound agent.
+  Changing name replaces the node. Every other attribute is updated in place through the
+  node's config.xml, and a connected agent stays connected. Settings the resource does not
+  manage, such as other node properties or the agent's work directory options, keep the values
+  they have on the controller. Connect the agent out-of-band with the secret Jenkins issues for
+  it, which the jenkins_node_secret data source reads.
 ---
 
 # jenkins_node (Resource)
 
-Manages a permanent (static) agent node within Jenkins, launched as an inbound (JNLP) agent.
+Manages a permanent (static) agent node within Jenkins, launched as an inbound agent.
 
-Nodes are immutable: because Jenkins exposes no in-place update for a node's core
-configuration, changing any attribute replaces the node. Use `num_executors`, `labels` and
-the rest to describe the agent as code; connect the agent out-of-band with the inbound
-(JNLP) secret Jenkins issues for it, which the `jenkins_node_secret` data source reads.
+Changing `name` replaces the node. Every other attribute is updated in place through the
+node's `config.xml`, and a connected agent stays connected. Settings the resource does not
+manage, such as other node properties or the agent's work directory options, keep the values
+they have on the controller. Connect the agent out-of-band with the secret Jenkins issues for
+it, which the `jenkins_node_secret` data source reads.
 
 ## Example Usage
 
@@ -31,12 +33,20 @@ resource "jenkins_node" "example" {
 }
 
 # Only builds jobs whose label expression names team-a, so a job with no
-# label never lands on it.
+# label never lands on it. A label reserves nothing by itself, since any job
+# can name it: the job restriction refuses every job outside the team-a
+# folder (needs the job-restrictions plugin). The agent connects over
+# WebSocket, through the controller's HTTP(S) port.
 resource "jenkins_node" "team_a" {
-  name      = "team-a-agent-01"
-  remote_fs = "/home/jenkins/agent"
-  labels    = "team-a"
-  mode      = "EXCLUSIVE"
+  name       = "team-a-agent-01"
+  remote_fs  = "/home/jenkins/agent"
+  labels     = "team-a"
+  mode       = "EXCLUSIVE"
+  web_socket = true
+
+  job_restriction {
+    regex = "^team-a/.*"
+  }
 }
 ```
 
@@ -46,18 +56,28 @@ resource "jenkins_node" "team_a" {
 ### Required
 
 - `name` (String) The name of the node. Changing this forces a new node to be created.
-- `remote_fs` (String) The absolute path to the agent's root/working directory on the agent machine (e.g. `/home/jenkins/agent`). Changing this forces a new node to be created.
+- `remote_fs` (String) The absolute path to the agent's root/working directory on the agent machine (e.g. `/home/jenkins/agent`).
 
 ### Optional
 
-- `description` (String) A human readable description of the node. Changing this forces a new node to be created.
-- `labels` (String) A space-separated list of labels used to target the node from job configurations. Changing this forces a new node to be created.
-- `mode` (String) How Jenkins schedules builds on the node: `NORMAL` (the default) uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node. Changing this forces a new node to be created.
-- `num_executors` (Number) The number of concurrent builds the node can run. Defaults to `1`. Changing this forces a new node to be created.
+- `description` (String) A human readable description of the node.
+- `job_restriction` (Block, Optional) Restricts the node to the jobs whose name matches a regular expression: the node refuses every other build, whatever labels it carries. Needs the Job Restrictions plugin (`job-restrictions`) on the controller. Removing the block removes the restriction. A restriction of another type set in the UI is not read, and is replaced when this block is set. (see [below for nested schema](#nestedblock--job_restriction))
+- `labels` (String) A space-separated list of labels used to target the node from job configurations.
+- `mode` (String) How Jenkins schedules builds on the node: `NORMAL` (the default) uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node.
+- `num_executors` (Number) The number of concurrent builds the node can run, at least `1`. Defaults to `1`.
+- `web_socket` (Boolean) The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. Defaults to `false`.
 
 ### Read-Only
 
 - `id` (String) The name of the node, which is also its unique identifier.
+
+<a id="nestedblock--job_restriction"></a>
+### Nested Schema for `job_restriction`
+
+Optional:
+
+- `check_short_name` (Boolean) The plugin's *Check short name* option. Defaults to `false`. Job Restrictions `242.v6edda_c9e4ca_f` stores it but matches the full name either way.
+- `regex` (String) Required. Java regular expression the full name of the job (folders included) must match. The plugin accepts every job when the expression does not compile.
 
 ## Import
 
