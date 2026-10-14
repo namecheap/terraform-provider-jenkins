@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.10...v1.3.0) (2026-10-14)
+
+
+### Features
+
+* **node:** add jenkins_node_secret data source ([#241](https://github.com/namecheap/terraform-provider-jenkins/issues/241)) ([38bdd48](https://github.com/namecheap/terraform-provider-jenkins/commit/38bdd484fe2d33b9bce0965c691d9e4f669dfa32))
+* **node:** add mode attribute to jenkins_node ([#238](https://github.com/namecheap/terraform-provider-jenkins/issues/238)) ([273344d](https://github.com/namecheap/terraform-provider-jenkins/commit/273344d2ee73e673b60e9c28b34ae94a566816b6))
+
 ## [1.2.10](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.9...v1.2.10) (2026-10-12)
 
 
