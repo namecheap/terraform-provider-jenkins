@@ -2,10 +2,10 @@ package jenkins
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 )
 
 type (
@@ -22,22 +22,9 @@ func newDataSourceHelper() *dataSourceHelper {
 
 // Configure should register the client for the resource.
 func (d *dataSourceHelper) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-
-	client, ok := req.ProviderData.(*jenkinsAdapter)
-	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *jenkinsAdapter, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
-		return
-	}
-
-	d.client = client
+	var diags diag.Diagnostics
+	d.client, diags = clientFromProviderData(req.ProviderData)
+	resp.Diagnostics.Append(diags...)
 }
 
 func (d *dataSourceHelper) schema(s map[string]schema.Attribute) map[string]schema.Attribute {

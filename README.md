@@ -115,6 +115,14 @@ Then `tofu init` (or `terraform init`) downloads and verifies the provider. GPG-
 | [`jenkins_credential_username`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_username) | Read a username/password credential |
 | [`jenkins_credential_vault_approle`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_vault_approle) | Read a Vault AppRole credential |
 
+## Ephemeral Resources
+
+Ephemeral resource values never reach the plan or the state.
+
+| Ephemeral Resource | Description |
+|---|---|
+| [`jenkins_node_secret`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/ephemeral-resources/node_secret) | Read an inbound agent's connection secret, for a write-only argument |
+
 ## Provider Configuration
 
 ```hcl

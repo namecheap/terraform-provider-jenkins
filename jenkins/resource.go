@@ -78,22 +78,9 @@ func (r *resourceHelper) deleteCredential(ctx context.Context, folder, domain, n
 
 // Configure should register the client for the resource.
 func (r *resourceHelper) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-
-	client, ok := req.ProviderData.(*jenkinsAdapter)
-	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *jenkinsAdapter, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
-		return
-	}
-
-	r.client = client
+	var diags diag.Diagnostics
+	r.client, diags = clientFromProviderData(req.ProviderData)
+	resp.Diagnostics.Append(diags...)
 }
 
 // ImportState is called when performing import operations of existing resources.
