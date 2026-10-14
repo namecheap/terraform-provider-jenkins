@@ -5,18 +5,19 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// TestCovR_GetErrors drives every resource/data source with a request whose Raw
+// TestCovR_GetErrors drives every resource/data source/ephemeral resource with a request whose Raw
 // is the wrong shape (a string where an object is expected), so req.*.Get fails
 // and the "bail out after decoding the request" guard at the top of each method
 // runs — a branch the happy-path acceptance suite never reaches.
 func TestCovR_GetErrors(t *testing.T) {
 	ctx := context.Background()
-	p := New()
+	p := &JenkinsProvider{}
 	bad := tftypes.NewValue(tftypes.String, "not-an-object")
 
 	for _, f := range p.Resources(ctx) {
@@ -55,5 +56,17 @@ func TestCovR_GetErrors(t *testing.T) {
 			defer func() { _ = recover() }()
 			d.Read(ctx, datasource.ReadRequest{Config: tfsdk.Config{Schema: s, Raw: bad}}, &datasource.ReadResponse{State: tfsdk.State{Schema: s}})
 		}()
+	}
+
+	for _, f := range p.EphemeralResources(ctx) {
+		e := f()
+		var sr ephemeral.SchemaResponse
+		e.Schema(ctx, ephemeral.SchemaRequest{}, &sr)
+		s := sr.Schema
+		resp := ephemeral.OpenResponse{Result: tfsdk.EphemeralResultData{Schema: s}}
+		e.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: s, Raw: bad}}, &resp)
+		if !resp.Diagnostics.HasError() {
+			t.Errorf("%T.Open with a malformed config: want an error diagnostic", e)
+		}
 	}
 }
