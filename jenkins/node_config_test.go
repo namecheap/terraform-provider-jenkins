@@ -41,6 +41,31 @@ func TestNodeConfigParse(t *testing.T) {
 	if cfg.Label != "linux docker" {
 		t.Errorf("Label = %q, want 'linux docker'", cfg.Label)
 	}
+	if cfg.Mode != "NORMAL" {
+		t.Errorf("Mode = %q, want NORMAL", cfg.Mode)
+	}
+}
+
+// TestNodeConfigMode verifies that a config.xml without <mode> reads back as
+// NORMAL, so Read agrees with the schema default instead of planning a
+// replacement on every run.
+func TestNodeConfigMode(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"missing", "", "NORMAL"},
+		{"normal", "NORMAL", "NORMAL"},
+		{"exclusive", "EXCLUSIVE", "EXCLUSIVE"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (nodeConfig{Mode: tc.in}).mode(); got != tc.want {
+				t.Errorf("mode() with Mode=%q = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestStripXMLDeclaration(t *testing.T) {

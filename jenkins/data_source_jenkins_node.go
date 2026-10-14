@@ -16,6 +16,7 @@ type nodeDataSourceModel struct {
 	Description  types.String `tfsdk:"description"`
 	RemoteFS     types.String `tfsdk:"remote_fs"`
 	Labels       types.String `tfsdk:"labels"`
+	Mode         types.String `tfsdk:"mode"`
 	Online       types.Bool   `tfsdk:"online"`
 }
 
@@ -63,6 +64,10 @@ func (d *nodeDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				Computed:            true,
 				MarkdownDescription: "A space-separated list of labels assigned to the node.",
 			},
+			"mode": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "How Jenkins schedules builds on the node: `NORMAL` uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node.",
+			},
 			"online": schema.BoolAttribute{
 				Computed:            true,
 				MarkdownDescription: "Whether the node is currently connected and online.",
@@ -103,6 +108,7 @@ func (d *nodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.Description = types.StringValue(cfg.Description)
 	data.RemoteFS = types.StringValue(cfg.RemoteFS)
 	data.Labels = types.StringValue(cfg.Label)
+	data.Mode = types.StringValue(cfg.mode())
 	data.Online = types.BoolValue(node != nil && node.Raw != nil && !node.Raw.Offline)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

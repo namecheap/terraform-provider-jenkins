@@ -31,6 +31,40 @@ func TestAccJenkinsNode_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("jenkins_node.foo", "remote_fs", "/home/jenkins/agent"),
 					resource.TestCheckResourceAttr("jenkins_node.foo", "labels", "linux docker"),
 					resource.TestCheckResourceAttr("jenkins_node.foo", "description", "managed by terraform"),
+					resource.TestCheckResourceAttr("jenkins_node.foo", "mode", "NORMAL"),
+				),
+			},
+			{
+				ResourceName:      "jenkins_node.foo",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccJenkinsNode_exclusive(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsNodeDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_node foo {
+				  name      = "tf-acc-node-exclusive"
+				  remote_fs = "/home/jenkins/agent"
+				  labels    = "team-a"
+				  mode      = "EXCLUSIVE"
+				}
+
+				data jenkins_node foo {
+				  name = jenkins_node.foo.name
+				}`,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsNodeExists("jenkins_node.foo"),
+					resource.TestCheckResourceAttr("jenkins_node.foo", "mode", "EXCLUSIVE"),
+					resource.TestCheckResourceAttr("data.jenkins_node.foo", "mode", "EXCLUSIVE"),
 				),
 			},
 			{
