@@ -4,17 +4,22 @@ page_title: "jenkins_role Resource - jenkins"
 subcategory: ""
 description: |-
   Manages a role in the Jenkins Role-Based Authorization Strategy (the role-strategy plugin).
-  Requires the Role-Based Authorization Strategy to be the active authorization strategy.
-  Assignments are authoritative: the provider makes the role's set of assigned users/groups exactly match assignments, removing any assignment it does not manage.
+  Assignments are authoritative: the provider makes the role's entries exactly match users, groups and assignments, removing any entry it does not manage. Creating a role that already exists fails; import it instead.
+  Limitations
+  The Role-Based Authorization Strategy must already be active. This resource does not switch it on, and every operation fails with a 404 from the role-strategy API until it is. Switch it on once, from Manage Jenkins > Security or with Configuration as Code; it then stays active across restarts.Configuration as Code deletes these roles. An apply that contains jenkins.authorizationStrategy.roleBased replaces every role with the ones it lists, including the roles managed here. Do not declare authorizationStrategy in a jenkins_configuration_as_code resource used alongside this one.The controller's own Configuration as Code files count too. Every jenkins_configuration_as_code apply also re-applies the controller's own files: CASC_JENKINS_CONFIG, the path set in Manage Jenkins > Configuration as Code, or $JENKINS_HOME/jenkins.yaml. If one of them declares authorizationStrategy, applying any section, even an unrelated one, deletes these roles.
 ---
 
 # jenkins_role (Resource)
 
 Manages a role in the Jenkins Role-Based Authorization Strategy (the `role-strategy` plugin).
 
-Requires the Role-Based Authorization Strategy to be the active authorization strategy.
+Assignments are **authoritative**: the provider makes the role's entries exactly match `users`, `groups` and `assignments`, removing any entry it does not manage. Creating a role that already exists fails; import it instead.
 
-Assignments are **authoritative**: the provider makes the role's set of assigned users/groups exactly match `assignments`, removing any assignment it does not manage.
+**Limitations**
+
+- **The Role-Based Authorization Strategy must already be active.** This resource does not switch it on, and every operation fails with a 404 from the role-strategy API until it is. Switch it on once, from *Manage Jenkins > Security* or with Configuration as Code; it then stays active across restarts.
+- **Configuration as Code deletes these roles.** An apply that contains `jenkins.authorizationStrategy.roleBased` replaces every role with the ones it lists, including the roles managed here. Do not declare `authorizationStrategy` in a `jenkins_configuration_as_code` resource used alongside this one.
+- **The controller's own Configuration as Code files count too.** Every `jenkins_configuration_as_code` apply also re-applies the controller's own files: `CASC_JENKINS_CONFIG`, the path set in *Manage Jenkins > Configuration as Code*, or `$JENKINS_HOME/jenkins.yaml`. If one of them declares `authorizationStrategy`, applying any section, even an unrelated one, deletes these roles.
 
 ## Example Usage
 
@@ -29,7 +34,7 @@ resource "jenkins_role" "reader" {
     "hudson.model.Hudson.Read",
     "hudson.model.Item.Read",
   ]
-  assignments = ["authenticated"]
+  groups = ["authenticated"]
 }
 
 # A developer role scoped to a team's folder, allowing builds and configuration
@@ -44,7 +49,8 @@ resource "jenkins_role" "developer" {
     "hudson.model.Item.Configure",
     "hudson.model.Item.Cancel",
   ]
-  assignments = ["alice", "bob", "team-a-group"]
+  users  = ["alice", "bob"]
+  groups = ["team-a-group"]
 }
 
 # A global administrator role.
@@ -52,7 +58,7 @@ resource "jenkins_role" "admin" {
   type        = "global"
   name        = "admin"
   permissions = ["hudson.model.Hudson.Administer"]
-  assignments = ["admin-group"]
+  groups      = ["admin-group"]
 }
 ```
 
@@ -67,8 +73,10 @@ resource "jenkins_role" "admin" {
 
 ### Optional
 
-- `assignments` (Set of String) The user or group SIDs the role is assigned to. Authoritative: unmanaged assignments are removed. Omit or set to `[]` for a role with no assignments.
+- `assignments` (Set of String, Deprecated) The SIDs the role is assigned to as ambiguous User/Group entries, which match a user or a group of that name. Authoritative: unmanaged ambiguous entries are removed. Prefer `users` and `groups`.
+- `groups` (Set of String) The group names the role is assigned to, as Group entries (e.g. `authenticated`, or a group of the security realm). Authoritative: unmanaged Group entries are removed.
 - `pattern` (String) A regular expression matching the item/agent names the role applies to (e.g. `team-a/.*`). Required for `item` and `agent` roles (defaults to `.*`); must be omitted for `global` roles.
+- `users` (Set of String) The user IDs the role is assigned to, as User entries. Authoritative: unmanaged User entries are removed.
 
 ### Read-Only
 

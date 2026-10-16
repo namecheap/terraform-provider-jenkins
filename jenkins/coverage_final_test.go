@@ -19,9 +19,10 @@ func TestCovG_RoleTypeBranches(t *testing.T) {
 	s := covMSchema(ctx, &roleResource{resourceHelper: newResourceHelper()})
 	perms := types.SetValueMust(types.StringType, []attr.Value{types.StringValue("p")})
 	asg := types.SetValueMust(types.StringType, []attr.Value{types.StringValue("u")})
+	none := types.SetValueMust(types.StringType, []attr.Value{})
 
 	// Invalid type on Create → validate rejects it.
-	bad := &roleResourceModel{Type: types.StringValue("bogus"), Name: types.StringValue("r"), Permissions: perms, Assignments: asg}
+	bad := &roleResourceModel{Type: types.StringValue("bogus"), Name: types.StringValue("r"), Permissions: perms, Users: asg, Groups: none, Assignments: none}
 	rC := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{}}}
 	plan := tfsdk.Plan{Schema: s}
 	plan.Set(ctx, bad)
@@ -41,10 +42,10 @@ func TestCovG_RoleTypeBranches(t *testing.T) {
 	}
 
 	// Created but not read back: AddRole/assign succeed, GetRole returns empty.
-	good := &roleResourceModel{Type: types.StringValue("global"), Name: types.StringValue("r"), Permissions: perms, Assignments: asg}
+	good := &roleResourceModel{Type: types.StringValue("global"), Name: types.StringValue("r"), Permissions: perms, Users: asg, Groups: none, Assignments: none}
 	rNR := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
 		mockAddRole:    func(context.Context, string, string, []string, string, bool) error { return nil },
-		mockAssignRole: func(context.Context, string, string, string) error { return nil },
+		mockAssignRole: func(context.Context, string, string, roleEntry) error { return nil },
 		mockGetRole:    func(context.Context, string, string, interface{}) error { return nil }, // empty → not found
 	}}}
 	plan2 := tfsdk.Plan{Schema: s}

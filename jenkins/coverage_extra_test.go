@@ -46,10 +46,14 @@ func TestCovQ_CertWriteOnly(t *testing.T) {
 
 func TestCovQ_RoleItem(t *testing.T) {
 	ctx := context.Background()
+	var created bool
 	r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-		mockAddRole:    func(context.Context, string, string, []string, string, bool) error { return nil },
-		mockAssignRole: func(context.Context, string, string, string) error { return nil },
+		mockAddRole:    func(context.Context, string, string, []string, string, bool) error { created = true; return nil },
+		mockAssignRole: func(context.Context, string, string, roleEntry) error { return nil },
 		mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+			if !created {
+				return nil
+			}
 			resp := out.(*roleStrategyRoleResponse)
 			resp.PermissionIDs = map[string]bool{"hudson.model.Item.Build": true}
 			resp.Pattern = "team/.*"
@@ -60,7 +64,9 @@ func TestCovQ_RoleItem(t *testing.T) {
 	model := &roleResourceModel{
 		Type: types.StringValue("item"), Name: types.StringValue("dev"), Pattern: types.StringValue("team/.*"),
 		Permissions: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("hudson.model.Item.Build")}),
-		Assignments: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("alice")}),
+		Users:       types.SetValueMust(types.StringType, []attr.Value{types.StringValue("alice")}),
+		Groups:      types.SetValueMust(types.StringType, []attr.Value{}),
+		Assignments: types.SetValueMust(types.StringType, []attr.Value{}),
 	}
 	covMResourceCRUD(ctx, t, "role item", r, s, model)
 }

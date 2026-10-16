@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	jenkins "github.com/bndr/gojenkins"
@@ -41,10 +42,11 @@ func TestCovC_RolePopulate(t *testing.T) {
 			mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
 				resp := out.(*roleStrategyRoleResponse)
 				resp.PermissionIDs = map[string]bool{"hudson.model.Hudson.Read": true}
-				resp.Sids = []struct {
-					Type string `json:"type"`
-					Sid  string `json:"sid"`
-				}{{Type: "USER", Sid: "alice"}}
+				resp.Sids = []roleEntry{
+					{Type: roleEntryUser, Sid: "alice"},
+					{Type: roleEntryGroup, Sid: "devs"},
+					{Type: roleEntryEither, Sid: "legacy"},
+				}
 				return nil
 			},
 		}}}
@@ -58,6 +60,19 @@ func TestCovC_RolePopulate(t *testing.T) {
 		}
 		if !data.Pattern.IsNull() {
 			t.Errorf("expected null pattern for global role, got %v", data.Pattern)
+		}
+		for name, tc := range map[string]struct {
+			got  types.Set
+			want string
+		}{
+			"users":       {data.Users, "alice"},
+			"groups":      {data.Groups, "devs"},
+			"assignments": {data.Assignments, "legacy"},
+		} {
+			got := setStrings(ctx, tc.got, &diags)
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("%s = %v, want [%s]", name, got, tc.want)
+			}
 		}
 	})
 
@@ -130,35 +145,97 @@ func TestCovC_RoleValidateInvalidType(t *testing.T) {
 	}
 }
 
-func TestCovC_RoleAssign(t *testing.T) {
+func TestCovC_RoleReconcile(t *testing.T) {
 	ctx := context.Background()
+	user := func(sid string) roleEntry { return roleEntry{Type: roleEntryUser, Sid: sid} }
+	group := func(sid string) roleEntry { return roleEntry{Type: roleEntryGroup, Sid: sid} }
+	either := func(sid string) roleEntry { return roleEntry{Type: roleEntryEither, Sid: sid} }
 
-	t.Run("success", func(t *testing.T) {
-		var calls int
-		r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-			mockAssignRole: func(_ context.Context, _, _, _ string) error { calls++; return nil },
-		}}}
-		var diags diag.Diagnostics
-		if ok := r.assign(ctx, "globalRoles", "admins", []string{"alice", "bob"}, &diags); !ok || diags.HasError() {
-			t.Fatalf("assign failed: ok=%v diags=%v", ok, diags)
-		}
-		if calls != 2 {
-			t.Errorf("AssignRole called %d times, want 2", calls)
-		}
-	})
+	// wantOps lists the calls in order: "+TYPE:sid" assigns, "-TYPE:sid" unassigns.
+	tests := []struct {
+		name    string
+		held    []roleEntry
+		want    []roleEntry
+		wantOps []string
+	}{
+		{
+			name:    "empty role assigns everything",
+			want:    []roleEntry{user("alice"), group("devs")},
+			wantOps: []string{"+USER:alice", "+GROUP:devs"},
+		},
+		{
+			name:    "entries kept by an overwrite are removed",
+			held:    []roleEntry{user("alice"), user("bob")},
+			want:    []roleEntry{user("bob")},
+			wantOps: []string{"-USER:alice"},
+		},
+		{
+			// A user and a group of the same name are distinct entries, and an
+			// ambiguous entry is distinct from both. The new entry lands before
+			// the old one goes, so alice keeps the role throughout.
+			name:    "same SID, different type",
+			held:    []roleEntry{either("alice"), group("alice")},
+			want:    []roleEntry{user("alice"), group("alice")},
+			wantOps: []string{"+USER:alice", "-EITHER:alice"},
+		},
+		{
+			name: "matching role is untouched",
+			held: []roleEntry{user("alice"), group("devs")},
+			want: []roleEntry{group("devs"), user("alice")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ops []string
+			r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+					out.(*roleStrategyRoleResponse).Sids = tt.held
+					return nil
+				},
+				mockAssignRole: func(_ context.Context, _, _ string, e roleEntry) error {
+					ops = append(ops, "+"+e.Type+":"+e.Sid)
+					return nil
+				},
+				mockUnassignRole: func(_ context.Context, _, _ string, e roleEntry) error {
+					ops = append(ops, "-"+e.Type+":"+e.Sid)
+					return nil
+				},
+			}}}
+			var diags diag.Diagnostics
+			if ok := r.reconcile(ctx, "globalRoles", "admins", tt.want, &diags); !ok || diags.HasError() {
+				t.Fatalf("reconcile failed: ok=%v diags=%v", ok, diags)
+			}
+			if !reflect.DeepEqual(ops, tt.wantOps) {
+				t.Errorf("calls = %v, want %v", ops, tt.wantOps)
+			}
+		})
+	}
 
-	t.Run("error", func(t *testing.T) {
-		r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-			mockAssignRole: func(_ context.Context, _, _, _ string) error { return fmt.Errorf("boom") },
-		}}}
-		var diags diag.Diagnostics
-		if ok := r.assign(ctx, "globalRoles", "admins", []string{"alice"}, &diags); ok {
-			t.Error("expected assign to fail")
-		}
-		if !diags.HasError() {
-			t.Error("expected error diagnostic")
-		}
-	})
+	errClient := func(m *mockJenkinsClient) *roleResource {
+		return &roleResource{resourceHelper: &resourceHelper{client: m}}
+	}
+	for name, r := range map[string]*roleResource{
+		"read error": errClient(&mockJenkinsClient{
+			mockGetRole: func(context.Context, string, string, interface{}) error { return fmt.Errorf("boom") },
+		}),
+		"assign error": errClient(&mockJenkinsClient{
+			mockAssignRole: func(context.Context, string, string, roleEntry) error { return fmt.Errorf("boom") },
+		}),
+		"unassign error": errClient(&mockJenkinsClient{
+			mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+				out.(*roleStrategyRoleResponse).Sids = []roleEntry{user("stale")}
+				return nil
+			},
+			mockUnassignRole: func(context.Context, string, string, roleEntry) error { return fmt.Errorf("boom") },
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var diags diag.Diagnostics
+			if ok := r.reconcile(ctx, "globalRoles", "admins", []roleEntry{user("alice")}, &diags); ok || !diags.HasError() {
+				t.Errorf("expected reconcile to fail with a diagnostic, ok=%v diags=%v", ok, diags)
+			}
+		})
+	}
 }
 
 func TestCovC_SetStrings(t *testing.T) {

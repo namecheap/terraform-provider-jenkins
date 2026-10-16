@@ -26,15 +26,27 @@ var roleTypeAPI = map[string]string{
 	"agent":  "slaveRoles",
 }
 
+// Role entry types, as role-strategy names its AuthorizationType values.
+// EITHER is the legacy ambiguous entry, matching a user or a group of that
+// name.
+const (
+	roleEntryUser   = "USER"
+	roleEntryGroup  = "GROUP"
+	roleEntryEither = "EITHER"
+)
+
+// roleEntry is one assignment of a role: a SID and its entry type.
+type roleEntry struct {
+	Type string `json:"type"`
+	Sid  string `json:"sid"`
+}
+
 // roleStrategyRoleResponse models the JSON returned by the role-strategy
 // getRole endpoint. A missing role yields an empty object (nil PermissionIDs).
 type roleStrategyRoleResponse struct {
 	PermissionIDs map[string]bool `json:"permissionIds"`
 	Pattern       string          `json:"pattern"`
-	Sids          []struct {
-		Type string `json:"type"`
-		Sid  string `json:"sid"`
-	} `json:"sids"`
+	Sids          []roleEntry     `json:"sids"`
 }
 
 type roleResourceModel struct {
@@ -43,6 +55,8 @@ type roleResourceModel struct {
 	Name        types.String `tfsdk:"name"`
 	Pattern     types.String `tfsdk:"pattern"`
 	Permissions types.Set    `tfsdk:"permissions"`
+	Users       types.Set    `tfsdk:"users"`
+	Groups      types.Set    `tfsdk:"groups"`
 	Assignments types.Set    `tfsdk:"assignments"`
 }
 
@@ -67,9 +81,13 @@ func (r *roleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `Manages a role in the Jenkins Role-Based Authorization Strategy (the ` + "`role-strategy`" + ` plugin).
 
-Requires the Role-Based Authorization Strategy to be the active authorization strategy.
+Assignments are **authoritative**: the provider makes the role's entries exactly match ` + "`users`" + `, ` + "`groups`" + ` and ` + "`assignments`" + `, removing any entry it does not manage. Creating a role that already exists fails; import it instead.
 
-Assignments are **authoritative**: the provider makes the role's set of assigned users/groups exactly match ` + "`assignments`" + `, removing any assignment it does not manage.`,
+**Limitations**
+
+- **The Role-Based Authorization Strategy must already be active.** This resource does not switch it on, and every operation fails with a 404 from the role-strategy API until it is. Switch it on once, from *Manage Jenkins > Security* or with Configuration as Code; it then stays active across restarts.
+- **Configuration as Code deletes these roles.** An apply that contains ` + "`jenkins.authorizationStrategy.roleBased`" + ` replaces every role with the ones it lists, including the roles managed here. Do not declare ` + "`authorizationStrategy`" + ` in a ` + "`jenkins_configuration_as_code`" + ` resource used alongside this one.
+- **The controller's own Configuration as Code files count too.** Every ` + "`jenkins_configuration_as_code`" + ` apply also re-applies the controller's own files: ` + "`CASC_JENKINS_CONFIG`" + `, the path set in *Manage Jenkins > Configuration as Code*, or ` + "`$JENKINS_HOME/jenkins.yaml`" + `. If one of them declares ` + "`authorizationStrategy`" + `, applying any section, even an unrelated one, deletes these roles.`,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -108,12 +126,27 @@ Assignments are **authoritative**: the provider makes the role's set of assigned
 					setvalidator.SizeAtLeast(1),
 				},
 			},
+			"users": schema.SetAttribute{
+				Optional:            true,
+				Computed:            true,
+				ElementType:         types.StringType,
+				Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
+				MarkdownDescription: "The user IDs the role is assigned to, as User entries. Authoritative: unmanaged User entries are removed.",
+			},
+			"groups": schema.SetAttribute{
+				Optional:            true,
+				Computed:            true,
+				ElementType:         types.StringType,
+				Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
+				MarkdownDescription: "The group names the role is assigned to, as Group entries (e.g. `authenticated`, or a group of the security realm). Authoritative: unmanaged Group entries are removed.",
+			},
 			"assignments": schema.SetAttribute{
 				Optional:            true,
 				Computed:            true,
 				ElementType:         types.StringType,
 				Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
-				MarkdownDescription: "The user or group SIDs the role is assigned to. Authoritative: unmanaged assignments are removed. Omit or set to `[]` for a role with no assignments.",
+				DeprecationMessage:  "Use users and groups. assignments creates ambiguous User/Group entries, which role-strategy flags for migration.",
+				MarkdownDescription: "The SIDs the role is assigned to as ambiguous User/Group entries, which match a user or a group of that name. Authoritative: unmanaged ambiguous entries are removed. Prefer `users` and `groups`.",
 			},
 		},
 	}
@@ -134,8 +167,22 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 
 	permissions := setStrings(ctx, data.Permissions, &resp.Diagnostics)
-	assignments := setStrings(ctx, data.Assignments, &resp.Diagnostics)
+	entries := roleEntries(ctx, &data, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// addRole without overwrite is a silent no-op on an existing role, and
+	// reconcile would then strip that role's entries under a plan that only
+	// showed a create: refuse instead, the role has to be imported.
+	var existing roleStrategyRoleResponse
+	if err := r.client.GetRole(ctx, apiType, data.Name.ValueString(), &existing); err != nil {
+		resp.Diagnostics.AddError("Unable to Create Resource", "Could not check whether role "+data.Name.ValueString()+" exists.\n\nError: "+err.Error())
+		return
+	}
+	if len(existing.PermissionIDs) != 0 {
+		resp.Diagnostics.AddError("Role Already Exists",
+			"The "+data.Type.ValueString()+" role "+data.Name.ValueString()+" already exists. Import it with the identifier \""+data.Type.ValueString()+"/"+data.Name.ValueString()+"\" to manage it.")
 		return
 	}
 
@@ -144,7 +191,8 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	if !r.assign(ctx, apiType, data.Name.ValueString(), assignments, &resp.Diagnostics) {
+	if !r.reconcile(ctx, apiType, data.Name.ValueString(), entries, &resp.Diagnostics) {
+		r.rollback(ctx, apiType, data.Name.ValueString(), &resp.Diagnostics)
 		return
 	}
 
@@ -152,10 +200,24 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("Unable to Read Created Resource", "the role was created but could not be read back")
 	}
 	if resp.Diagnostics.HasError() {
+		r.rollback(ctx, apiType, data.Name.ValueString(), &resp.Diagnostics)
 		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+// rollback deletes the role Create just made after a later step failed, so
+// the role is not left on the controller outside the state, where a retry
+// would stop at the existence check. The failure is already in diags; a
+// second diagnostic is added only when the delete fails too.
+func (r *roleResource) rollback(ctx context.Context, apiType, name string, diags *diag.Diagnostics) {
+	if err := r.client.RemoveRole(ctx, apiType, name); err != nil {
+		diags.AddError("Role Left Orphaned After Failed Create",
+			"Creating role "+name+" failed, and the automatic rollback that deletes it also failed, so the role still exists in Jenkins but is not tracked in Terraform state.\n\n"+
+				"Delete or import the role before re-applying; otherwise the next apply fails because the role already exists.\n\n"+
+				"Rollback error: "+err.Error())
+	}
 }
 
 func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -181,9 +243,10 @@ func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	tflog.Debug(ctx, "roleResource.Update")
-	var data roleResourceModel
+	var data, prior roleResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -194,20 +257,23 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	permissions := setStrings(ctx, data.Permissions, &resp.Diagnostics)
-	assignments := setStrings(ctx, data.Assignments, &resp.Diagnostics)
+	entries := roleEntries(ctx, &data, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Overwriting the role replaces its permissions/pattern and drops all of its
-	// assignments; re-assigning the desired SIDs afterwards makes the assignment
-	// set authoritative.
-	if err := r.client.AddRole(ctx, apiType, data.Name.ValueString(), permissions, pattern, true); err != nil {
-		resp.Diagnostics.AddError("Unable to Update Resource", "An unexpected error occurred while updating the role.\n\nError: "+err.Error())
-		return
+	// An overwrite drops every entry of the role on role-strategy releases
+	// before 927, so a change to the entries alone leaves the role in place.
+	// An item or agent role without a configured pattern is still overwritten
+	// on each update: "" never matches the pattern read back from Jenkins.
+	if !data.Permissions.Equal(prior.Permissions) || pattern != prior.Pattern.ValueString() {
+		if err := r.client.AddRole(ctx, apiType, data.Name.ValueString(), permissions, pattern, true); err != nil {
+			resp.Diagnostics.AddError("Unable to Update Resource", "An unexpected error occurred while updating the role.\n\nError: "+err.Error())
+			return
+		}
 	}
 
-	if !r.assign(ctx, apiType, data.Name.ValueString(), assignments, &resp.Diagnostics) {
+	if !r.reconcile(ctx, apiType, data.Name.ValueString(), entries, &resp.Diagnostics) {
 		return
 	}
 
@@ -280,11 +346,67 @@ func (r *roleResource) validate(data *roleResourceModel, diags *diag.Diagnostics
 	return apiType, pattern, true
 }
 
-// assign assigns the role to each SID, returning false (with a diagnostic) on error.
-func (r *roleResource) assign(ctx context.Context, apiType, name string, sids []string, diags *diag.Diagnostics) bool {
-	for _, sid := range sids {
-		if err := r.client.AssignRole(ctx, apiType, name, sid); err != nil {
-			diags.AddError("Unable to Assign Role", "Could not assign role to "+sid+".\n\nError: "+err.Error())
+// roleEntrySet pairs a role entry type with the attribute listing its SIDs.
+type roleEntrySet struct {
+	typ string
+	set *types.Set
+}
+
+func (m *roleResourceModel) entrySets() []roleEntrySet {
+	return []roleEntrySet{
+		{roleEntryUser, &m.Users},
+		{roleEntryGroup, &m.Groups},
+		{roleEntryEither, &m.Assignments},
+	}
+}
+
+// roleEntries collects the entries data asks for, typed by the attribute that
+// lists them.
+func roleEntries(ctx context.Context, data *roleResourceModel, diags *diag.Diagnostics) []roleEntry {
+	var entries []roleEntry
+	for _, src := range data.entrySets() {
+		for _, sid := range setStrings(ctx, *src.set, diags) {
+			entries = append(entries, roleEntry{Type: src.typ, Sid: sid})
+		}
+	}
+	return entries
+}
+
+// reconcile makes the role's entries exactly match want: it reads the entries
+// the role holds, assigns the missing ones, then unassigns those not wanted.
+// Assigning first means swapping an entry's type (an ambiguous entry for a
+// User entry of the same SID) never leaves the SID without the role. It reads
+// rather than assuming an empty role because addRole with overwrite keeps the
+// existing entries on role-strategy 927 and drops them on older releases. It
+// returns false (with a diagnostic) on error.
+func (r *roleResource) reconcile(ctx context.Context, apiType, name string, want []roleEntry, diags *diag.Diagnostics) bool {
+	var role roleStrategyRoleResponse
+	if err := r.client.GetRole(ctx, apiType, name, &role); err != nil {
+		diags.AddError("Unable to Read Role Assignments", "Could not read role "+name+".\n\nError: "+err.Error())
+		return false
+	}
+
+	held := make(map[roleEntry]bool, len(role.Sids))
+	for _, e := range role.Sids {
+		held[e] = true
+	}
+	wanted := make(map[roleEntry]bool, len(want))
+	for _, e := range want {
+		wanted[e] = true
+		if held[e] {
+			continue
+		}
+		if err := r.client.AssignRole(ctx, apiType, name, e); err != nil {
+			diags.AddError("Unable to Assign Role", "Could not assign "+e.Type+" entry "+e.Sid+".\n\nError: "+err.Error())
+			return false
+		}
+	}
+	for _, e := range role.Sids {
+		if wanted[e] {
+			continue
+		}
+		if err := r.client.UnassignRole(ctx, apiType, name, e); err != nil {
+			diags.AddError("Unable to Unassign Role", "Could not unassign "+e.Type+" entry "+e.Sid+".\n\nError: "+err.Error())
 			return false
 		}
 	}
@@ -325,13 +447,16 @@ func (r *roleResource) populate(ctx context.Context, data *roleResourceModel, di
 		data.Pattern = types.StringValue(role.Pattern)
 	}
 
-	sids := make([]string, 0, len(role.Sids))
-	for _, s := range role.Sids {
-		sids = append(sids, s.Sid)
+	byType := map[string][]string{}
+	for _, e := range role.Sids {
+		byType[e.Type] = append(byType[e.Type], e.Sid)
 	}
-	sidSet, d := types.SetValueFrom(ctx, types.StringType, sids)
-	diags.Append(d...)
-	data.Assignments = sidSet
+	for _, dst := range data.entrySets() {
+		// Copy into a non-nil slice: a nil one would read back as a null set.
+		set, d := types.SetValueFrom(ctx, types.StringType, append([]string{}, byType[dst.typ]...))
+		diags.Append(d...)
+		*dst.set = set
+	}
 
 	return !diags.HasError()
 }

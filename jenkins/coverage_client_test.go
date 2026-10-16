@@ -249,26 +249,55 @@ func TestCovB_AddRole(t *testing.T) {
 	})
 }
 
-func TestCovB_AssignRole(t *testing.T) {
-	var gotPath, gotBody string
-	srv := covBServer(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		w.WriteHeader(http.StatusOK)
-	})
-	defer srv.Close()
+func TestCovB_RoleEntryEndpoints(t *testing.T) {
+	tests := []struct {
+		name     string
+		assign   bool
+		entry    roleEntry
+		wantPath string
+		wantForm string
+	}{
+		{"assign user", true, roleEntry{Type: roleEntryUser, Sid: "alice"}, "/role-strategy/strategy/assignUserRole", "user=alice"},
+		{"assign group", true, roleEntry{Type: roleEntryGroup, Sid: "devs"}, "/role-strategy/strategy/assignGroupRole", "group=devs"},
+		{"assign either", true, roleEntry{Type: roleEntryEither, Sid: "bob"}, "/role-strategy/strategy/assignRole", "sid=bob"},
+		{"unassign user", false, roleEntry{Type: roleEntryUser, Sid: "alice"}, "/role-strategy/strategy/unassignUserRole", "user=alice"},
+		{"unassign group", false, roleEntry{Type: roleEntryGroup, Sid: "devs"}, "/role-strategy/strategy/unassignGroupRole", "group=devs"},
+		{"unassign either", false, roleEntry{Type: roleEntryEither, Sid: "bob"}, "/role-strategy/strategy/unassignRole", "sid=bob"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath, gotBody string
+			srv := covBServer(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				w.WriteHeader(http.StatusOK)
+			})
+			defer srv.Close()
 
-	c := covBClient(t, srv)
-	if err := c.AssignRole(context.Background(), "globalRoles", "admin", "alice"); err != nil {
-		t.Fatalf("AssignRole error = %v", err)
+			c := covBClient(t, srv)
+			call := c.UnassignRole
+			if tt.assign {
+				call = c.AssignRole
+			}
+			if err := call(context.Background(), "globalRoles", "admin", tt.entry); err != nil {
+				t.Fatalf("error = %v", err)
+			}
+			if gotPath != tt.wantPath {
+				t.Errorf("path = %q, want %q", gotPath, tt.wantPath)
+			}
+			if !strings.Contains(gotBody, tt.wantForm) || !strings.Contains(gotBody, "roleName=admin") {
+				t.Errorf("form body = %q, want %q and roleName=admin", gotBody, tt.wantForm)
+			}
+		})
 	}
-	if gotPath != "/role-strategy/strategy/assignRole" {
-		t.Errorf("path = %q", gotPath)
-	}
-	if !strings.Contains(gotBody, "sid=alice") {
-		t.Errorf("form body = %q, missing sid", gotBody)
-	}
+
+	t.Run("unknown type", func(t *testing.T) {
+		c := &jenkinsAdapter{}
+		if err := c.AssignRole(context.Background(), "globalRoles", "admin", roleEntry{Type: "BOGUS", Sid: "x"}); err == nil {
+			t.Fatal("expected an error for an unknown entry type")
+		}
+	})
 }
 
 func TestCovB_RemoveRole(t *testing.T) {

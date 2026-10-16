@@ -119,7 +119,8 @@ resource "jenkins_role" "platform_dev" {
     "hudson.model.Item.Configure",
     "hudson.model.Item.Cancel",
   ]
-  assignments = ["alice", "bob", "platform-team-group"]
+  users  = ["alice", "bob"]
+  groups = ["platform-team-group"]
 }
 
 # Folder-scoped credential; password_wo is never persisted to state.

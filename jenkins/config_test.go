@@ -34,7 +34,8 @@ type mockJenkinsClient struct {
 	mockUninstallPlugin   func(ctx context.Context, name string) error
 	mockHasPlugin         func(ctx context.Context, name string) (*jenkins.Plugin, error)
 	mockAddRole           func(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error
-	mockAssignRole        func(ctx context.Context, roleType, name, sid string) error
+	mockAssignRole        func(ctx context.Context, roleType, name string, entry roleEntry) error
+	mockUnassignRole      func(ctx context.Context, roleType, name string, entry roleEntry) error
 	mockGetRole           func(ctx context.Context, roleType, name string, out interface{}) error
 	mockRemoveRole        func(ctx context.Context, roleType, name string) error
 	mockCreateUser        func(ctx context.Context, username, password, fullName, email string) error
@@ -86,11 +87,18 @@ func (m *mockJenkinsClient) AddRole(ctx context.Context, roleType, name string, 
 	return m.mockAddRole(ctx, roleType, name, permissionIDs, pattern, overwrite)
 }
 
-func (m *mockJenkinsClient) AssignRole(ctx context.Context, roleType, name, sid string) error {
+func (m *mockJenkinsClient) AssignRole(ctx context.Context, roleType, name string, entry roleEntry) error {
 	if m.mockAssignRole == nil {
 		return nil
 	}
-	return m.mockAssignRole(ctx, roleType, name, sid)
+	return m.mockAssignRole(ctx, roleType, name, entry)
+}
+
+func (m *mockJenkinsClient) UnassignRole(ctx context.Context, roleType, name string, entry roleEntry) error {
+	if m.mockUnassignRole == nil {
+		return nil
+	}
+	return m.mockUnassignRole(ctx, roleType, name, entry)
 }
 
 func (m *mockJenkinsClient) GetRole(ctx context.Context, roleType, name string, out interface{}) error {
