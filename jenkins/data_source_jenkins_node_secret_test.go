@@ -198,14 +198,14 @@ func TestGetNodeSecret(t *testing.T) {
 func TestNodeSecretDataSourceRead(t *testing.T) {
 	ctx := context.Background()
 
-	run := func(t *testing.T, client *mockJenkinsClient) (datasource.ReadResponse, nodeSecretDataSourceModel) {
+	run := func(t *testing.T, client *mockJenkinsClient) (datasource.ReadResponse, nodeSecretModel) {
 		t.Helper()
 		d := &nodeSecretDataSource{dataSourceHelper: &dataSourceHelper{client: client}}
 		var sr datasource.SchemaResponse
 		d.Schema(ctx, datasource.SchemaRequest{}, &sr)
 
 		cfg := tfsdk.State{Schema: sr.Schema}
-		if diags := cfg.Set(ctx, nodeSecretDataSourceModel{
+		if diags := cfg.Set(ctx, nodeSecretModel{
 			Name:   types.StringValue("agent1"),
 			Secret: types.StringNull(),
 		}); diags.HasError() {
@@ -214,7 +214,7 @@ func TestNodeSecretDataSourceRead(t *testing.T) {
 		resp := datasource.ReadResponse{State: tfsdk.State{Schema: sr.Schema}}
 		d.Read(ctx, datasource.ReadRequest{Config: tfsdk.Config{Schema: sr.Schema, Raw: cfg.Raw}}, &resp)
 
-		var got nodeSecretDataSourceModel
+		var got nodeSecretModel
 		if !resp.Diagnostics.HasError() {
 			resp.Diagnostics.Append(resp.State.Get(ctx, &got)...)
 		}
@@ -303,6 +303,14 @@ data jenkins_node_secret foo {
   name = "tf-acc-node-secret-does-not-exist"
 }`,
 				ExpectError: regexp.MustCompile(`not found or not an\s+inbound \(JNLP\) agent`),
+			},
+			{
+				Config: `
+data jenkins_node_secret foo {
+  name = ""
+}`,
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`string length must be at least 1`),
 			},
 		},
 	})
