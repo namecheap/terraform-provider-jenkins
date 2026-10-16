@@ -198,7 +198,7 @@ resource "jenkins_configuration_as_code" "slack" {
 
 ### Static agents and plugins
 
-Declare a permanent (inbound/JNLP) agent and pin the plugins the controller depends on. Nodes are immutable — changing an attribute replaces the node. Plugin installs are idempotent; pin a `version` for reproducibility.
+Declare a permanent (inbound/JNLP) agent and pin the plugins the controller depends on. Renaming a node replaces it; every other attribute is updated in place, and a connected agent stays connected. Plugin installs are idempotent; pin a `version` for reproducibility.
 
 ```terraform
 resource "jenkins_node" "linux_agent" {

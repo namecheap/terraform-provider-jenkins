@@ -185,8 +185,9 @@ func TestCovM_Node(t *testing.T) {
 		mockCreateNode: func(_ context.Context, _ string, _ int, _, _, _ string, _ ...interface{}) (*jenkins.Node, error) {
 			return nil, nil
 		},
-		mockGetNodeConfig: func(_ context.Context, _ string, _ interface{}) error { return nil },
-		mockDeleteNode:    func(_ context.Context, _ string) (bool, error) { return true, nil },
+		mockGetNodeConfig:    func(_ context.Context, _ string, _ interface{}) error { return nil },
+		mockUpdateNodeConfig: func(_ context.Context, _ string, _ []byte) error { return nil },
+		mockDeleteNode:       func(_ context.Context, _ string) (bool, error) { return true, nil },
 	}}}
 	s := covMSchema(ctx, r)
 	covMResourceCRUD(ctx, t, "node", r, s, model)

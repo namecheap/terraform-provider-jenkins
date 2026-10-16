@@ -57,6 +57,8 @@ type frameworkClient interface {
 	// Returned wrapped so callers depend on the interface rather than the embedded
 	// gojenkins Requester, whose Do() appends a trailing slash that breaks config.xml.
 	GetNodeConfig(ctx context.Context, name string, out interface{}) error
+	// UpdateNodeConfig POSTs a full config.xml to /computer/<name>/config.xml.
+	UpdateNodeConfig(ctx context.Context, name string, config []byte) error
 	// GetNodeSecret returns the connection secret of an inbound agent node.
 	GetNodeSecret(ctx context.Context, name string) (string, error)
 
@@ -525,6 +527,18 @@ func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out int
 	// version"). Strip the leading declaration before decoding; only child
 	// elements are read, so it is unnecessary.
 	return xml.Unmarshal(stripXMLDeclaration(body), out)
+}
+
+// UpdateNodeConfig replaces /computer/<name>/config.xml with config. Jenkins
+// rebuilds the node from it and swaps it in place.
+func (j *jenkinsAdapter) UpdateNodeConfig(ctx context.Context, name string, config []byte) error {
+	resp, err := j.Requester.PostXML(ctx, "/computer/"+url.PathEscape(name)+"/config.xml", string(config), nil, nil)
+	// Requester decodes every response as JSON, so an HTML error page comes
+	// back as a decoding error next to the status that explains it.
+	if resp != nil && resp.StatusCode >= 400 {
+		return fmt.Errorf("unexpected status %d updating config for node %q", resp.StatusCode, name)
+	}
+	return err
 }
 
 // nodeSecretFile is the per-computer document GetNodeSecret reads the secret
