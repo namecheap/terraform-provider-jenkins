@@ -18,7 +18,7 @@ resource "jenkins_node" "team_a" {
   mode       = "EXCLUSIVE"
   web_socket = true
 
-  job_restriction {
+  job_restriction = {
     regex = "^team-a/.*"
   }
 }

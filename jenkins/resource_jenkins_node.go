@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
-	"github.com/hashicorp/terraform-plugin-framework-validators/objectvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -123,20 +122,13 @@ it, which the ` + "`jenkins_node_secret`" + ` data source reads.`,
 				Default:             booldefault.StaticBool(false),
 				MarkdownDescription: "The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. Defaults to `false`.",
 			},
-		},
-		Blocks: map[string]schema.Block{
-			"job_restriction": schema.SingleNestedBlock{
-				MarkdownDescription: "Restricts the node to the jobs whose name matches a regular expression: the node refuses every other build, whatever labels it carries. Needs the Job Restrictions plugin (`job-restrictions`) on the controller. Removing the block removes the restriction. A restriction of another type set in the UI is not read, and is replaced when this block is set.",
-				// The framework enforces Required inside a single nested
-				// block even when the block is absent, so regex is required
-				// through the block's validator instead.
-				Validators: []validator.Object{
-					objectvalidator.AlsoRequires(path.MatchRelative().AtName("regex")),
-				},
+			"job_restriction": schema.SingleNestedAttribute{
+				Optional:            true,
+				MarkdownDescription: "Restricts the node to the jobs whose name matches a regular expression: the node refuses every other build, whatever labels it carries. Needs the Job Restrictions plugin (`job-restrictions`) on the controller. Removing the attribute removes the restriction. A restriction of another type set in the UI is not read, and is replaced when this attribute is set.",
 				Attributes: map[string]schema.Attribute{
 					"regex": schema.StringAttribute{
-						Optional:            true,
-						MarkdownDescription: "Required. Java regular expression the full name of the job (folders included) must match. The plugin accepts every job when the expression does not compile.",
+						Required:            true,
+						MarkdownDescription: "Java regular expression the full name of the job (folders included) must match. The plugin accepts every job when the expression does not compile.",
 						Validators: []validator.String{
 							stringvalidator.LengthAtLeast(1),
 						},

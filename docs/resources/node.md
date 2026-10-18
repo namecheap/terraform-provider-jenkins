@@ -44,7 +44,7 @@ resource "jenkins_node" "team_a" {
   mode       = "EXCLUSIVE"
   web_socket = true
 
-  job_restriction {
+  job_restriction = {
     regex = "^team-a/.*"
   }
 }
@@ -61,7 +61,7 @@ resource "jenkins_node" "team_a" {
 ### Optional
 
 - `description` (String) A human readable description of the node.
-- `job_restriction` (Block, Optional) Restricts the node to the jobs whose name matches a regular expression: the node refuses every other build, whatever labels it carries. Needs the Job Restrictions plugin (`job-restrictions`) on the controller. Removing the block removes the restriction. A restriction of another type set in the UI is not read, and is replaced when this block is set. (see [below for nested schema](#nestedblock--job_restriction))
+- `job_restriction` (Attributes) Restricts the node to the jobs whose name matches a regular expression: the node refuses every other build, whatever labels it carries. Needs the Job Restrictions plugin (`job-restrictions`) on the controller. Removing the attribute removes the restriction. A restriction of another type set in the UI is not read, and is replaced when this attribute is set. (see [below for nested schema](#nestedatt--job_restriction))
 - `labels` (String) A space-separated list of labels used to target the node from job configurations.
 - `mode` (String) How Jenkins schedules builds on the node: `NORMAL` (the default) uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node.
 - `num_executors` (Number) The number of concurrent builds the node can run, at least `1`. Defaults to `1`.
@@ -71,13 +71,16 @@ resource "jenkins_node" "team_a" {
 
 - `id` (String) The name of the node, which is also its unique identifier.
 
-<a id="nestedblock--job_restriction"></a>
+<a id="nestedatt--job_restriction"></a>
 ### Nested Schema for `job_restriction`
+
+Required:
+
+- `regex` (String) Java regular expression the full name of the job (folders included) must match. The plugin accepts every job when the expression does not compile.
 
 Optional:
 
 - `check_short_name` (Boolean) The plugin's *Check short name* option. Defaults to `false`. Job Restrictions `242.v6edda_c9e4ca_f` stores it but matches the full name either way.
-- `regex` (String) Required. Java regular expression the full name of the job (folders included) must match. The plugin accepts every job when the expression does not compile.
 
 ## Import
 

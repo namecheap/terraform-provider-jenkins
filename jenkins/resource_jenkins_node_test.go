@@ -98,7 +98,7 @@ func TestAccJenkinsNode_inPlace(t *testing.T) {
 	  labels     = "team-a"
 	  web_socket = true
 
-	  job_restriction {
+	  job_restriction = {
 	    regex = "^team-a/.*"
 	  }
 	}`
@@ -111,7 +111,7 @@ func TestAccJenkinsNode_inPlace(t *testing.T) {
 	  labels        = "team-a linux"
 	  mode          = "EXCLUSIVE"
 
-	  job_restriction {
+	  job_restriction = {
 	    regex            = "^(build|deploy)$"
 	    check_short_name = true
 	  }
@@ -219,10 +219,10 @@ func TestAccJenkinsNode_restrictionWithoutRegex(t *testing.T) {
 				  name      = "tf-acc-node-no-regex"
 				  remote_fs = "/home/jenkins/agent"
 
-				  job_restriction {}
+				  job_restriction = {}
 				}`,
 				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`job_restriction.regex`),
+				ExpectError: regexp.MustCompile(`attribute "regex" is\s+required`),
 			},
 		},
 	})
