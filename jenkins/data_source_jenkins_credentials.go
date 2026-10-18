@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -42,11 +43,13 @@ func (d *credentialsDataSource) Schema(_ context.Context, _ datasource.SchemaReq
 			"folder": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "The folder whose credential store is read. If not set, the global store is used.",
+				Validators:          []validator.String{credentialFolderValidator{}},
 			},
 			"domain": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "The domain within the credential store. Defaults to the global domain.",
+				Validators:          []validator.String{preEncodedValidator{}},
 			},
 			"credentials": schema.SetAttribute{
 				Computed:            true,
@@ -70,8 +73,13 @@ func (d *credentialsDataSource) Read(ctx context.Context, req datasource.ReadReq
 		data.Domain = basetypes.NewStringValue(defaultCredentialDomain)
 	}
 
+	folder, err := credentialsFolder(data.Folder.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid Folder", err.Error())
+		return
+	}
 	cm := d.client.Credentials()
-	cm.Folder = formatFolderName(data.Folder.ValueString())
+	cm.Folder = folder
 
 	pathDomain, err := escapePathSegment(data.Domain.ValueString())
 	var ids []string

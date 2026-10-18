@@ -49,9 +49,14 @@ func (d *credentialDataSource[M]) Read(ctx context.Context, req datasource.ReadR
 		return
 	}
 
-	cm := d.client.Credentials()
 	folder := d.reader.folder(&m).ValueString()
-	cm.Folder = formatFolderName(folder)
+	formatted, err := credentialsFolder(folder)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid Folder", err.Error())
+		return
+	}
+	cm := d.client.Credentials()
+	cm.Folder = formatted
 
 	if d.reader.domain(&m).IsNull() {
 		d.reader.setDomain(&m, defaultCredentialDomain)

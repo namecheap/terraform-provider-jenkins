@@ -60,7 +60,7 @@ Manages a credentials domain within a Jenkins credentials store. Domains group c
 				},
 				Validators: append(
 					[]validator.String{stringvalidator.LengthAtLeast(1)},
-					pathSegmentValidators()...,
+					domainNameValidators()...,
 				),
 			},
 			"folder": schema.StringAttribute{
@@ -69,6 +69,7 @@ Manages a credentials domain within a Jenkins credentials store. Domains group c
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
+				Validators: []validator.String{credentialFolderValidator{}},
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,

@@ -57,6 +57,25 @@ func escapeCredentialPath(domain, name string) (string, string, error) {
 	return d, n, nil
 }
 
+// credentialsFolder formats folder for a CredentialsManager or credentials-store
+// URL, which interpolate it unescaped. An empty folder selects the system store.
+// A non-empty folder must name a folder: "job" or "/" format to "" and would
+// select the system store too. No segment may be a dot-segment or contain a
+// character that ends or re-splits the path; Jenkins item names cannot contain
+// them anyway (issue #250).
+func credentialsFolder(folder string) (string, error) {
+	formatted := formatFolderName(folder)
+	if folder != "" && formatted == "" {
+		return "", fmt.Errorf("folder %q does not name a folder; leave it unset for the global credentials store", folder)
+	}
+	for _, segment := range extractFolders(folder) {
+		if segment == "." || segment == ".." || strings.ContainsAny(segment, `?#%;\`) {
+			return "", fmt.Errorf("folder %q has an invalid segment %q", folder, segment)
+		}
+	}
+	return formatted, nil
+}
+
 // formatFolderID will format a set of folders in the way that Jenkins expects for the "folder" property, with "/job/name/job/name" separators.
 func formatFolderID(folders []string) string {
 	if len(folders) == 0 {

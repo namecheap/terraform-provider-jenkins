@@ -101,6 +101,11 @@ func (c *credentialCRUD[M]) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	folder, domain, name := c.spec.identity(&m)
+	pathDomain, _, err := escapeCredentialPath(domain, name)
+	if err != nil {
+		resp.Diagnostics.AddError(crudCreateErrSummary, crudCreateErrDetail+err.Error())
+		return
+	}
 	cm := c.credentialManagerForFolder(ctx, folder, &resp.Diagnostics)
 	if cm == nil {
 		return
@@ -111,11 +116,7 @@ func (c *credentialCRUD[M]) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	pathDomain, _, err := escapeCredentialPath(domain, name)
-	if err == nil {
-		err = cm.Add(ctx, pathDomain, c.spec.build(&m, secrets))
-	}
-	if err != nil {
+	if err := cm.Add(ctx, pathDomain, c.spec.build(&m, secrets)); err != nil {
 		resp.Diagnostics.AddError(crudCreateErrSummary, crudCreateErrDetail+err.Error())
 		return
 	}
@@ -132,7 +133,10 @@ func (c *credentialCRUD[M]) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	folder, domain, name := c.spec.identity(&m)
-	cm := c.credentialManager(folder)
+	cm := c.credentialManager(folder, &resp.Diagnostics)
+	if cm == nil {
+		return
+	}
 
 	api := c.spec.newAPIValue()
 	pathDomain, pathName, err := escapeCredentialPath(domain, name)
@@ -162,7 +166,10 @@ func (c *credentialCRUD[M]) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	folder, domain, name := c.spec.identity(&plan)
-	cm := c.credentialManager(folder)
+	cm := c.credentialManager(folder, &resp.Diagnostics)
+	if cm == nil {
+		return
+	}
 
 	secrets := c.resolveSecretsUpdate(ctx, &plan, &state, req.Config, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
