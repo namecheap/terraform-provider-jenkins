@@ -249,6 +249,27 @@ func TestAccJenkinsNode_zeroExecutors(t *testing.T) {
 	})
 }
 
+// Jenkins trims the label string it stores, so padded labels would never
+// match state.
+func TestAccJenkinsNode_paddedLabels(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				resource jenkins_node foo {
+				  name      = "tf-acc-node-padded-labels"
+				  remote_fs = "/home/jenkins/agent"
+				  labels    = "team-a "
+				}`,
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)labels.*leading or trailing whitespace`),
+			},
+		},
+	})
+}
+
 // testAccCheckJenkinsNodeConfig runs check on the node's config.xml as Jenkins
 // saved it, so a step asserts the controller and not only the state.
 func testAccCheckJenkinsNodeConfig(name string, check func(nodeConfig) error) resource.TestCheckFunc {

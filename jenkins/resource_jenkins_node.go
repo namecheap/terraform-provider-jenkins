@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -105,7 +106,12 @@ it, which the ` + "`jenkins_node_secret`" + ` data source reads.`,
 				Optional:            true,
 				Computed:            true,
 				Default:             stringdefault.StaticString(""),
-				MarkdownDescription: "A space-separated list of labels used to target the node from job configurations.",
+				MarkdownDescription: "A space-separated list of labels used to target the node from job configurations, with no leading or trailing whitespace.",
+				// Jenkins trims the label string it stores, so a padded value
+				// would differ from state on every plan.
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(regexp.MustCompile(`^(\S(.*\S)?)?$`), "must not have leading or trailing whitespace"),
+				},
 			},
 			"mode": schema.StringAttribute{
 				Optional:            true,

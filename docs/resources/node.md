@@ -62,7 +62,7 @@ resource "jenkins_node" "team_a" {
 
 - `description` (String) A human readable description of the node.
 - `job_restriction` (Attributes) Restricts the node to the jobs whose name matches a regular expression: the node refuses every other build, whatever labels it carries. Needs the Job Restrictions plugin (`job-restrictions`) on the controller. Removing the attribute removes the restriction. A restriction of another type set in the UI is not read, and is replaced when this attribute is set. (see [below for nested schema](#nestedatt--job_restriction))
-- `labels` (String) A space-separated list of labels used to target the node from job configurations.
+- `labels` (String) A space-separated list of labels used to target the node from job configurations, with no leading or trailing whitespace.
 - `mode` (String) How Jenkins schedules builds on the node: `NORMAL` (the default) uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node.
 - `num_executors` (Number) The number of concurrent builds the node can run, at least `1`. Defaults to `1`.
 - `web_socket` (Boolean) The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. Defaults to `false`.
