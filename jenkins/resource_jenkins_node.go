@@ -173,19 +173,26 @@ func (r *nodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	data.ID = data.Name
 
-	// The node exists from here on. Saving it before the write below means a
-	// failed write leaves it in state, tainted and replaced at the next apply,
-	// rather than orphaned on the controller.
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
 	// doCreateItem sets every other attribute. The node properties and the
 	// launcher's WebSocket flag need the node's config.xml.
 	if data.JobRestriction != nil || data.WebSocket.ValueBool() {
-		resp.Diagnostics.Append(r.writeConfig(ctx, data)...)
+		if diags := r.writeConfig(ctx, data); diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			// Deleting the half-configured node lets the next apply simply
+			// create it again. Should the delete fail too, the node is
+			// saved instead, tainted, so it is not orphaned on the controller.
+			if _, err := r.client.DeleteNode(ctx, data.Name.ValueString()); err != nil {
+				resp.Diagnostics.AddError(
+					"Unable to Delete Partially Created Node",
+					"Node "+data.Name.ValueString()+" was created but could not be configured, and deleting it failed. It is kept in state as tainted and will be replaced on the next apply.\n\nError: "+err.Error(),
+				)
+				resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+			}
+			return
+		}
 	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *nodeResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

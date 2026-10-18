@@ -348,6 +348,8 @@ type nodeConfigStore struct {
 	// getErr fails every read, readBackErr only the reads after a post.
 	getErr      error
 	readBackErr error
+	deleted     bool
+	deleteErr   error
 }
 
 var restrictionElement = regexp.MustCompile(`(?s)<com\.synopsys\.arc\.jenkinsci\.plugins\.jobrestrictions\.nodes\.JobRestrictionProperty.*</com\.synopsys\.arc\.jenkinsci\.plugins\.jobrestrictions\.nodes\.JobRestrictionProperty>`)
@@ -357,6 +359,13 @@ func (s *nodeConfigStore) resource() *nodeResource {
 		mockCreateNode: func(_ context.Context, name string, _ int, _, _, _ string, _ ...interface{}) (*jenkins.Node, error) {
 			s.doc = nodeXML(`<launcher class="hudson.slaves.JNLPLauncher"><webSocket>false</webSocket></launcher>`, "")
 			return nil, nil
+		},
+		mockDeleteNode: func(_ context.Context, _ string) (bool, error) {
+			if s.deleteErr != nil {
+				return false, s.deleteErr
+			}
+			s.deleted = true
+			return true, nil
 		},
 		mockGetNodeConfig: func(_ context.Context, _ string, out interface{}) error {
 			if s.getErr != nil {
@@ -542,23 +551,38 @@ func TestNodeResourceCreate(t *testing.T) {
 		})
 	}
 
-	// The node exists once doCreateItem returns. A failed property write must
-	// leave it in state, where Terraform marks it tainted and replaces it on
-	// the next apply, rather than orphan it on the controller.
-	t.Run("property write fails", func(t *testing.T) {
-		store := &nodeConfigStore{postErr: fmt.Errorf("boom")}
-		r := store.resource()
-		s := covMSchema(ctx, r)
+	// The node exists once doCreateItem returns. A failed property write
+	// deletes it and leaves no state, so the next apply creates it again;
+	// only when that delete fails too does the node stay in state, tainted,
+	// rather than orphaned on the controller.
+	writeFails := []struct {
+		name        string
+		deleteErr   error
+		wantDeleted bool
+		wantState   bool
+	}{
+		{"node deleted", nil, true, false},
+		{"delete fails too", fmt.Errorf("gone fishing"), false, true},
+	}
+	for _, tc := range writeFails {
+		t.Run("property write fails, "+tc.name, func(t *testing.T) {
+			store := &nodeConfigStore{postErr: fmt.Errorf("boom"), deleteErr: tc.deleteErr}
+			r := store.resource()
+			s := covMSchema(ctx, r)
 
-		resp := fwresource.CreateResponse{State: tfsdk.State{Schema: s, Raw: covMNull(ctx, s)}}
-		r.Create(ctx, fwresource.CreateRequest{Plan: nodeTestPlan(t, s, restricted)}, &resp)
-		if !resp.Diagnostics.HasError() {
-			t.Fatal("Create should fail when the config.xml post fails")
-		}
-		if resp.State.Raw.IsNull() {
-			t.Error("state is null: the created node would be orphaned")
-		}
-	})
+			resp := fwresource.CreateResponse{State: tfsdk.State{Schema: s, Raw: covMNull(ctx, s)}}
+			r.Create(ctx, fwresource.CreateRequest{Plan: nodeTestPlan(t, s, restricted)}, &resp)
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("Create should fail when the config.xml post fails")
+			}
+			if store.deleted != tc.wantDeleted {
+				t.Errorf("node deleted = %v, want %v", store.deleted, tc.wantDeleted)
+			}
+			if got := !resp.State.Raw.IsNull(); got != tc.wantState {
+				t.Errorf("state saved = %v, want %v", got, tc.wantState)
+			}
+		})
+	}
 }
 
 func TestNodeResourceRead(t *testing.T) {
