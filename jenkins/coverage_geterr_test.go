@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -17,7 +18,10 @@ import (
 // runs — a branch the happy-path acceptance suite never reaches.
 func TestCovR_GetErrors(t *testing.T) {
 	ctx := context.Background()
-	p := &JenkinsProvider{}
+	p, ok := New().(provider.ProviderWithEphemeralResources)
+	if !ok {
+		t.Fatal("New() does not implement provider.ProviderWithEphemeralResources")
+	}
 	bad := tftypes.NewValue(tftypes.String, "not-an-object")
 
 	for _, f := range p.Resources(ctx) {
