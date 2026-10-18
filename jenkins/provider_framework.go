@@ -206,7 +206,7 @@ func clientFromProviderData(data any) (frameworkClient, diag.Diagnostics) {
 	client, ok := data.(*jenkinsAdapter)
 	if !ok {
 		diags.AddError(
-			"Unexpected Resource Configure Type",
+			"Unexpected Provider Data Type",
 			fmt.Sprintf("Expected *jenkinsAdapter, got: %T. Please report this issue to the provider developers.", data),
 		)
 		return nil, diags
