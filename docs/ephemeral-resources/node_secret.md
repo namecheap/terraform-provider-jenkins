@@ -43,7 +43,7 @@ resource "aws_secretsmanager_secret_version" "agent" {
 }
 ```
 
-Jenkins derives the secret from the node name and a key generated in the controller's `JENKINS_HOME`. It survives restarts and re-applies, and changes only when the node is renamed or the controller is rebuilt from an empty `JENKINS_HOME`. Terraform cannot compare a write-only value with what it sent, so bump the version argument of the receiving resource (`secret_string_wo_version` above) in those two cases.
+Jenkins derives the secret from the node name and a key generated in the controller's `JENKINS_HOME`. It survives restarts and re-applies, and changes only when the node is renamed or the controller is rebuilt from an empty `JENKINS_HOME`. Terraform cannot compare a write-only value with what it sent, so bump the version argument of the receiving resource (for example `secret_string_wo_version` of `aws_secretsmanager_secret_version`) in those two cases.
 
 ~> The secret is read from `/computer/<name>/jenkins-agent.jnlp`, an endpoint Jenkins has deprecated. The controller logs a WARNING every time it is fetched: one line per `jenkins_node_secret` for a `terraform plan`, at least two for a `terraform apply`. Jenkins has no supported replacement yet; this ephemeral resource will switch to it once one ships.
 
