@@ -2,7 +2,6 @@ package jenkins
 
 import (
 	"context"
-	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -59,12 +58,10 @@ Manages a credentials domain within a Jenkins credentials store. Domains group c
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
-				Validators: []validator.String{
-					stringvalidator.RegexMatches(
-						regexp.MustCompile(`^[^/]+$`),
-						"must not be empty or include path characters; use the 'folder' property to scope the domain to a folder",
-					),
-				},
+				Validators: append(
+					[]validator.String{stringvalidator.LengthAtLeast(1)},
+					pathSegmentValidators()...,
+				),
 			},
 			"folder": schema.StringAttribute{
 				Optional:            true,

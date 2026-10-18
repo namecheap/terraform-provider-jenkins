@@ -119,7 +119,11 @@ func (r *credentialCertificateResource) Create(ctx context.Context, req resource
 		},
 	}
 
-	if err := cm.Add(ctx, data.Domain.ValueString(), cred); err != nil {
+	pathDomain, _, err := escapeCredentialPath(data.Domain.ValueString(), cred.ID)
+	if err == nil {
+		err = cm.Add(ctx, pathDomain, cred)
+	}
+	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create Resource",
 			"An unexpected error occurred while creating the resource. "+
@@ -146,7 +150,10 @@ func (r *credentialCertificateResource) Read(ctx context.Context, req resource.R
 	cm := r.credentialManager(data.Folder.ValueString())
 
 	cred := CertificateCredentials{}
-	err := cm.GetSingle(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred)
+	pathDomain, pathName, err := escapeCredentialPath(data.Domain.ValueString(), data.Name.ValueString())
+	if err == nil {
+		err = cm.GetSingle(ctx, pathDomain, pathName, &cred)
+	}
 	if err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -204,7 +211,11 @@ func (r *credentialCertificateResource) Update(ctx context.Context, req resource
 		},
 	}
 
-	if err := cm.Update(ctx, data.Domain.ValueString(), data.Name.ValueString(), &cred); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(data.Domain.ValueString(), data.Name.ValueString())
+	if err == nil {
+		err = cm.Update(ctx, pathDomain, pathName, &cred)
+	}
+	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Update Resource",
 			"An unexpected error occurred while attempting to update the resource. "+

@@ -5,13 +5,34 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
 
 // supportedCredentialScopes are the credential scope strings that Jenkins allows to be defined.
 var supportedCredentialScopes = []string{"SYSTEM", "GLOBAL"}
+
+// pathSegmentRegexp matches a value free of the characters that end or re-split
+// a URL path segment.
+var pathSegmentRegexp = regexp.MustCompile(`^[^/?#%;\\]*$`)
+
+// pathSegmentValidators reject a value that cannot be used verbatim as one
+// segment of a Jenkins URL path: one containing / ? # % ; or \, or the
+// dot-segments "." and "..". Credential IDs and domains are interpolated into
+// credentials-store URLs, where such a value could address a different store
+// (issue #250). An empty value is left to the caller.
+func pathSegmentValidators() []validator.String {
+	return []validator.String{
+		stringvalidator.RegexMatches(
+			pathSegmentRegexp,
+			`must not include path characters (/ ? # % ; \); use the 'folder' property to select a folder`,
+		),
+		stringvalidator.NoneOf(".", ".."),
+	}
+}
 
 // folderNameValidator rejects folder paths that contain backslashes. Jenkins
 // uses "/" as its only path separator, so a backslash is always a mistake.

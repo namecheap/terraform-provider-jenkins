@@ -66,7 +66,11 @@ func (r *resourceHelper) credentialManagerForFolder(ctx context.Context, folder 
 func (r *resourceHelper) deleteCredential(ctx context.Context, folder, domain, name string, diags *diag.Diagnostics) {
 	cm := r.credentialManager(folder)
 	tflog.Debug(ctx, "deleting credential", map[string]interface{}{"folder": cm.Folder, "domain": domain, "name": name})
-	if err := cm.Delete(ctx, domain, name); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(domain, name)
+	if err == nil {
+		err = cm.Delete(ctx, pathDomain, pathName)
+	}
+	if err != nil {
 		diags.AddError(
 			"Unable to Delete Resource",
 			"An unexpected error occurred while deleting the resource. "+
@@ -199,6 +203,13 @@ func (r *resourceHelper) schemaCredential(s map[string]schema.Attribute) map[str
 	// Pull in the base schema
 	s = r.schema(s)
 
+	// The credential ID is a URL path segment of the credentials store, so the
+	// base schema's "/" check is not enough (issue #250).
+	if name, ok := s["name"].(schema.StringAttribute); ok {
+		name.Validators = pathSegmentValidators()
+		s["name"] = name
+	}
+
 	// Add credential-specific attributes
 	if _, ok := s["description"]; !ok {
 		s["description"] = schema.StringAttribute{
@@ -218,6 +229,7 @@ func (r *resourceHelper) schemaCredential(s map[string]schema.Attribute) map[str
 				// In-place updates should be possible, but gojenkins does not support move operations
 				stringplanmodifier.RequiresReplace(),
 			},
+			Validators: pathSegmentValidators(),
 		}
 	}
 	if _, ok := s["scope"]; !ok {

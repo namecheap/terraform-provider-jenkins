@@ -73,7 +73,11 @@ func (d *credentialsDataSource) Read(ctx context.Context, req datasource.ReadReq
 	cm := d.client.Credentials()
 	cm.Folder = formatFolderName(data.Folder.ValueString())
 
-	ids, err := cm.List(ctx, data.Domain.ValueString())
+	pathDomain, err := escapePathSegment(data.Domain.ValueString())
+	var ids []string
+	if err == nil {
+		ids, err = cm.List(ctx, pathDomain)
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to List Credentials", err.Error())
 		return

@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -26,6 +27,34 @@ func formatFolderName(name string) string {
 		ret = append(ret, segment)
 	}
 	return strings.Join(ret, "/job/")
+}
+
+// escapePathSegment escapes s for use as one segment of a Jenkins URL path. It
+// rejects "." and "..", which url.PathEscape leaves as they are and the server
+// would resolve as dot-segments (issue #250).
+func escapePathSegment(s string) (string, error) {
+	if s == "." || s == ".." {
+		return "", fmt.Errorf("%q is not a valid URL path segment", s)
+	}
+	return url.PathEscape(s), nil
+}
+
+// escapeCredentialPath escapes a credential's domain and ID for the gojenkins
+// CredentialsManager, which interpolates both into the request URL verbatim.
+// Unescaped, a domain such as "../../credentials/store/system/...?" sends a
+// folder-scoped request to another credentials store (issue #250). This is the
+// runtime counterpart of pathSegmentValidators, for values that do not pass
+// through plan validation (import IDs, data sources).
+func escapeCredentialPath(domain, name string) (string, string, error) {
+	d, err := escapePathSegment(domain)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid credential domain: %w", err)
+	}
+	n, err := escapePathSegment(name)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid credential name: %w", err)
+	}
+	return d, n, nil
 }
 
 // formatFolderID will format a set of folders in the way that Jenkins expects for the "folder" property, with "/job/name/job/name" separators.

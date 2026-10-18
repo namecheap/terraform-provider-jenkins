@@ -58,7 +58,11 @@ func (d *credentialDataSource[M]) Read(ctx context.Context, req datasource.ReadR
 	}
 
 	api := d.reader.newAPIValue()
-	if err := cm.GetSingle(ctx, d.reader.domain(&m).ValueString(), d.reader.name(&m).ValueString(), api); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(d.reader.domain(&m).ValueString(), d.reader.name(&m).ValueString())
+	if err == nil {
+		err = cm.GetSingle(ctx, pathDomain, pathName, api)
+	}
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to Read Data Source", credentialDSReadErrDetail+err.Error())
 		return
 	}
