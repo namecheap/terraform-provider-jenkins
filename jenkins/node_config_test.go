@@ -302,6 +302,18 @@ func TestUpdateNodeConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("success with an HTML body", func(t *testing.T) {
+		srv := covBServer(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<html><body>saved</body></html>")
+		})
+		defer srv.Close()
+
+		if err := covBClient(t, srv).UpdateNodeConfig(context.Background(), "agent1", []byte("<slave/>")); err != nil {
+			t.Fatalf("UpdateNodeConfig: %v, want success on a 2xx response", err)
+		}
+	})
+
 	t.Run("error status", func(t *testing.T) {
 		srv := covBServer(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)

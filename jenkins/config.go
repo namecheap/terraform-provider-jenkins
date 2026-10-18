@@ -533,10 +533,13 @@ func (j *jenkinsAdapter) GetNodeConfig(ctx context.Context, name string, out int
 // rebuilds the node from it and swaps it in place.
 func (j *jenkinsAdapter) UpdateNodeConfig(ctx context.Context, name string, config []byte) error {
 	resp, err := j.Requester.PostXML(ctx, "/computer/"+url.PathEscape(name)+"/config.xml", string(config), nil, nil)
-	// Requester decodes every response as JSON, so an HTML error page comes
-	// back as a decoding error next to the status that explains it.
-	if resp != nil && resp.StatusCode >= 400 {
-		return fmt.Errorf("unexpected status %d updating config for node %q", resp.StatusCode, name)
+	// Requester decodes every response body as JSON, so any HTML body, on
+	// success or failure, comes back as a decoding error. The status decides.
+	if resp != nil {
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("unexpected status %d updating config for node %q", resp.StatusCode, name)
+		}
+		return nil
 	}
 	return err
 }
