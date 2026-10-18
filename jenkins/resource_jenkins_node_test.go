@@ -344,7 +344,10 @@ type nodeConfigStore struct {
 	// dropRestriction mimics a controller without the job-restrictions
 	// plugin, which drops the property it cannot load and still answers 200.
 	dropRestriction bool
-	postErr         error
+	// rewrite, when set, stands for any other change Jenkins makes to the
+	// posted document before storing it.
+	rewrite func(doc string) string
+	postErr error
 	// getErr fails every read, readBackErr only the reads after a post.
 	getErr      error
 	readBackErr error
@@ -384,6 +387,9 @@ func (s *nodeConfigStore) resource() *nodeResource {
 			s.doc = string(config)
 			if s.dropRestriction {
 				s.doc = restrictionElement.ReplaceAllString(s.doc, "")
+			}
+			if s.rewrite != nil {
+				s.doc = s.rewrite(s.doc)
 			}
 			return nil
 		},
@@ -467,6 +473,49 @@ func TestNodeResourceUpdate(t *testing.T) {
 		r.Update(ctx, fwresource.UpdateRequest{Plan: nodeTestPlan(t, s, planned), State: nodeTestState(t, s, nodeTestModel())}, &resp)
 		if !resp.Diagnostics.HasError() || !strings.Contains(fmt.Sprint(resp.Diagnostics), "job-restrictions") {
 			t.Fatalf("Update diagnostics = %v, want an error naming the job-restrictions plugin", resp.Diagnostics)
+		}
+	})
+
+	t.Run("web socket dropped by Jenkins", func(t *testing.T) {
+		store := &nodeConfigStore{
+			doc:     nodeXML(`<launcher class="hudson.slaves.JNLPLauncher"/>`, ""),
+			rewrite: func(doc string) string { return strings.ReplaceAll(doc, "<webSocket>true</webSocket>", "") },
+		}
+		r := store.resource()
+		s := covMSchema(ctx, r)
+
+		resp := fwresource.UpdateResponse{State: tfsdk.State{Schema: s}}
+		r.Update(ctx, fwresource.UpdateRequest{Plan: nodeTestPlan(t, s, planned), State: nodeTestState(t, s, nodeTestModel())}, &resp)
+		if !resp.Diagnostics.HasError() || !strings.Contains(fmt.Sprint(resp.Diagnostics), "WebSocket") {
+			t.Fatalf("Update diagnostics = %v, want an error naming the WebSocket option", resp.Diagnostics)
+		}
+	})
+
+	// State holds what Jenkins stored, not the plan, so a value Jenkins
+	// rewrites surfaces at apply instead of as a diff on every later plan.
+	t.Run("state from the saved config", func(t *testing.T) {
+		store := &nodeConfigStore{
+			doc: nodeXML(`<launcher class="hudson.slaves.JNLPLauncher"/>`, ""),
+			rewrite: func(doc string) string {
+				return strings.ReplaceAll(doc, "<label>platform </label>", "<label>platform</label>")
+			},
+		}
+		r := store.resource()
+		s := covMSchema(ctx, r)
+		padded := planned
+		padded.Labels = types.StringValue("platform ")
+
+		resp := fwresource.UpdateResponse{State: tfsdk.State{Schema: s}}
+		r.Update(ctx, fwresource.UpdateRequest{Plan: nodeTestPlan(t, s, padded), State: nodeTestState(t, s, nodeTestModel())}, &resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("Update: %v", resp.Diagnostics)
+		}
+		var state nodeResourceModel
+		if d := resp.State.Get(ctx, &state); d.HasError() {
+			t.Fatalf("state.Get: %v", d)
+		}
+		if state.Labels.ValueString() != "platform" {
+			t.Errorf("labels = %q, want the stored %q", state.Labels.ValueString(), "platform")
 		}
 	})
 

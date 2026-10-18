@@ -176,7 +176,8 @@ func (r *nodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 	// doCreateItem sets every other attribute. The node properties and the
 	// launcher's WebSocket flag need the node's config.xml.
 	if data.JobRestriction != nil || data.WebSocket.ValueBool() {
-		if diags := r.writeConfig(ctx, data); diags.HasError() {
+		saved, diags := r.writeConfig(ctx, data)
+		if diags.HasError() {
 			resp.Diagnostics.Append(diags...)
 			// Deleting the half-configured node lets the next apply simply
 			// create it again. Should the delete fail too, the node is
@@ -190,6 +191,7 @@ func (r *nodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 			}
 			return
 		}
+		data.fromConfig(saved)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -218,19 +220,7 @@ func (r *nodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	}
 
 	data.ID = data.Name
-	data.NumExecutors = types.Int64Value(cfg.NumExecutors)
-	data.Description = types.StringValue(cfg.Description)
-	data.RemoteFS = types.StringValue(cfg.RemoteFS)
-	data.Labels = types.StringValue(cfg.Label)
-	data.Mode = types.StringValue(cfg.mode())
-	data.WebSocket = types.BoolValue(cfg.webSocket())
-	data.JobRestriction = nil
-	if jr := cfg.jobRestriction(); jr != nil {
-		data.JobRestriction = &nodeJobRestrictionModel{
-			Regex:          types.StringValue(jr.Regex),
-			CheckShortName: types.BoolValue(jr.CheckShortName),
-		}
-	}
+	data.fromConfig(cfg)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -243,27 +233,30 @@ func (r *nodeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	resp.Diagnostics.Append(r.writeConfig(ctx, data)...)
+	saved, diags := r.writeConfig(ctx, data)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	data.ID = data.Name
+	data.fromConfig(saved)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 // writeConfig applies the planned attributes to the node's config.xml with a
-// read-modify-write, so what the resource does not manage keeps its value.
-// Jenkins swaps the rebuilt node in place: a connected agent stays connected.
-func (r *nodeResource) writeConfig(ctx context.Context, data nodeResourceModel) diag.Diagnostics {
+// read-modify-write, so what the resource does not manage keeps its value,
+// and returns the configuration Jenkins saved. Jenkins swaps the rebuilt node
+// in place: a connected agent stays connected.
+func (r *nodeResource) writeConfig(ctx context.Context, data nodeResourceModel) (nodeConfig, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	name := data.Name.ValueString()
-	fail := func(action string, err error) diag.Diagnostics {
+	fail := func(action string, err error) (nodeConfig, diag.Diagnostics) {
 		diags.AddError(
 			"Unable to Update Node Configuration",
 			"An unexpected error occurred while "+action+" the configuration of node "+name+".\n\nError: "+err.Error(),
 		)
-		return diags
+		return nodeConfig{}, diags
 	}
 
 	var cfg nodeConfig
@@ -281,22 +274,43 @@ func (r *nodeResource) writeConfig(ctx context.Context, data nodeResourceModel) 
 		return fail("writing", err)
 	}
 
-	if data.JobRestriction == nil {
-		return diags
-	}
-	// Jenkins drops a property whose class it cannot load and still answers
-	// 200, so a missing plugin only shows in what it saved.
+	// Jenkins answers 200 even when it drops what it cannot load: a property
+	// whose plugin is missing, or a launcher field older cores do not know.
 	var saved nodeConfig
 	if err := r.client.GetNodeConfig(ctx, name, &saved); err != nil {
 		return fail("reading back", err)
 	}
-	if saved.jobRestriction() == nil {
+	if data.JobRestriction != nil && saved.jobRestriction() == nil {
 		diags.AddError(
 			"Unable to Update Node Configuration",
 			"Jenkins did not keep the job restriction of node "+name+". The Job Restrictions plugin (job-restrictions) must be installed on the controller.",
 		)
 	}
-	return diags
+	if data.WebSocket.ValueBool() && !saved.webSocket() {
+		diags.AddError(
+			"Unable to Update Node Configuration",
+			"Jenkins did not keep the WebSocket option of node "+name+". It needs Jenkins 2.217 or later.",
+		)
+	}
+	return saved, diags
+}
+
+// fromConfig fills the attributes the resource manages from a node's
+// config.xml.
+func (data *nodeResourceModel) fromConfig(cfg nodeConfig) {
+	data.NumExecutors = types.Int64Value(cfg.NumExecutors)
+	data.Description = types.StringValue(cfg.Description)
+	data.RemoteFS = types.StringValue(cfg.RemoteFS)
+	data.Labels = types.StringValue(cfg.Label)
+	data.Mode = types.StringValue(cfg.mode())
+	data.WebSocket = types.BoolValue(cfg.webSocket())
+	data.JobRestriction = nil
+	if jr := cfg.jobRestriction(); jr != nil {
+		data.JobRestriction = &nodeJobRestrictionModel{
+			Regex:          types.StringValue(jr.Regex),
+			CheckShortName: types.BoolValue(jr.CheckShortName),
+		}
+	}
 }
 
 func (r *nodeResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
