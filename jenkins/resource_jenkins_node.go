@@ -61,7 +61,8 @@ func (r *nodeResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 Manages a permanent (static) agent node within Jenkins, launched as an inbound agent.
 
 Changing ` + "`name`" + ` replaces the node. Every other attribute is updated in place through the
-node's ` + "`config.xml`" + `, and a connected agent stays connected. Settings the resource does not
+node's ` + "`config.xml`" + `, and a connected agent stays connected. A connected agent picks up a
+new ` + "`remote_fs`" + ` or ` + "`web_socket`" + ` only when it next connects. Settings the resource does not
 manage, such as other node properties or the agent's work directory options, keep the values
 they have on the controller. Connect the agent out-of-band with the secret Jenkins issues for
 it, which the ` + "`jenkins_node_secret`" + ` data source reads.`,
@@ -100,7 +101,7 @@ it, which the ` + "`jenkins_node_secret`" + ` data source reads.`,
 			},
 			"remote_fs": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The absolute path to the agent's root/working directory on the agent machine (e.g. `/home/jenkins/agent`).",
+				MarkdownDescription: "The absolute path to the agent's root/working directory on the agent machine (e.g. `/home/jenkins/agent`). A connected agent keeps using the previous path until it reconnects.",
 			},
 			"labels": schema.StringAttribute{
 				Optional:            true,
@@ -126,7 +127,7 @@ it, which the ` + "`jenkins_node_secret`" + ` data source reads.`,
 				Optional:            true,
 				Computed:            true,
 				Default:             booldefault.StaticBool(false),
-				MarkdownDescription: "The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. Defaults to `false`.",
+				MarkdownDescription: "The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. A connected agent keeps its current transport until it reconnects. Defaults to `false`.",
 			},
 			"job_restriction": schema.SingleNestedAttribute{
 				Optional:            true,

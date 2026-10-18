@@ -5,7 +5,8 @@ subcategory: ""
 description: |-
   Manages a permanent (static) agent node within Jenkins, launched as an inbound agent.
   Changing name replaces the node. Every other attribute is updated in place through the
-  node's config.xml, and a connected agent stays connected. Settings the resource does not
+  node's config.xml, and a connected agent stays connected. A connected agent picks up a
+  new remote_fs or web_socket only when it next connects. Settings the resource does not
   manage, such as other node properties or the agent's work directory options, keep the values
   they have on the controller. Connect the agent out-of-band with the secret Jenkins issues for
   it, which the jenkins_node_secret data source reads.
@@ -16,7 +17,8 @@ description: |-
 Manages a permanent (static) agent node within Jenkins, launched as an inbound agent.
 
 Changing `name` replaces the node. Every other attribute is updated in place through the
-node's `config.xml`, and a connected agent stays connected. Settings the resource does not
+node's `config.xml`, and a connected agent stays connected. A connected agent picks up a
+new `remote_fs` or `web_socket` only when it next connects. Settings the resource does not
 manage, such as other node properties or the agent's work directory options, keep the values
 they have on the controller. Connect the agent out-of-band with the secret Jenkins issues for
 it, which the `jenkins_node_secret` data source reads.
@@ -56,7 +58,7 @@ resource "jenkins_node" "team_a" {
 ### Required
 
 - `name` (String) The name of the node. Changing this forces a new node to be created.
-- `remote_fs` (String) The absolute path to the agent's root/working directory on the agent machine (e.g. `/home/jenkins/agent`).
+- `remote_fs` (String) The absolute path to the agent's root/working directory on the agent machine (e.g. `/home/jenkins/agent`). A connected agent keeps using the previous path until it reconnects.
 
 ### Optional
 
@@ -65,7 +67,7 @@ resource "jenkins_node" "team_a" {
 - `labels` (String) A space-separated list of labels used to target the node from job configurations, with no leading or trailing whitespace.
 - `mode` (String) How Jenkins schedules builds on the node: `NORMAL` (the default) uses the node as much as possible, including for jobs with no label; `EXCLUSIVE` only builds jobs whose label expression matches the node.
 - `num_executors` (Number) The number of concurrent builds the node can run, at least `1`. Defaults to `1`.
-- `web_socket` (Boolean) The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. Defaults to `false`.
+- `web_socket` (Boolean) The *Use WebSocket* option of the inbound launcher: the agent connects over WebSocket through the controller's HTTP(S) port instead of the TCP agent port. Jenkins hands it to agents that read their launch arguments from the controller; an agent started with `-webSocket` connects over WebSocket whatever this is set to. A connected agent keeps its current transport until it reconnects. Defaults to `false`.
 
 ### Read-Only
 
