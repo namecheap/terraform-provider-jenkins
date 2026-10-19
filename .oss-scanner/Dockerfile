@@ -14,8 +14,8 @@
 
 # Go is at least go.mod's toolchain version; Jenkins is the LTS line the
 # acceptance tests use, in its "-lts-" tag form so Dependabot stays on LTS.
-FROM golang:1.26.9-trixie AS go
-FROM hashicorp/terraform:1.15.1 AS terraform
+FROM golang:1.27.2-trixie AS go
+FROM hashicorp/terraform:1.16.6 AS terraform
 FROM jenkins/jenkins:2.580.1-lts-jdk21
 
 # The scanner adds its own layer with apt and runs as root in /src.
