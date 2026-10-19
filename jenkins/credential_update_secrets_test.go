@@ -270,6 +270,11 @@ const (
 	azureRoot    = "com.microsoft.azure.util.AzureCredentials"
 )
 
+// errDroppedRequiredSecret matches the config validator errors for a required
+// secret that is set neither plainly nor write-only (ExactlyOneOf), or whose
+// write-only version is kept without it (RequiredTogether).
+var errDroppedRequiredSecret = regexp.MustCompile("Missing Attribute Configuration|Invalid Attribute Combination")
+
 func TestCredentialUpdateResendsSecrets(t *testing.T) {
 	ctx := context.Background()
 	str, null := types.StringValue, types.StringNull()
@@ -549,6 +554,53 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 			wantSent:   map[string]string{"description": "new"},
 			wantInBody: []string{"<clientSecret></clientSecret>", "<certificateId>cert-1</certificateId>"},
 		},
+
+		// Switching an Azure credential between a client secret and a
+		// certificate sends the new authentication and clears the old one; the
+		// client secret in state is not re-sent.
+		{
+			name: "azure/switching from a client secret to a certificate clears the client secret", resource: newCredentialAzureServicePrincipalResource,
+			plan:       azure(null, str("cert-1")),
+			state:      azure(str("cs"), null),
+			stored:     storedCredentialXML(azureRoot, "clientSecret"),
+			wantSent:   map[string]string{"description": "new"},
+			wantInBody: []string{"<clientSecret></clientSecret>", "<certificateId>cert-1</certificateId>"},
+		},
+		{
+			name: "azure/switching from a write-only client secret to a certificate clears the client secret", resource: newCredentialAzureServicePrincipalResource,
+			plan: azure(null, str("cert-1")),
+			state: func() any {
+				m := azure(null, null)
+				m.ClientSecretWoVersion = str("1")
+				return m
+			}(),
+			stored:     storedCredentialXML(azureRoot, "clientSecret"),
+			wantSent:   map[string]string{"description": "new"},
+			wantInBody: []string{"<clientSecret></clientSecret>", "<certificateId>cert-1</certificateId>"},
+		},
+		{
+			name: "azure/switching from a certificate to a client secret sends it and clears the certificate", resource: newCredentialAzureServicePrincipalResource,
+			plan:       azure(str("cs"), null),
+			state:      azure(null, str("cert-1")),
+			wantSent:   map[string]string{"description": "new"},
+			wantInBody: []string{"<clientSecret>cs</clientSecret>", "<certificateId></certificateId>"},
+		},
+		{
+			name: "azure/switching from a certificate to a write-only client secret sends it and clears the certificate", resource: newCredentialAzureServicePrincipalResource,
+			plan: func() any {
+				m := azure(null, null)
+				m.ClientSecretWoVersion = str("1")
+				return m
+			}(),
+			config: func() any {
+				m := azure(null, null)
+				m.ClientSecretWo, m.ClientSecretWoVersion = str("wo-cs"), str("1")
+				return m
+			}(),
+			state:      azure(null, str("cert-1")),
+			wantSent:   map[string]string{"description": "new"},
+			wantInBody: []string{"<clientSecret>wo-cs</clientSecret>", "<certificateId></certificateId>"},
+		},
 		{
 			name: "aws/role-only credential sends an empty secret key without a check", resource: newCredentialAwsResource,
 			plan:     aws(str("")),
@@ -605,6 +657,14 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 			name: "username/server error reading the stored credential fails without posting", resource: newCredentialUsernameResource,
 			plan:      username(null, null, null),
 			getStatus: http.StatusInternalServerError,
+			wantGet:   true, wantErr: updateErr,
+		},
+		{
+			// A credential deleted outside Terraform answers 404, which must not
+			// count as Jenkins holding no value.
+			name: "username/stored credential not found fails without posting", resource: newCredentialUsernameResource,
+			plan:      username(null, null, null),
+			getStatus: http.StatusNotFound,
 			wantGet:   true, wantErr: updateErr,
 		},
 		{
@@ -950,6 +1010,189 @@ func TestCredentialCreateThenUpdate(t *testing.T) {
 				t.Fatalf("Update: %v", resp.Diagnostics)
 			}
 			checkPosted(t, got[len(got)-1].body, tc.wantSent, tc.wantUnsent, tc.wantInBody)
+		})
+	}
+}
+
+// TestCredentialUpdateReportsEveryUnmanagedSecret checks that an update with
+// several optional secrets Terraform has never managed reports each one that
+// Jenkins holds, not only the first. No credential has two such secrets, so
+// the SSH spec is given a second: its private-key source, as if the key were
+// optional.
+func TestCredentialUpdateReportsEveryUnmanagedSecret(t *testing.T) {
+	ctx := context.Background()
+	str, null := types.StringValue, types.StringNull()
+
+	spec := sshCredentialSpec()
+	spec.secretFields[0].element = "privateKeySource"
+	newResource := func() resource.Resource {
+		return &credentialSSHResource{credentialCRUD: newCredentialCRUD(spec)}
+	}
+	plan := &credentialSSHResourceModel{
+		Name: str("x"), Folder: null, Description: str("new"), Domain: str("_"), Scope: str("GLOBAL"),
+		Username: str("u"), PrivateKey: null, PrivateKeyWo: null, PrivateKeyWoVersion: null, Passphrase: null,
+	}
+
+	cases := []struct {
+		name string
+		// stored lists the secret elements Jenkins holds.
+		stored []string
+		// wantErrAttrs: the update must fail without posting, with one
+		// "Update Would Erase" error for each of these attributes, in order.
+		wantErrAttrs []string
+	}{
+		{name: "both held reports both", stored: []string{"privateKeySource", "passphrase"}, wantErrAttrs: []string{"privatekey", "passphrase"}},
+		{name: "only the first held reports it", stored: []string{"privateKeySource"}, wantErrAttrs: []string{"privatekey"}},
+		{name: "only the second held reports it", stored: []string{"passphrase"}, wantErrAttrs: []string{"passphrase"}},
+		{name: "neither held proceeds"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &credentialStoreFake{stored: storedCredentialXML(sshRoot, tc.stored...)}
+			r, s := configuredCredentialResource(ctx, t, newResource, startCredentialStoreFake(t, fake))
+			resp := runCredentialUpdate(ctx, t, r, s, plan, plan, nil)
+
+			const credPath = "/credentials/store/system/domain/_/credential/x/config.xml"
+			want := []string{http.MethodGet + " " + credPath + "/"}
+			if len(tc.wantErrAttrs) == 0 {
+				want = append(want, http.MethodPost+" "+credPath)
+			}
+			if gotReqs := requestLines(fake.requests()); strings.Join(gotReqs, "\n") != strings.Join(want, "\n") {
+				t.Fatalf("requests = %q, want %q", gotReqs, want)
+			}
+
+			errs := resp.Diagnostics.Errors()
+			if len(errs) != len(tc.wantErrAttrs) {
+				t.Fatalf("diagnostics = %v, want one %q error for each of %q", resp.Diagnostics, eraseErr, tc.wantErrAttrs)
+			}
+			for i, attr := range tc.wantErrAttrs {
+				dp, ok := errs[i].(diag.DiagnosticWithPath)
+				if errs[i].Summary() != eraseErr || !ok || !dp.Path().Equal(path.Root(attr)) {
+					t.Errorf("error %d = %v, want %q on %q", i, errs[i], eraseErr, attr)
+				}
+			}
+		})
+	}
+}
+
+// TestCredentialXMLElements checks the stored-credential decoder on its own.
+// Through xml.Unmarshal, encoding/xml also rejects a decoder that returns
+// before the end of its element; called directly, the decoder must report a
+// cut-short read itself rather than the elements read so far.
+func TestCredentialXMLElements(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     []string
+		wantErr  bool
+	}{
+		{
+			name: "complete credential lists its direct children",
+			in: "<" + sshRoot + "><scope>GLOBAL</scope><passphrase><secret-redacted/></passphrase>" +
+				"<privateKeySource class=\"k\"><privateKey><secret-redacted/></privateKey></privateKeySource></" + sshRoot + ">",
+			want: []string{"scope", "passphrase", "privateKeySource"},
+		},
+		{name: "truncated between children", in: "<" + usernameRoot + "><scope>GLOBAL</scope><id>x</id>", wantErr: true},
+		{name: "truncated inside a child", in: "<" + sshRoot + "><scope>GLOBAL</scope><privateKeySource class=\"k\"><privateKey>", wantErr: true},
+		{name: "malformed between children", in: "<" + usernameRoot + "><scope>GLOBAL</scope></nope><password><secret-redacted/></password></" + usernameRoot + ">", wantErr: true},
+		{name: "malformed inside a child", in: "<" + usernameRoot + "><scope>GLOBAL</scope><id>x</nope></" + usernameRoot + ">", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := xml.NewDecoder(strings.NewReader(tc.in))
+			tok, err := d.Token()
+			if err != nil {
+				t.Fatalf("reading the root element: %v", err)
+			}
+			var got credentialXMLElements
+			err = got.UnmarshalXML(d, tok.(xml.StartElement))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("UnmarshalXML = nil with names %v, want an error", got.names)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UnmarshalXML: %v", err)
+			}
+			if len(got.names) != len(tc.want) {
+				t.Errorf("names = %v, want %q", got.names, tc.want)
+			}
+			for _, el := range tc.want {
+				if !got.names[el] {
+					t.Errorf("names = %v, want %q among them", got.names, el)
+				}
+			}
+		})
+	}
+}
+
+// TestCredentialRequiredSecretCannotBeDropped checks that a configuration that
+// drops a required secret, such as a managed write-only SSH private key or
+// certificate keystore, fails validation. Update has no value to send for it
+// and would post it empty, erasing the secret Jenkins holds.
+func TestCredentialRequiredSecretCannotBeDropped(t *testing.T) {
+	ctx := context.Background()
+	str, null := types.StringValue, types.StringNull()
+
+	ssh := func(key, wo, ver types.String) *credentialSSHResourceModel {
+		return &credentialSSHResourceModel{
+			Name: str("x"), Folder: null, Description: str("new"), Domain: str("_"), Scope: str("GLOBAL"),
+			Username: str("u"), PrivateKey: key, PrivateKeyWo: wo, PrivateKeyWoVersion: ver, Passphrase: null,
+		}
+	}
+	certificate := func(keystore, wo, ver types.String) *credentialCertificateResourceModel {
+		return &credentialCertificateResourceModel{
+			Name: str("x"), Folder: null, Description: str("new"), Domain: str("_"), Scope: str("GLOBAL"),
+			Keystore: keystore, KeystoreWo: wo, KeystoreWoVersion: ver, Password: str("pw"),
+		}
+	}
+
+	cases := []struct {
+		name     string
+		resource func() resource.Resource
+		config   any
+		wantErr  bool
+	}{
+		{name: "ssh/write-only private key is valid", resource: newCredentialSSHResource, config: ssh(null, str("KEY"), str("1"))},
+		{name: "ssh/plain private key is valid", resource: newCredentialSSHResource, config: ssh(str("KEY"), null, null)},
+		{name: "ssh/dropped private key is rejected", resource: newCredentialSSHResource, config: ssh(null, null, null), wantErr: true},
+		{name: "ssh/dropped write-only private key with its version kept is rejected", resource: newCredentialSSHResource, config: ssh(null, null, str("1")), wantErr: true},
+		{name: "certificate/write-only keystore is valid", resource: newCredentialCertificateResource, config: certificate(null, str("S1M="), str("1"))},
+		{name: "certificate/plain keystore is valid", resource: newCredentialCertificateResource, config: certificate(str("S1M="), null, null)},
+		{name: "certificate/dropped keystore is rejected", resource: newCredentialCertificateResource, config: certificate(null, null, null), wantErr: true},
+		{name: "certificate/dropped write-only keystore with its version kept is rejected", resource: newCredentialCertificateResource, config: certificate(null, null, str("1")), wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.resource()
+			var sr resource.SchemaResponse
+			r.Schema(ctx, resource.SchemaRequest{}, &sr)
+			req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: sr.Schema, Raw: toPlan(ctx, t, sr.Schema, tc.config).Raw}}
+			// Each validator is run with its own response, as the framework does:
+			// a validator may replace the diagnostics it is given.
+			var diags diag.Diagnostics
+			for _, v := range r.(resource.ResourceWithConfigValidators).ConfigValidators(ctx) {
+				var resp resource.ValidateConfigResponse
+				v.ValidateResource(ctx, req, &resp)
+				diags.Append(resp.Diagnostics...)
+			}
+			if !tc.wantErr {
+				if diags.HasError() {
+					t.Fatalf("validation: %v", diags)
+				}
+				return
+			}
+			if !diags.HasError() {
+				t.Fatal("validation passed, want an error")
+			}
+			for _, d := range diags.Errors() {
+				if !errDroppedRequiredSecret.MatchString(d.Summary()) {
+					t.Errorf("error %q, want one matching %s", d.Summary(), errDroppedRequiredSecret)
+				}
+			}
 		})
 	}
 }
