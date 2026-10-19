@@ -106,6 +106,7 @@ Then `tofu init` (or `terraform init`) downloads and verifies the provider. GPG-
 | [`jenkins_folder`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/folder) | Read an existing folder |
 | [`jenkins_job`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/job) | Read an existing job |
 | [`jenkins_view`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/view) | Read an existing view |
+| [`jenkins_node_secret`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/node_secret) | Read an inbound agent's connection secret, stored in state |
 | [`jenkins_plugin`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/plugin) | Query installed plugin version |
 | [`jenkins_credential_aws`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_aws) | Read an AWS credential |
 | [`jenkins_credential_azure_service_principal`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_azure_service_principal) | Read an Azure SP credential |
@@ -114,6 +115,14 @@ Then `tofu init` (or `terraform init`) downloads and verifies the provider. GPG-
 | [`jenkins_credential_ssh`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_ssh) | Read an SSH credential |
 | [`jenkins_credential_username`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_username) | Read a username/password credential |
 | [`jenkins_credential_vault_approle`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/data-sources/credential_vault_approle) | Read a Vault AppRole credential |
+
+## Ephemeral Resources
+
+Ephemeral resource values never reach the plan or the state.
+
+| Ephemeral Resource | Description |
+|---|---|
+| [`jenkins_node_secret`](https://registry.terraform.io/providers/namecheap/jenkins/latest/docs/ephemeral-resources/node_secret) | Read an inbound agent's connection secret, for a write-only argument |
 
 ## Provider Configuration
 

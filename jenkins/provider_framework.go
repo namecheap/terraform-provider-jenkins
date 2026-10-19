@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -16,8 +18,11 @@ func New() provider.Provider {
 	return &JenkinsProvider{}
 }
 
-// Ensure the implementation satisfies the provider.Provider interface.
-var _ provider.Provider = &JenkinsProvider{}
+// Ensure the implementation satisfies the provider interfaces.
+var (
+	_ provider.Provider                       = &JenkinsProvider{}
+	_ provider.ProviderWithEphemeralResources = &JenkinsProvider{}
+)
 
 type JenkinsProvider struct{}
 
@@ -186,6 +191,28 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 	}
 	resp.ResourceData = client
 	resp.DataSourceData = client
+	resp.EphemeralResourceData = client
+}
+
+// clientFromProviderData resolves the client that Configure hands to every
+// resource, data source and ephemeral resource. It returns a nil client and
+// no diagnostic while the provider is not configured yet.
+func clientFromProviderData(data any) (frameworkClient, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if data == nil {
+		return nil, diags
+	}
+
+	client, ok := data.(*jenkinsAdapter)
+	if !ok {
+		diags.AddError(
+			"Unexpected Provider Data Type",
+			fmt.Sprintf("Expected *jenkinsAdapter, got: %T. Please report this issue to the provider developers.", data),
+		)
+		return nil, diags
+	}
+
+	return client, diags
 }
 
 // DataSources satisfies the provider.Provider interface for JenkinsProvider.
@@ -209,6 +236,14 @@ func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.D
 		newFoldersDataSource,
 		newNodesDataSource,
 		newCredentialsDataSource,
+	}
+}
+
+// EphemeralResources satisfies the provider.ProviderWithEphemeralResources
+// interface for JenkinsProvider.
+func (p *JenkinsProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		newNodeSecretEphemeralResource,
 	}
 }
 

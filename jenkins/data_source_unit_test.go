@@ -62,7 +62,12 @@ func TestDataSourceHelperConfigure_wrongType(t *testing.T) {
 	resp := &datasource.ConfigureResponse{}
 	d.Configure(context.Background(), datasource.ConfigureRequest{ProviderData: "unexpected-string"}, resp)
 	if !resp.Diagnostics.HasError() {
-		t.Error("Configure() with wrong type should return an error")
+		t.Fatal("Configure() with wrong type should return an error")
+	}
+	// The helper is shared by resources, data sources and ephemeral
+	// resources, so the title must not name one kind.
+	if got := resp.Diagnostics.Errors()[0].Summary(); got != "Unexpected Provider Data Type" {
+		t.Errorf("summary = %q, want %q", got, "Unexpected Provider Data Type")
 	}
 }
 

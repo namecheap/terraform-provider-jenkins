@@ -4,14 +4,14 @@ page_title: "jenkins_node_secret Data Source - jenkins"
 subcategory: ""
 description: |-
   Get the connection secret of an inbound (JNLP) agent node, as passed to agent.jar -secret. Requires the Agent/Connect permission on the node.
-  The secret is marked sensitive but is stored in plain text in the Terraform state; secure the state backend accordingly.
+  The secret is marked sensitive but is stored in plain text in the Terraform state; secure the state backend accordingly, or use the jenkins_node_secret ephemeral resource to keep it out of the state.
 ---
 
 # jenkins_node_secret (Data Source)
 
 Get the connection secret of an inbound (JNLP) agent node, as passed to `agent.jar -secret`. Requires the Agent/Connect permission on the node.
 
-The secret is marked sensitive but is stored in plain text in the Terraform state; secure the state backend accordingly.
+The secret is marked sensitive but is stored in plain text in the Terraform state; secure the state backend accordingly, or use the `jenkins_node_secret` ephemeral resource to keep it out of the state.
 
 ## Example Usage
 
