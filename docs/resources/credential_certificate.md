@@ -36,8 +36,8 @@ resource "jenkins_credential_certificate" "example" {
 - `folder` (String) The folder namespace to store the resource in. If not set will default to global Jenkins.
 - `keystore` (String, Sensitive) The base64-encoded contents of a PKCS#12 keystore holding the certificate and its private key. Load one from disk with the `filebase64(...)` Terraform function.
 - `keystore_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The base64-encoded contents of a PKCS#12 keystore holding the certificate and its private key. Write-only: the value is used only during apply and is **never stored in Terraform state or plan**. Requires Terraform >= 1.11, conflicts with `keystore`, and must be paired with `keystore_wo_version`.
-- `keystore_wo_version` (String) Version identifier for `keystore_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `keystore_wo` to Jenkins. Required when `keystore_wo` is set.
-- `password` (String, Sensitive) The password protecting the keystore. Omit for a keystore with no password.
+- `keystore_wo_version` (String) Version identifier for `keystore_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `keystore_wo` to Jenkins. Any other update of the credential re-sends it too, as Jenkins cannot keep a stored secret across an update. Required when `keystore_wo` is set.
+- `password` (String, Sensitive) The password protecting the keystore. Omit it, or set it to `""`, for a keystore with no password. It is re-sent with the keystore on every update, replacing any password set within Jenkins.
 - `scope` (String) The visibility of the credentials to Jenkins agents. This must be set to either "GLOBAL" or "SYSTEM". If not set will default to "GLOBAL".
 
 ### Read-Only

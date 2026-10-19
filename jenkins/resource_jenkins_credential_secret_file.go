@@ -51,7 +51,6 @@ func secretFileCredentialSpec() credentialSpec[credentialSecretFileResourceModel
 			name:         "secretbytes",
 			hasWriteOnly: true,
 			plainValue:   func(m *credentialSecretFileResourceModel) types.String { return m.SecretBytes },
-			woVersion:    func(m *credentialSecretFileResourceModel) types.String { return m.SecretBytesWoVersion },
 		}},
 		build: func(m *credentialSecretFileResourceModel, secrets map[string]string) interface{} {
 			cred := &jenkins.FileCredentials{

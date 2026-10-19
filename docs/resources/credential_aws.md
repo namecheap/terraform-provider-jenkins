@@ -49,7 +49,7 @@ resource "jenkins_credential_aws" "example" {
 - `scope` (String) The visibility of the credentials to Jenkins agents. This must be set to either "GLOBAL" or "SYSTEM". If not set will default to "GLOBAL".
 - `secret_key` (String, Sensitive) An AWS secret access key. This is the private part of the key pair used to authenticate with AWS services.
 - `secret_key_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) An AWS secret access key. This is the private part of the key pair used to authenticate with AWS services. Write-only: the value is used only during apply and is **never stored in Terraform state or plan**. Requires Terraform >= 1.11, conflicts with `secret_key`, and must be paired with `secret_key_wo_version`.
-- `secret_key_wo_version` (String) Version identifier for `secret_key_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `secret_key_wo` to Jenkins. Required when `secret_key_wo` is set.
+- `secret_key_wo_version` (String) Version identifier for `secret_key_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `secret_key_wo` to Jenkins. Any other update of the credential re-sends it too, as Jenkins cannot keep a stored secret across an update. Required when `secret_key_wo` is set.
 
 ### Read-Only
 

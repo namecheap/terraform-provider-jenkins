@@ -281,10 +281,20 @@ func TestAccJenkinsCredentialAzureServicePrincipal_certificateDescriptionUpdate(
 	})
 }
 
+// buildAzureServicePrincipalUpdate builds the update payload for a
+// certificate-based credential through the spec's build, the production
+// mapping, with client_secret unset as the shared flow sends it. Which secrets
+// an update sends is covered through the real Update by
+// TestCredentialUpdateResendsSecrets.
+func buildAzureServicePrincipalUpdate(data credentialAzureServicePrincipalResourceModel) AzureServicePrincipalCredentials {
+	secrets := map[string]string{"client_secret": ""}
+	return *azureServicePrincipalCredentialSpec().build(&data, secrets).(*AzureServicePrincipalCredentials)
+}
+
 // TestBuildAzureServicePrincipalUpdate is the value-level regression test for the
 // Update() bug where the certificate reference was written to ClientId (wiping the
-// real client id and clearing certificate_id). It exercises the pure mapping helper
-// directly, so it needs neither a live Jenkins nor the Azure plugin.
+// real client id and clearing certificate_id). It exercises the spec's build
+// mapping directly, so it needs neither a live Jenkins nor the Azure plugin.
 func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
 	base := func() credentialAzureServicePrincipalResourceModel {
 		return credentialAzureServicePrincipalResourceModel{
@@ -296,15 +306,11 @@ func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
 	}
 
 	t.Run("certificate credential, description-only change", func(t *testing.T) {
-		state := base()
-		state.CertificateId = types.StringValue("my-cred-id/123")
-		state.Description = types.StringValue("initial")
-
 		data := base()
 		data.CertificateId = types.StringValue("my-cred-id/123")
 		data.Description = types.StringValue("updated")
 
-		cred := buildAzureServicePrincipalUpdate(data, state)
+		cred := buildAzureServicePrincipalUpdate(data)
 
 		if cred.Data.ClientId != "client-abc" {
 			t.Errorf("client_id: got %q, want %q (must not be overwritten with the certificate reference)", cred.Data.ClientId, "client-abc")
@@ -314,40 +320,6 @@ func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
 		}
 		if cred.Data.ClientSecret != "" {
 			t.Errorf("client_secret: got %q, want empty for a certificate-based credential", cred.Data.ClientSecret)
-		}
-	})
-
-	t.Run("secret credential, secret unchanged (ignore_changes)", func(t *testing.T) {
-		state := base()
-		state.ClientSecret = types.StringValue("sekret")
-
-		data := base()
-		data.ClientSecret = types.StringValue("sekret")
-
-		cred := buildAzureServicePrincipalUpdate(data, state)
-
-		if cred.Data.ClientSecret != "" {
-			t.Errorf("client_secret: got %q, want empty (unchanged secret must not be re-sent)", cred.Data.ClientSecret)
-		}
-		if cred.Data.CertificateId != "" {
-			t.Errorf("certificate_id: got %q, want empty for a secret-based credential", cred.Data.CertificateId)
-		}
-		if cred.Data.ClientId != "client-abc" {
-			t.Errorf("client_id: got %q, want %q", cred.Data.ClientId, "client-abc")
-		}
-	})
-
-	t.Run("secret credential, secret changed", func(t *testing.T) {
-		state := base()
-		state.ClientSecret = types.StringValue("old")
-
-		data := base()
-		data.ClientSecret = types.StringValue("new")
-
-		cred := buildAzureServicePrincipalUpdate(data, state)
-
-		if cred.Data.ClientSecret != "new" {
-			t.Errorf("client_secret: got %q, want %q (changed secret must be sent)", cred.Data.ClientSecret, "new")
 		}
 	})
 }
