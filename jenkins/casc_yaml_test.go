@@ -273,7 +273,7 @@ func TestCASCDriftView(t *testing.T) {
 			name:     "scalar sequence grows",
 			declared: "list: [a]\n",
 			export:   "s:\n  list: [a, b]\n",
-			want:     "list: [a, " + marker + "]\n",
+			want:     "list: " + marker + "\n",
 		},
 		{
 			name:     "scalar sequence shrinks",
@@ -282,10 +282,10 @@ func TestCASCDriftView(t *testing.T) {
 			want:     "list: [b]\n",
 		},
 		{
-			name:           "extra mapping element is hidden",
+			name:           "list grown by a mapping element is hidden whole",
 			declared:       "list:\n  - name: a\n",
 			export:         "s:\n  list:\n    - name: a\n      x: 1\n    - name: b\n      password: resolved-pw\n",
-			want:           "list:\n  - name: a\n  - " + marker + "\n",
+			want:           "list: " + marker + "\n",
 			wantNotContain: []string{"resolved-pw"},
 		},
 		{
@@ -329,10 +329,10 @@ func TestCASCDriftView(t *testing.T) {
 			want:     "list: " + marker + "\n",
 		},
 		{
-			name:           "extra sequence element is hidden",
+			name:           "list grown by a sequence element is hidden whole",
 			declared:       "list: [a]\n",
 			export:         "s:\n  list:\n    - a\n    - [b, resolved-pw]\n",
-			want:           "list:\n  - a\n  - " + marker + "\n",
+			want:           "list: " + marker + "\n",
 			wantNotContain: []string{"resolved-pw"},
 		},
 		{
@@ -413,14 +413,48 @@ func TestCASCDriftView(t *testing.T) {
 			wantNotContain: []string{cascTestCiphertext},
 		},
 		{
-			// An element beyond the declared ones is not managed by this
-			// document, so it may hold ciphertext or a value another JCasC
-			// source resolved; it is hidden like any other unmanaged value.
+			// An element the document does not declare is unmanaged, so it
+			// may hold ciphertext or a value another JCasC source resolved.
 			name:           "extra scalar elements of a plain list are hidden",
 			declared:       "list: [a]\n",
 			export:         "s:\n  list: [a, \"" + cascTestCiphertext + "\", " + cascTestResolvedSecret + "]\n",
-			want:           "list: [a, " + marker + ", " + marker + "]\n",
+			want:           "list: " + marker + "\n",
 			wantNotContain: []string{cascTestCiphertext, cascTestResolvedSecret},
+		},
+		{
+			// Elements are matched by index, so an unmanaged element
+			// inserted before the declared ones shifts into a declared
+			// index. Once the list grew, no index can be trusted.
+			name:           "unmanaged element prepended to a plain list is hidden",
+			declared:       "items: [plain]\n",
+			export:         "s:\n  items: [\"" + cascTestCiphertext + "\", plain]\n",
+			want:           "items: " + marker + "\n",
+			wantNotContain: []string{cascTestCiphertext},
+		},
+		{
+			// Jenkins sorts global env vars by key, so a variable another
+			// source adds can sort before the declared one.
+			name: "env var sorted before the declared one is hidden",
+			declared: `globalNodeProperties:
+  - envVars:
+      env:
+        - key: MY_B
+          value: plain
+`,
+			export: `s:
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: A_OTHER_TOKEN
+            value: ` + cascTestResolvedSecret + `
+          - key: MY_B
+            value: plain
+`,
+			want: `globalNodeProperties:
+  - envVars:
+      env: ` + marker + `
+`,
+			wantNotContain: []string{"A_OTHER_TOKEN", cascTestResolvedSecret},
 		},
 		{
 			name:           "extra scalar elements of a list holding a placeholder are hidden",

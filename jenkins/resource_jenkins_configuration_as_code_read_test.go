@@ -301,6 +301,39 @@ func TestConfigurationAsCodeReadDriftViewStableAcrossRefreshes(t *testing.T) {
 `,
 			mustNotContain: []string{cascTestResolvedSecret, cascTestCiphertext},
 		},
+		{
+			// An unmanaged element inserted before the declared one shifts
+			// into a declared index when matched by index.
+			name:     "unmanaged element prepended to a plain list",
+			declared: "items:\n  - plain\n",
+			export: `unclassified:
+  items:
+    - "` + cascTestCiphertext + `"
+    - plain
+`,
+			mustNotContain: []string{cascTestCiphertext},
+		},
+		{
+			// Jenkins sorts global env vars by key, so one another source
+			// adds can sort before the declared one.
+			name: "env var sorted before the declared one",
+			declared: `globalNodeProperties:
+  - envVars:
+      env:
+        - key: MY_B
+          value: plain
+`,
+			export: `unclassified:
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: A_OTHER_TOKEN
+            value: "` + cascTestResolvedSecret + `"
+          - key: MY_B
+            value: plain
+`,
+			mustNotContain: []string{cascTestResolvedSecret, "A_OTHER_TOKEN"},
+		},
 	}
 
 	for _, tc := range cases {

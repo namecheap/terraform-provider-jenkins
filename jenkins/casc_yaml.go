@@ -141,10 +141,11 @@ func cascInSync(declaredSectionYAML, exportedFullYAML, section string) (bool, er
 //     declared;
 //   - a declared key missing on the controller is dropped;
 //   - a drifted plain scalar takes the controller's scalar value;
-//   - a drifted sequence takes the controller's length, each element viewed
-//     against the declared element at the same index, and each element
-//     beyond the declared ones replaced by cascDriftMarker;
-//   - anything else is replaced by cascDriftMarker.
+//   - a drifted sequence the controller did not grow takes the controller's
+//     length, each element viewed against the declared element at the same
+//     index;
+//   - anything else, including a drifted sequence the controller grew, is
+//     replaced by cascDriftMarker.
 //
 // Under drift the view therefore always differs from the declared document,
 // so the plan shows which keys moved without showing what it cannot show
@@ -187,21 +188,18 @@ func driftView(declared, actual interface{}) interface{} {
 	case []interface{}:
 		// Elements are matched by index, so once the controller reorders a
 		// list a resolved placeholder could land under a plain declared
-		// value. A drifted list holding any ${...} is hidden whole.
+		// value. A drifted list holding any ${...} is hidden whole. So is a
+		// list the controller grew: an element the document does not
+		// declare is unmanaged content that may hold ciphertext or a value
+		// another JCasC source resolved, and inserted before the declared
+		// ones it shifts into a declared index.
 		a, ok := actual.([]interface{})
-		if !ok || hasInterpolation(d) {
+		if !ok || hasInterpolation(d) || len(a) > len(d) {
 			return cascDriftMarker
 		}
 		out := make([]interface{}, len(a))
 		for i, av := range a {
-			if i < len(d) {
-				out[i] = driftView(d[i], av)
-			} else {
-				// An extra element is not declared, so it is unmanaged
-				// content that may hold ciphertext or a value another
-				// JCasC source resolved.
-				out[i] = cascDriftMarker
-			}
+			out[i] = driftView(d[i], av)
 		}
 		return out
 	default:

@@ -294,6 +294,120 @@ resource jenkins_configuration_as_code test {
 	})
 }
 
+// TestAccJenkinsConfigurationAsCode_grownSequenceNotInState covers a declared
+// list the controller grew (#249). Another JCasC source adds a global
+// environment variable whose value it resolved from a ${...}, and the
+// controller keeps the variables sorted by key, so the new entry sorts before
+// the declared one. Matched by index, it would be stored as the declared
+// entry's drifted value. The refreshed yaml must hide the grown list whole, on
+// the first refresh and on a refresh of the stored view.
+func TestAccJenkinsConfigurationAsCode_grownSequenceNotInState(t *testing.T) {
+	prefix := "tfacc-gap253-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+	resolved := "tfacc-gap253-" + acctest.RandStringFromCharSet(12, acctest.CharSetAlphaNum)
+	resourceName := "jenkins_configuration_as_code.test"
+	config := fmt.Sprintf(`
+resource jenkins_configuration_as_code test {
+  section = "jenkins"
+  yaml    = yamlencode({
+    globalNodeProperties = [{
+      envVars = {
+        env = [{ key = "%s-b", value = "tfacc-gap253-plain" }]
+      }
+    }]
+  })
+}`, prefix)
+	grown := fmt.Sprintf(`jenkins:
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "%[1]s-b"
+            value: tfacc-gap253-plain
+          - key: "%[1]s-a"
+            value: "${decodeBase64:%[2]s}"
+`, prefix, base64.StdEncoding.EncodeToString([]byte(resolved)))
+	// Refresh stores only the declared keys, with the grown list hidden.
+	view := "globalNodeProperties:\n  - envVars:\n      env: '" + cascDriftMarker + "'\n"
+	omits := []plancheck.PlanCheck{expectPlanOmits(resolved), expectPlanOmits(prefix + "-a")}
+	refreshed := resource.TestStep{
+		RefreshState:       true,
+		ExpectNonEmptyPlan: true,
+		RefreshPlanChecks:  resource.RefreshPlanChecks{PostRefresh: omits},
+		Check: resource.ComposeTestCheckFunc(
+			testAccCheckStateOmits(resolved),
+			testAccCheckStateOmits(prefix+"-a"),
+			testAccCheckCASCStateYAML(resourceName, view),
+		),
+	}
+
+	var original interface{}
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			original = testAccCASCJenkinsValue(t, "globalNodeProperties")
+		},
+		ProtoV6ProviderFactories: testAccProviders,
+		// Delete leaves the applied list on the controller; put the original
+		// global node properties back.
+		CheckDestroy: func(*terraform.State) error {
+			props := original
+			if props == nil {
+				props = []interface{}{}
+			}
+			doc, err := yaml.Marshal(map[string]interface{}{
+				"jenkins": map[string]interface{}{"globalNodeProperties": props},
+			})
+			if err != nil {
+				return err
+			}
+			return testAccClient.ApplyCASC(context.Background(), string(doc))
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+			{
+				PreConfig: func() {
+					if err := testAccClient.ApplyCASC(context.Background(), grown); err != nil {
+						t.Fatalf("adding an environment variable: %v", err)
+					}
+				},
+				RefreshState:       true,
+				ExpectNonEmptyPlan: true,
+				RefreshPlanChecks:  resource.RefreshPlanChecks{PostRefresh: omits},
+				Check: resource.ComposeTestCheckFunc(
+					// The controller resolved the value and sorted the
+					// added entry first.
+					testAccCheckCASCSectionContains("jenkins", resolved),
+					func(*terraform.State) error {
+						exported, err := testAccClient.ExportCASC(context.Background())
+						if err != nil {
+							return fmt.Errorf("exporting JCasC config: %w", err)
+						}
+						a, b := strings.Index(exported, prefix+"-a"), strings.Index(exported, prefix+"-b")
+						if a < 0 || b < 0 || a > b {
+							return fmt.Errorf("the added variable is not exported before the declared one (at %d and %d)", a, b)
+						}
+						return nil
+					},
+					testAccCheckStateOmits(resolved),
+					testAccCheckStateOmits(prefix+"-a"),
+					testAccCheckCASCStateYAML(resourceName, view),
+				),
+			},
+			// The second refresh reads the stored view back as the declared
+			// document.
+			refreshed,
+			{
+				// Re-applying replaces the list with the declared one.
+				Config: config,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckStateOmits(resolved),
+				),
+			},
+		},
+	})
+}
+
 // testAccCASCJenkinsValue returns the controller's value for key in the
 // exported jenkins section, or nil when it is not exported.
 func testAccCASCJenkinsValue(t *testing.T, key string) interface{} {

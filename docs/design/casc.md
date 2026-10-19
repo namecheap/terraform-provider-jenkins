@@ -117,8 +117,10 @@ every default value. Comparing it verbatim would report constant drift.
   controller's value. A value that could carry a resolved secret is replaced by
   a fixed marker. That covers a type change, a drifted list that holds a
   `${...}` (its elements are matched by index, so a reorder could move a
-  resolved value), a list element beyond the declared ones, and a string with
-  an embedded `${...}`.
+  resolved value), a drifted list the controller grew (it holds elements the
+  document does not declare, and one inserted before the declared ones shifts
+  into a declared index), and a string with an embedded `${...}`. Such a list
+  is hidden whole.
 - **Import.** There is no declared document to limit the export to, so import
   records only `section` and leaves `yaml` null; the first apply re-applies the
   configured document.
