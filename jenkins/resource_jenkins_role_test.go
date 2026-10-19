@@ -262,6 +262,55 @@ resource jenkins_role foo {
 	})
 }
 
+// TestAccJenkinsRole_existingCasc tries to create the admin role that
+// integration/jenkins.yaml defines, the reproduction from #247. Create fails
+// and the role keeps its permissions and entries, so the configured SID never
+// gains Overall/Administer and no later apply can replace, and so delete, it.
+func TestAccJenkinsRole_existingCasc(t *testing.T) {
+	ctx := context.Background()
+	var before roleStrategyRoleResponse
+
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			if err := testAccClient.GetRole(ctx, "globalRoles", "admin", &before); err != nil {
+				t.Fatal(err)
+			}
+			if !before.PermissionIDs["hudson.model.Hudson.Administer"] {
+				t.Fatalf("global role admin = %+v, want the Overall/Administer role from integration/jenkins.yaml", before)
+			}
+		},
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource jenkins_role admin {
+	type        = "global"
+	name        = "admin"
+	permissions = ["hudson.model.Hudson.Read"]
+	assignments = ["tf-acc-dev"]
+}`,
+				ExpectError: regexp.MustCompile(`already exists`),
+			},
+			{
+				// An empty config: the step only checks the role left by the
+				// failed create against the one read before it.
+				Config: ` `,
+				Check: func(s *terraform.State) error {
+					permissions := make([]string, 0, len(before.PermissionIDs))
+					for id := range before.PermissionIDs {
+						permissions = append(permissions, id)
+					}
+					return resource.ComposeTestCheckFunc(
+						testAccCheckJenkinsRolePermissions("globalRoles", "admin", permissions...),
+						testAccCheckJenkinsRoleEntries("globalRoles", "admin", before.Sids...),
+					)(s)
+				},
+			},
+		},
+	})
+}
+
 // testAccRoleCommaTypes lists each role type with its role-strategy API type
 // and a permission it grants, so the comma tests cover every role map.
 var testAccRoleCommaTypes = []struct{ roleType, apiType, permission string }{
