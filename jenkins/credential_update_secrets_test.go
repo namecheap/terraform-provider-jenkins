@@ -50,12 +50,14 @@ type recordedBody struct {
 // rendered as <secret-redacted/>, even an empty one. XStream reads an empty
 // element such as <password></password> as a non-null, empty Secret, and the
 // redacting GET writes every non-null Secret; only an element left out of the
-// post (SSH's empty passphrase) stays null and has no element.
+// post (SSH's empty passphrase) stays null and has no element. A non-zero
+// getStatus answers every GET with that status instead.
 type credentialStoreFake struct {
-	mu       sync.Mutex
-	stateful bool
-	stored   string
-	seen     []recordedBody
+	mu        sync.Mutex
+	stateful  bool
+	stored    string
+	getStatus int
+	seen      []recordedBody
 }
 
 // fakeSecretElements are the Secret-typed elements of the credentials under test.
@@ -87,6 +89,10 @@ func (f *credentialStoreFake) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seen = append(f.seen, recordedBody{method: r.Method, path: r.URL.EscapedPath(), body: string(body)})
+	if r.Method == http.MethodGet && f.getStatus != 0 {
+		w.WriteHeader(f.getStatus)
+		return
+	}
 	if r.Method == http.MethodGet {
 		stored := f.stored
 		if f.stateful {
@@ -281,7 +287,9 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 		folder, escDomain string
 		// stored is the GET config.xml answer; it is only requested for an
 		// optional secret that neither the configuration nor state sets.
-		stored string
+		// getStatus, when set, is the GET status instead.
+		stored    string
+		getStatus int
 		// wantGet: Update must read the stored credential first.
 		wantGet bool
 		// wantErr: Update must fail with this summary without posting;
@@ -430,6 +438,107 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 			plan:     githubApp(str("PEM")),
 			wantSent: map[string]string{"description": "new", "privateKey": "PEM"},
 		},
+		{
+			name: "username/whitespace-only password is re-sent verbatim without a check", resource: newCredentialUsernameResource,
+			plan:     username(str("  "), null, null),
+			wantSent: map[string]string{"description": "new", "password": "  "},
+		},
+		{
+			// Under ignore_changes the plan keeps the value from state.
+			name: "secret text/ignored secret re-sends the applied value, not the configured one", resource: newCredentialSecretTextResource,
+			plan:     secretText(str("applied"), null, null),
+			config:   secretText(str("configured"), null, null),
+			wantSent: map[string]string{"description": "new", "secret": "applied"},
+		},
+
+		// A write-only secret is re-sent from the configuration on every update,
+		// not only when its version changes (the version is unchanged here).
+		{
+			name: "ssh/description-only update re-sends the write-only private key", resource: newCredentialSSHResource,
+			plan: func() any {
+				m := ssh(str("pp"))
+				m.PrivateKey, m.PrivateKeyWoVersion = null, str("1")
+				return m
+			}(),
+			config: func() any {
+				m := ssh(str("pp"))
+				m.PrivateKey, m.PrivateKeyWo, m.PrivateKeyWoVersion = null, str("WO-KEY"), str("1")
+				return m
+			}(),
+			wantSent:   map[string]string{"description": "new", "passphrase": "pp"},
+			wantInBody: []string{"<privateKey>WO-KEY</privateKey>"},
+		},
+		{
+			name: "vault approle/description-only update re-sends the write-only secret id", resource: newCredentialVaultAppRoleResource,
+			plan: func() any {
+				m := vault(null)
+				m.SecretIDWoVersion = str("1")
+				return m
+			}(),
+			config: func() any {
+				m := vault(null)
+				m.SecretIDWo, m.SecretIDWoVersion = str("wo-sid"), str("1")
+				return m
+			}(),
+			wantSent: map[string]string{"description": "new", "secretId": "wo-sid"},
+		},
+		{
+			name: "secret file/description-only update re-sends the write-only content", resource: newCredentialSecretFileResource,
+			plan: func() any {
+				m := secretFile(null)
+				m.SecretBytesWoVersion = str("1")
+				return m
+			}(),
+			config: func() any {
+				m := secretFile(null)
+				m.SecretBytesWo, m.SecretBytesWoVersion = str("V08="), str("1")
+				return m
+			}(),
+			wantSent: map[string]string{"description": "new", "secretBytes": "V08="},
+		},
+		{
+			name: "aws/description-only update re-sends the write-only secret key", resource: newCredentialAwsResource,
+			plan: func() any {
+				m := aws(null)
+				m.SecretKeyWoVersion = str("1")
+				return m
+			}(),
+			config: func() any {
+				m := aws(null)
+				m.SecretKeyWo, m.SecretKeyWoVersion = str("wo-sk"), str("1")
+				return m
+			}(),
+			wantSent: map[string]string{"description": "new", "secretKey": "wo-sk"},
+		},
+		{
+			name: "azure/description-only update re-sends the write-only client secret", resource: newCredentialAzureServicePrincipalResource,
+			plan: func() any {
+				m := azure(null, null)
+				m.ClientSecretWoVersion = str("1")
+				return m
+			}(),
+			config: func() any {
+				m := azure(null, null)
+				m.ClientSecretWo, m.ClientSecretWoVersion = str("wo-cs"), str("1")
+				return m
+			}(),
+			wantSent:   map[string]string{"description": "new"},
+			wantInBody: []string{"<clientSecret>wo-cs</clientSecret>"},
+		},
+		{
+			name: "github app/description-only update re-sends the write-only private key", resource: newCredentialGitHubAppResource,
+			plan: func() any {
+				m := githubApp(null)
+				m.PrivateKeyWoVersion = str("1")
+				return m
+			}(),
+			config: func() any {
+				m := githubApp(null)
+				m.PrivateKeyWo, m.PrivateKeyWoVersion = str("WO-PEM"), str("1")
+				return m
+			}(),
+			wantSent: map[string]string{"description": "new", "privateKey": "WO-PEM"},
+		},
 
 		// A secret that is empty by design is sent empty without reading
 		// Jenkins, whatever Jenkins holds.
@@ -477,6 +586,26 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 			plan:    username(null, null, null),
 			stored:  "not xml",
 			wantGet: true, wantErr: updateErr,
+		},
+		{
+			// A read cut short before the secret's element must not count as
+			// Jenkins holding no value.
+			name: "username/truncated stored credential fails without posting", resource: newCredentialUsernameResource,
+			plan:    username(null, null, null),
+			stored:  "<" + usernameRoot + "><scope>GLOBAL</scope><id>x</id>",
+			wantGet: true, wantErr: updateErr,
+		},
+		{
+			name: "ssh/stored credential truncated inside an earlier element fails without posting", resource: newCredentialSSHResource,
+			plan:    ssh(null),
+			stored:  "<" + sshRoot + "><scope>GLOBAL</scope><privateKeySource class=\"k\"><privateKey><secret-redacted/>",
+			wantGet: true, wantErr: updateErr,
+		},
+		{
+			name: "username/server error reading the stored credential fails without posting", resource: newCredentialUsernameResource,
+			plan:      username(null, null, null),
+			getStatus: http.StatusInternalServerError,
+			wantGet:   true, wantErr: updateErr,
 		},
 		{
 			name: "username/stored-credential read keeps the domain escaped", resource: newCredentialUsernameResource,
@@ -551,6 +680,17 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 			stored:   storedCredentialXML(vaultRoot, "secretId"),
 			wantSent: map[string]string{"description": "new", "secretId": ""},
 		},
+		{
+			name: "vault approle/removing a managed write-only secret id clears it", resource: newCredentialVaultAppRoleResource,
+			plan: vault(null),
+			state: func() any {
+				m := vault(null)
+				m.SecretIDWoVersion = str("1")
+				return m
+			}(),
+			stored:   storedCredentialXML(vaultRoot, "secretId"),
+			wantSent: map[string]string{"description": "new", "secretId": ""},
+		},
 
 		// lifecycle.ignore_changes keeps a secret's null value from state (after
 		// an import) while the configuration sets it: Terraform has no value to
@@ -559,6 +699,12 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 			name: "secret text/ignored secret with no value in state fails without posting", resource: newCredentialSecretTextResource,
 			plan:    secretText(null, null, null),
 			config:  secretText(str("placeholder"), null, null),
+			wantErr: notKnownErr, wantErrAttr: "secret",
+		},
+		{
+			name: "secret text/ignored secret configured empty with no value in state fails without posting", resource: newCredentialSecretTextResource,
+			plan:    secretText(null, null, null),
+			config:  secretText(str(""), null, null),
 			wantErr: notKnownErr, wantErrAttr: "secret",
 		},
 		{
@@ -628,7 +774,7 @@ func TestCredentialUpdateResendsSecrets(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &credentialStoreFake{stored: tc.stored}
+			fake := &credentialStoreFake{stored: tc.stored, getStatus: tc.getStatus}
 			r, s := configuredCredentialResource(ctx, t, tc.resource, startCredentialStoreFake(t, fake))
 
 			config := tc.config
