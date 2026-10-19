@@ -101,6 +101,11 @@ func (c *credentialCRUD[M]) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	folder, domain, name := c.spec.identity(&m)
+	pathDomain, _, err := escapeCredentialPath(domain, name)
+	if err != nil {
+		resp.Diagnostics.AddError(crudCreateErrSummary, crudCreateErrDetail+err.Error())
+		return
+	}
 	cm := c.credentialManagerForFolder(ctx, folder, &resp.Diagnostics)
 	if cm == nil {
 		return
@@ -111,7 +116,7 @@ func (c *credentialCRUD[M]) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	if err := cm.Add(ctx, domain, c.spec.build(&m, secrets)); err != nil {
+	if err := cm.Add(ctx, pathDomain, c.spec.build(&m, secrets)); err != nil {
 		resp.Diagnostics.AddError(crudCreateErrSummary, crudCreateErrDetail+err.Error())
 		return
 	}
@@ -128,10 +133,17 @@ func (c *credentialCRUD[M]) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	folder, domain, name := c.spec.identity(&m)
-	cm := c.credentialManager(folder)
+	cm := c.credentialManager(folder, &resp.Diagnostics)
+	if cm == nil {
+		return
+	}
 
 	api := c.spec.newAPIValue()
-	if err := cm.GetSingle(ctx, domain, name, api); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(domain, name)
+	if err == nil {
+		err = cm.GetSingle(ctx, pathDomain, pathName, api)
+	}
+	if err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
@@ -154,14 +166,21 @@ func (c *credentialCRUD[M]) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	folder, domain, name := c.spec.identity(&plan)
-	cm := c.credentialManager(folder)
+	cm := c.credentialManager(folder, &resp.Diagnostics)
+	if cm == nil {
+		return
+	}
 
 	secrets := c.resolveSecretsUpdate(ctx, &plan, &state, req.Config, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if err := cm.Update(ctx, domain, name, c.spec.build(&plan, secrets)); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(domain, name)
+	if err == nil {
+		err = cm.Update(ctx, pathDomain, pathName, c.spec.build(&plan, secrets))
+	}
+	if err != nil {
 		resp.Diagnostics.AddError(crudUpdateErrSummary, crudUpdateErrDetail+err.Error())
 		return
 	}

@@ -49,16 +49,25 @@ func (d *credentialDataSource[M]) Read(ctx context.Context, req datasource.ReadR
 		return
 	}
 
-	cm := d.client.Credentials()
 	folder := d.reader.folder(&m).ValueString()
-	cm.Folder = formatFolderName(folder)
+	formatted, err := credentialsFolder(folder)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid Folder", err.Error())
+		return
+	}
+	cm := d.client.Credentials()
+	cm.Folder = formatted
 
 	if d.reader.domain(&m).IsNull() {
 		d.reader.setDomain(&m, defaultCredentialDomain)
 	}
 
 	api := d.reader.newAPIValue()
-	if err := cm.GetSingle(ctx, d.reader.domain(&m).ValueString(), d.reader.name(&m).ValueString(), api); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(d.reader.domain(&m).ValueString(), d.reader.name(&m).ValueString())
+	if err == nil {
+		err = cm.GetSingle(ctx, pathDomain, pathName, api)
+	}
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to Read Data Source", credentialDSReadErrDetail+err.Error())
 		return
 	}

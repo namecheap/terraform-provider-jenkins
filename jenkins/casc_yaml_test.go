@@ -1,6 +1,10 @@
 package jenkins
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestIsSecretPlaceholder(t *testing.T) {
 	cases := map[string]struct {
@@ -228,6 +232,304 @@ security:
 
 	t.Run("invalid exported YAML errors", func(t *testing.T) {
 		if _, err := cascInSync("a: 1", "b: [bad\n", "jenkins"); err == nil {
+			t.Error("expected an error for malformed exported YAML")
+		}
+	})
+}
+
+func TestCASCDriftView(t *testing.T) {
+	marker := "'" + cascDriftMarker + "'"
+	cases := []struct {
+		name             string
+		declared, export string
+		want             string
+		wantNotContain   []string
+	}{
+		{
+			name:     "placeholder kept while a sibling drifts",
+			declared: "token: ${TOKEN}\nurl: http://a/\n",
+			export:   "s:\n  token: resolved-token\n  url: http://b/\n  extra: 1\n",
+			want:     "token: ${TOKEN}\nurl: http://b/\n",
+		},
+		{
+			name:     "declared key missing on the controller is dropped",
+			declared: "a: 1\nb: 2\n",
+			export:   "s:\n  a: 1\n",
+			want:     "a: 1\n",
+		},
+		{
+			name:     "declared scalar replaced by a mapping is hidden",
+			declared: "auth: none\n",
+			export:   "s:\n  auth:\n    password: resolved-pw\n",
+			want:     "auth: " + marker + "\n",
+		},
+		{
+			name:     "declared mapping replaced by a scalar is hidden",
+			declared: "auth:\n  user: u\n",
+			export:   "s:\n  auth: other\n",
+			want:     "auth: " + marker + "\n",
+		},
+		{
+			name:     "scalar sequence grows",
+			declared: "list: [a]\n",
+			export:   "s:\n  list: [a, b]\n",
+			want:     "list: " + marker + "\n",
+		},
+		{
+			name:     "scalar sequence shrinks",
+			declared: "list: [a, b]\n",
+			export:   "s:\n  list: [b]\n",
+			want:     "list: [b]\n",
+		},
+		{
+			name:           "list grown by a mapping element is hidden whole",
+			declared:       "list:\n  - name: a\n",
+			export:         "s:\n  list:\n    - name: a\n      x: 1\n    - name: b\n      password: resolved-pw\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw"},
+		},
+		{
+			name:           "drifted sequence holding a placeholder is hidden whole",
+			declared:       "list:\n  - ${A}\n  - b\n",
+			export:         "s:\n  list: [b, resolved-a]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-a"},
+		},
+		{
+			name:           "embedded interpolation is never copied",
+			declared:       "url: https://${USER}@host/\n",
+			export:         "s:\n  url: https://resolved-user@host/\n",
+			want:           "url: " + marker + "\n",
+			wantNotContain: []string{"resolved-user"},
+		},
+		{
+			name:     "empty declared document is hidden",
+			declared: "",
+			export:   "s:\n  a: 1\n",
+			want:     marker + "\n",
+		},
+		{
+			name:           "declared scalar replaced by a sequence is hidden",
+			declared:       "users: none\n",
+			export:         "s:\n  users:\n    - name: admin\n      password: resolved-pw\n",
+			want:           "users: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw", "admin"},
+		},
+		{
+			name:           "declared sequence replaced by a mapping is hidden",
+			declared:       "list: [a]\n",
+			export:         "s:\n  list:\n    password: resolved-pw\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw"},
+		},
+		{
+			name:     "declared sequence replaced by a scalar is hidden",
+			declared: "list: [a]\n",
+			export:   "s:\n  list: b\n",
+			want:     "list: " + marker + "\n",
+		},
+		{
+			name:           "list grown by a sequence element is hidden whole",
+			declared:       "list: [a]\n",
+			export:         "s:\n  list:\n    - a\n    - [b, resolved-pw]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw"},
+		},
+		{
+			// yaml.v3 decodes a mapping with a non-string key as
+			// map[interface{}]interface{}, which takes the scalar path.
+			name:           "drifted mapping with non-string keys is hidden",
+			declared:       "ports:\n  8080: http\n",
+			export:         "s:\n  ports:\n    8080: https\n    9090: resolved-pw\n",
+			want:           "ports: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw", "9090"},
+		},
+		{
+			name:           "placeholder under a non-string key is never copied",
+			declared:       "ports:\n  8080: ${PORT_TOKEN}\n",
+			export:         "s:\n  ports: resolved-port-token\n",
+			want:           "ports: " + marker + "\n",
+			wantNotContain: []string{"resolved-port-token"},
+		},
+		{
+			name:           "drifted sequence holding a placeholder under a non-string key is hidden whole",
+			declared:       "list:\n  - 8080: ${PORT_TOKEN}\n  - b\n",
+			export:         "s:\n  list: [resolved-port-token, c]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-port-token"},
+		},
+		{
+			name:           "embedded placeholder with a default is never copied",
+			declared:       "url: jdbc:postgresql://db/app?password=${DB_PASS:-changeme}\n",
+			export:         "s:\n  url: jdbc:postgresql://db/app?password=resolved-db-pass\n",
+			want:           "url: " + marker + "\n",
+			wantNotContain: []string{"resolved-db-pass"},
+		},
+		{
+			// ${A:-${B}} is not a whole placeholder to isSecretPlaceholder, so
+			// it always drifts; the resolved value must still stay hidden.
+			name:           "nested placeholder default is never copied",
+			declared:       "token: ${A:-${B}}\n",
+			export:         "s:\n  token: resolved-b\n",
+			want:           "token: " + marker + "\n",
+			wantNotContain: []string{"resolved-b"},
+		},
+		{
+			name:           "multi-line string with an embedded placeholder is never copied",
+			declared:       "script: |\n  echo start\n  curl -u admin:${API_TOKEN} http://x/\n",
+			export:         "s:\n  script: \"echo start\\ncurl -u admin:resolved-api-token http://x/\\n\"\n",
+			want:           "script: " + marker + "\n",
+			wantNotContain: []string{"resolved-api-token", "echo start"},
+		},
+		{
+			name:           "embedded placeholder deep in a mapping is never copied",
+			declared:       "a:\n  b:\n    c: pre-${S}\n  d: 1\n",
+			export:         "s:\n  a:\n    b:\n      c: pre-resolved-s\n      x: unmanaged\n    d: 1\n",
+			want:           "a:\n  b:\n    c: " + marker + "\n  d: 1\n",
+			wantNotContain: []string{"resolved-s", "unmanaged"},
+		},
+		{
+			name:           "padded placeholder kept while a sibling drifts",
+			declared:       "token: \"  ${TOKEN}  \"\nurl: http://a/\n",
+			export:         "s:\n  token: resolved-token\n  url: http://b/\n",
+			want:           "token: \"  ${TOKEN}  \"\nurl: http://b/\n",
+			wantNotContain: []string{"resolved-token"},
+		},
+		{
+			// JCasC exports a Secret-typed field as ciphertext, so a literal
+			// declared for it never matches and is copied as a drifted plain
+			// scalar. The literal is already in the configuration and state;
+			// ${...} keeps both out.
+			name:     "literal for a Secret field takes the exported ciphertext",
+			declared: "password: dummy-literal-password\nurl: http://a/\n",
+			export:   "s:\n  password: \"" + cascTestCiphertext + "\"\n  url: http://a/\n",
+			want:     "password: \"" + cascTestCiphertext + "\"\nurl: http://a/\n",
+		},
+		{
+			name:           "placeholder for a Secret field never takes the exported ciphertext",
+			declared:       "password: ${PASSWORD}\nurl: http://a/\n",
+			export:         "s:\n  password: \"" + cascTestCiphertext + "\"\n  url: http://b/\n",
+			want:           "password: ${PASSWORD}\nurl: http://b/\n",
+			wantNotContain: []string{cascTestCiphertext},
+		},
+		{
+			// An element the document does not declare is unmanaged, so it
+			// may hold ciphertext or a value another JCasC source resolved.
+			name:           "extra scalar elements of a plain list are hidden",
+			declared:       "list: [a]\n",
+			export:         "s:\n  list: [a, \"" + cascTestCiphertext + "\", " + cascTestResolvedSecret + "]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{cascTestCiphertext, cascTestResolvedSecret},
+		},
+		{
+			// Elements are matched by index, so an unmanaged element
+			// inserted before the declared ones shifts into a declared
+			// index. Once the list grew, no index can be trusted.
+			name:           "unmanaged element prepended to a plain list is hidden",
+			declared:       "items: [plain]\n",
+			export:         "s:\n  items: [\"" + cascTestCiphertext + "\", plain]\n",
+			want:           "items: " + marker + "\n",
+			wantNotContain: []string{cascTestCiphertext},
+		},
+		{
+			// Jenkins sorts global env vars by key, so a variable another
+			// source adds can sort before the declared one.
+			name: "env var sorted before the declared one is hidden",
+			declared: `globalNodeProperties:
+  - envVars:
+      env:
+        - key: MY_B
+          value: plain
+`,
+			export: `s:
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: A_OTHER_TOKEN
+            value: ` + cascTestResolvedSecret + `
+          - key: MY_B
+            value: plain
+`,
+			want: `globalNodeProperties:
+  - envVars:
+      env: ` + marker + `
+`,
+			wantNotContain: []string{"A_OTHER_TOKEN", cascTestResolvedSecret},
+		},
+		{
+			name:           "extra scalar elements of a list holding a placeholder are hidden",
+			declared:       "list: [\"${A}\"]\n",
+			export:         "s:\n  list: [resolved-a, \"" + cascTestCiphertext + "\", resolved-elsewhere]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-a", cascTestCiphertext, "resolved-elsewhere"},
+		},
+		{
+			// Values are hidden by where this document declares a ${...},
+			// not by content: a key declared as a plain value takes the
+			// controller's value even when another resource or JCasC file
+			// resolved it from a ${...}.
+			name:           "plain key resolved by another source is copied",
+			declared:       "token: ${TOKEN}\nadminAddress: ops@example.invalid\n",
+			export:         "s:\n  token: resolved-token\n  adminAddress: resolved-elsewhere\n",
+			want:           "token: ${TOKEN}\nadminAddress: resolved-elsewhere\n",
+			wantNotContain: []string{"resolved-token"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view, found, err := cascDriftView(tc.declared, tc.export, "s")
+			if err != nil || !found {
+				t.Fatalf("found=%v err=%v", found, err)
+			}
+			got, want := mustParseYAML(t, view), mustParseYAML(t, tc.want)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("view mismatch:\n got: %s\nwant: %s", view, tc.want)
+			}
+			for _, s := range tc.wantNotContain {
+				if strings.Contains(view, s) {
+					t.Errorf("view contains %q:\n%s", s, view)
+				}
+			}
+
+			// A drift view must still report drift, or the plan would show no
+			// diff, and refreshing it again must not change it.
+			inSync, err := cascInSync(tc.declared, tc.export, "s")
+			if err != nil || inSync {
+				t.Fatalf("test case is not drifted: inSync=%v err=%v", inSync, err)
+			}
+			if reflect.DeepEqual(got, mustParseYAML(t, tc.declared)) {
+				t.Errorf("view equals the declared document under drift:\n%s", view)
+			}
+			again := view
+			if ok, _ := cascInSync(view, tc.export, "s"); !ok {
+				again, _, _ = cascDriftView(view, tc.export, "s")
+			}
+			if !reflect.DeepEqual(mustParseYAML(t, again), got) {
+				t.Errorf("refreshing the view changed it:\n first: %s\nsecond: %s", view, again)
+			}
+			for _, s := range tc.wantNotContain {
+				if strings.Contains(again, s) {
+					t.Errorf("refreshed view contains %q:\n%s", s, again)
+				}
+			}
+		})
+	}
+
+	t.Run("absent section", func(t *testing.T) {
+		_, found, err := cascDriftView("a: 1", "other:\n  a: 1\n", "s")
+		if err != nil || found {
+			t.Errorf("found=%v err=%v, want found=false", found, err)
+		}
+	})
+
+	t.Run("invalid declared YAML errors", func(t *testing.T) {
+		if _, _, err := cascDriftView("a: [bad\n", "s:\n  a: 1\n", "s"); err == nil {
+			t.Error("expected an error for malformed declared YAML")
+		}
+	})
+
+	t.Run("invalid exported YAML errors", func(t *testing.T) {
+		if _, _, err := cascDriftView("a: 1", "s: [bad\n", "s"); err == nil {
 			t.Error("expected an error for malformed exported YAML")
 		}
 	})

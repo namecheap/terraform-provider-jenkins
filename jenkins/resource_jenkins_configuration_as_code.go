@@ -48,6 +48,8 @@ Key behaviours:
 
 - **Merge, not replace.** Applying a section merges the declared keys into the running configuration; keys present on the controller but not in ` + "`yaml`" + ` are left untouched. Drift is detected as a *subset*: only keys you declare are compared.
 - **Secrets.** Use JCasC ` + "`${VAR}`" + ` interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.
+- **Drift.** When a declared key drifts, state keeps only the declared keys: ` + "`${VAR}`" + ` placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as ` + "`" + cascDriftMarker + "`" + ` instead.
+- **Import.** Import records only ` + "`section`" + `; ` + "`yaml`" + ` is not read from the controller, so the first apply after import re-applies the configured document.
 - **Delete is best-effort.** JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
 
 Requires the ` + "`configuration-as-code`" + ` plugin and an account with ` + "`Overall/Administer`" + `.`,
@@ -110,27 +112,33 @@ func (r *configurationAsCodeResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
-	section := data.Section.ValueString()
-	inSync, err := cascInSync(data.YAML.ValueString(), exported, section)
-	if err != nil {
-		resp.Diagnostics.AddError("Unable to Compare Configuration", err.Error())
-		return
-	}
-
-	if !inSync {
-		// The controller no longer matches the declared subtree. Reflect the
-		// actual state so a diff (and a reconciling apply) is produced. If the
-		// section is gone entirely, drop the resource so it is recreated.
-		actual, found, err := extractSectionYAML(exported, section)
+	// A null yaml comes from ImportState, which has no declared document to
+	// compare against; the next plan applies the configured one.
+	if !data.YAML.IsNull() {
+		section := data.Section.ValueString()
+		inSync, err := cascInSync(data.YAML.ValueString(), exported, section)
 		if err != nil {
-			resp.Diagnostics.AddError("Unable to Read Section", err.Error())
+			resp.Diagnostics.AddError("Unable to Compare Configuration", err.Error())
 			return
 		}
-		if !found {
-			resp.State.RemoveResource(ctx)
-			return
+
+		if !inSync {
+			// The controller no longer matches the declared subtree. Store a
+			// view of the drifted declared keys so a diff (and a reconciling
+			// apply) is produced without copying resolved ${...} values or
+			// unmanaged keys from the export into state. If the section is gone
+			// entirely, drop the resource so it is recreated.
+			view, found, err := cascDriftView(data.YAML.ValueString(), exported, section)
+			if err != nil {
+				resp.Diagnostics.AddError("Unable to Read Section", err.Error())
+				return
+			}
+			if !found {
+				resp.State.RemoveResource(ctx)
+				return
+			}
+			data.YAML = types.StringValue(view)
 		}
-		data.YAML = types.StringValue(actual)
 	}
 
 	data.ID = data.Section
@@ -172,8 +180,11 @@ func (r *configurationAsCodeResource) Delete(ctx context.Context, req resource.D
 	)
 }
 
-// ImportState imports by section name, populating yaml from the controller's
-// current export of that section so the imported state is self-consistent.
+// ImportState imports by section name after checking the controller has that
+// section. yaml is left null: the export holds the values JCasC resolved for
+// ${...} placeholders and every unmanaged key, and without a declared document
+// there is nothing to restrict it to. The first plan after import therefore
+// shows the configured yaml as an in-place update, which re-applies it.
 func (r *configurationAsCodeResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	section := req.ID
 	exported, err := r.client.ExportCASC(ctx)
@@ -181,7 +192,7 @@ func (r *configurationAsCodeResource) ImportState(ctx context.Context, req resou
 		resp.Diagnostics.AddError("Unable to Import Resource", "Could not export JCasC configuration.\n\nError: "+err.Error())
 		return
 	}
-	actual, found, err := extractSectionYAML(exported, section)
+	_, found, err := exportedSection(exported, section)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to Import Resource", err.Error())
 		return
@@ -192,7 +203,6 @@ func (r *configurationAsCodeResource) ImportState(ctx context.Context, req resou
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("section"), section)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), section)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("yaml"), actual)...)
 }
 
 // apply wraps the declared subtree in its section key and POSTs it to JCasC.
