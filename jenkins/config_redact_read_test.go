@@ -159,12 +159,16 @@ func assertNoFolderSecrets(t *testing.T, template string) {
 
 // redactFolderServer serves a folder's config.xml like Jenkins: GET returns the
 // current document, POST replaces it. It records every POSTed body. With
-// dropGet set, GET drops the connection instead of answering.
+// dropGet set, GET drops the connection instead of answering. With errorStatus
+// set, GET answers with that status and errorPage instead: the client reports
+// a 5xx as an error, but GetConfig returns a 4xx body as the document.
 type redactFolderServer struct {
-	mu      sync.Mutex
-	config  string
-	posted  []string
-	dropGet bool
+	mu          sync.Mutex
+	config      string
+	posted      []string
+	dropGet     bool
+	errorStatus int
+	errorPage   string
 }
 
 func (s *redactFolderServer) job(t *testing.T, base string) *jenkins.Job {
@@ -183,6 +187,10 @@ func (s *redactFolderServer) job(t *testing.T, base string) *jenkins.Job {
 			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 				_ = conn.Close()
 			}
+		case strings.Contains(r.URL.Path, "/config.xml") && s.errorStatus != 0:
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(s.errorStatus)
+			_, _ = io.WriteString(w, s.errorPage)
 		case strings.Contains(r.URL.Path, "/config.xml"):
 			w.Header().Set("Content-Type", "application/xml")
 			_, _ = io.WriteString(w, s.config)
@@ -312,6 +320,82 @@ func TestFolderResourceUpdateKeepsCredentials(t *testing.T) {
 		t.Fatalf("state.Get: %v", d)
 	}
 	assertNoFolderSecrets(t, got.Template.ValueString())
+}
+
+// TestFolderResourceUpdateFailsClosed pins that jenkins_folder Update fails,
+// posting nothing, when it cannot read the folder's current config.xml. The
+// credentials store only reaches the posted document through that read; a
+// folder rendered from the plan alone has none, so posting it would delete
+// every folder credential.
+func TestFolderResourceUpdateFailsClosed(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		dropGet     bool
+		errorStatus int
+		errorPage   string
+	}{
+		{
+			name:    "connection dropped",
+			dropGet: true,
+		},
+		{
+			// Retried, then reported as an error by the client.
+			name:        "server error",
+			errorStatus: http.StatusServiceUnavailable,
+			errorPage:   "<html><body><h1>503 Service Unavailable</h1></body></html>",
+		},
+		{
+			// A 4xx reaches GetConfig as the document, without an error.
+			name:        "error page returned as the document",
+			errorStatus: http.StatusForbidden,
+			errorPage:   "<html><body><h1>403 Forbidden</h1></body></html>",
+		},
+		{
+			// Likewise, as an empty document.
+			name:        "empty document",
+			errorStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &redactFolderServer{
+				config:      redactFolderWithCredentials(redactCipherToken),
+				dropGet:     tt.dropGet,
+				errorStatus: tt.errorStatus,
+				errorPage:   tt.errorPage,
+			}
+			job := srv.job(t, "/job/team")
+			r := &folderResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockGetJob: func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },
+			}}}
+			var sr resource.SchemaResponse
+			r.Schema(ctx, resource.SchemaRequest{}, &sr)
+
+			plan := tfsdk.Plan{Schema: sr.Schema}
+			if d := plan.Set(ctx, &folderResourceModel{
+				ID: types.StringValue("/job/team"), Name: types.StringValue("team"), Folder: types.StringNull(),
+				DisplayName: types.StringValue("Team"), Description: types.StringValue("renamed"),
+				Security: types.SetNull(folderSecurityObjectType), Template: types.StringUnknown(),
+			}); d.HasError() {
+				t.Fatalf("plan.Set: %v", d)
+			}
+
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: sr.Schema}}
+			r.Update(ctx, resource.UpdateRequest{Plan: plan}, &resp)
+
+			if !resp.Diagnostics.HasError() {
+				t.Errorf("Update succeeded, want an error")
+			}
+			srv.mu.Lock()
+			defer srv.mu.Unlock()
+			if len(srv.posted) != 0 {
+				t.Errorf("Update posted config.xml %d times, want 0; the folder now has no credentials store:\n%s", len(srv.posted), srv.posted[0])
+			}
+		})
+	}
 }
 
 // folderCredentialsPropertyElementName is spelled out here rather than taken
@@ -532,6 +616,10 @@ func TestJobResourceUpdateFolderCredentials(t *testing.T) {
 
 	renamed := strings.Replace(redactFolderNoCredentials,
 		"<description>team folder</description>", "<description>renamed</description>", 1)
+	// The store's start tag broken over lines right after the element name,
+	// as a practitioner may format it.
+	brokenStartTag := strings.Replace(redactFolderWithCredentials(redactCipherReencrypted),
+		folderCredentialsPropertyElementName+" plugin=", folderCredentialsPropertyElementName+"\n        plugin=", 1)
 
 	tests := []struct {
 		name string
@@ -550,6 +638,7 @@ func TestJobResourceUpdateFolderCredentials(t *testing.T) {
 		// carry inside a credentials store; "" when it must carry no store.
 		wantPostedStore    string
 		wantPostedContains []string
+		wantPostedLacks    []string
 		// later, when set, is what Jenkins serves at the next refresh instead
 		// of the posted config.xml.
 		later string
@@ -583,6 +672,18 @@ func TestJobResourceUpdateFolderCredentials(t *testing.T) {
 			server:             redactFolderNoCredentials,
 			planned:            func(string) string { return redactFolderWithCredentials(redactCipherReencrypted) },
 			wantPostedStore:    redactCipherReencrypted,
+			wantRefreshedStore: true,
+		},
+		{
+			// The template takes over a store added out of band. Its own store
+			// replaces that one: adding the live store as well, as for a
+			// template without one, would post two stores.
+			name:               "template takes over the store, start tag broken over lines",
+			created:            redactFolderNoCredentials,
+			server:             redactFolderWithCredentials(redactCipherToken),
+			planned:            func(string) string { return brokenStartTag },
+			wantPostedStore:    redactCipherReencrypted,
+			wantPostedLacks:    []string{redactCipherToken},
 			wantRefreshedStore: true,
 		},
 		{
@@ -679,6 +780,14 @@ func TestJobResourceUpdateFolderCredentials(t *testing.T) {
 					t.Errorf("posted config.xml is missing %q:\n%s", want, posted)
 				}
 			}
+			for _, lack := range tt.wantPostedLacks {
+				if strings.Contains(posted, lack) {
+					t.Errorf("posted config.xml carries %q:\n%s", lack, posted)
+				}
+			}
+			if n := strings.Count(posted, "</"+folderCredentialsPropertyElementName); n > 1 {
+				t.Errorf("Update posted config.xml with %d folder credentials stores, want at most 1:\n%s", n, posted)
+			}
 
 			// The next refresh.
 			if tt.later != "" {
@@ -721,14 +830,22 @@ func TestJobResourceUpdateFailsClosed(t *testing.T) {
 		"<description>team folder</description>", "<description>renamed</description>", 1)
 
 	tests := []struct {
-		name     string
-		template string
-		dropGet  bool
+		name        string
+		template    string
+		dropGet     bool
+		errorStatus int
 	}{
 		{
 			name:     "current config.xml cannot be read",
 			template: renamed,
 			dropGet:  true,
+		},
+		{
+			// Retried, then reported as an error by the client: the error page
+			// must not be taken for a config.xml without a store.
+			name:        "current config.xml answers with a server error",
+			template:    renamed,
+			errorStatus: http.StatusServiceUnavailable,
 		},
 		{
 			// Rejected at plan by jobXMLValidator; Update must not rely on that.
@@ -739,7 +856,12 @@ func TestJobResourceUpdateFailsClosed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := &redactFolderServer{config: redactFolderWithCredentials(redactCipherToken), dropGet: tt.dropGet}
+			srv := &redactFolderServer{
+				config:      redactFolderWithCredentials(redactCipherToken),
+				dropGet:     tt.dropGet,
+				errorStatus: tt.errorStatus,
+				errorPage:   "<html><body><h1>Service Unavailable</h1></body></html>",
+			}
 			job := srv.job(t, "/job/team")
 			r := &jobResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
 				mockGetJob: func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },

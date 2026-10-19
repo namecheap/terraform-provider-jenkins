@@ -214,6 +214,13 @@ func TestHasFolderCredentials(t *testing.T) {
 		{name: "element with attributes", in: redactFolderWithCredentials(redactCipherToken), want: true},
 		{name: "plain open tag", in: `<a><` + prop + `></` + prop + `></a>`, want: true},
 		{name: "self-closing", in: `<a><` + prop + `/></a>`, want: true},
+		// Any XML whitespace may follow the element name, not just the single
+		// space Jenkins writes. Missing such a store would make Update treat a
+		// template that manages it as one that does not, and add the live
+		// store next to it.
+		{name: "line break after the name", in: "<a><" + prop + "\n  plugin=\"credentials@1514\"></" + prop + "></a>", want: true},
+		{name: "CRLF after the name", in: "<a><" + prop + "\r\n></" + prop + "></a>", want: true},
+		{name: "tab after the name", in: "<a><" + prop + "\tplugin=\"credentials@1514\"/></a>", want: true},
 		{name: "absent", in: redactFolderNoCredentials, want: false},
 		{name: "longer element name", in: `<a><` + prop + `Extra/></a>`, want: false},
 		{name: "name in text", in: `<description>` + prop + `</description>`, want: false},
