@@ -121,6 +121,30 @@ finish in seconds — cutting post-merge release latency roughly in half
 (the remaining time is GoReleaser's ~6-minute build) and dropping the
 repository's Actions consumption accordingly.
 
+### Acceptance test shards
+
+The acceptance tests used to run one after another against a single Jenkins:
+107 tests took 287 seconds in October 2026, with a median of 2.3 seconds and
+none longer than 8. The Acceptance Tests job now splits them into shards with
+`.github/scripts/acceptance-shards.sh`, each against its own Jenkins container
+started from the cached image:
+
+- `start` runs one container per shard (port 8080 for shard 0, 8081 for shard 1,
+  and so on) before Go is set up, so the boots overlap the compile.
+- `run` lists the `TestAcc` tests, deals them round-robin across the shards,
+  runs one `go test` per shard side by side, prints each shard's log in its own
+  group, and merges the coverage profiles into `coverage.txt` for Codecov.
+
+Each shard has its own Jenkins, so tests that change global state (CasC,
+global roles, users) cannot affect each other, and the tests need no
+`t.Parallel`. The shards run with `-count=1`: the job restores its Go build
+cache (see [Go caches](#go-caches)), which also holds test results, and
+without it a test binary that hasn't changed would report an earlier run's
+results instead of testing this run's Jenkins. `ACC_SHARDS` sets the number of shards (default 3, which fits
+the 4-vCPU runner). The job keeps its name, so the required "Acceptance
+Tests" check is unchanged. Locally, `make testacc` still runs the suite
+against one container.
+
 ## Go caches
 
 `actions/setup-go`'s built-in cache is keyed only on the runner, the Go
