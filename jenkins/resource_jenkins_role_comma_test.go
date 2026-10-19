@@ -57,6 +57,15 @@ func TestRoleNameRejectsComma(t *testing.T) {
 		{name: "leading comma", value: types.StringValue(",admin"), wantError: true},
 		{name: "trailing comma", value: types.StringValue("admin,"), wantError: true},
 		{name: "comma only", value: types.StringValue(","), wantError: true},
+		{name: "comma between spaces", value: types.StringValue("zz-team , admin"), wantError: true},
+		{name: "two commas", value: types.StringValue("zz-team,,admin"), wantError: true},
+		{name: "comma in non-ASCII name", value: types.StringValue("équipe,admin"), wantError: true},
+		// A per-line match would accept the first line alone.
+		{name: "comma after newline", value: types.StringValue("zz-team\n,admin"), wantError: true},
+		// role-strategy splits on the ASCII comma only, and the adapter
+		// form-encodes the name, so these reach it unchanged.
+		{name: "percent-encoded comma", value: types.StringValue("zz-team%2Cadmin")},
+		{name: "fullwidth comma", value: types.StringValue("zz-team\uff0cadmin")},
 	}
 
 	for _, tt := range tests {
@@ -105,6 +114,9 @@ func TestRolePermissionsRejectComma(t *testing.T) {
 		{name: "several", perms: []string{"hudson.model.Item.Read", "hudson.model.Item.Build"}},
 		{name: "joined pair", perms: []string{"hudson.model.Item.Read,hudson.model.Hudson.Administer"}, wantError: true},
 		{name: "one of several", perms: []string{"hudson.model.Item.Read", "hudson.model.Item.Build,"}, wantError: true},
+		{name: "comma only", perms: []string{","}, wantError: true},
+		{name: "comma between spaces", perms: []string{"hudson.model.Item.Read , hudson.model.Hudson.Administer"}, wantError: true},
+		{name: "comma after newline", perms: []string{"hudson.model.Item.Read\n,hudson.model.Hudson.Administer"}, wantError: true},
 	}
 
 	for _, tt := range tests {
@@ -156,6 +168,11 @@ func (l *roleRequestLog) server(t *testing.T) *httptest.Server {
 		l.mu.Unlock()
 		if strings.Contains(r.URL.Path, "crumbIssuer") {
 			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/getRole") {
+			// No such role: getRole answers with an empty object.
+			_, _ = io.WriteString(w, "{}")
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -222,6 +239,32 @@ func TestRoleAdapterRefusesCommaName(t *testing.T) {
 			errLacks: []string{"state rm", "removed block", "remain in Jenkins", "deleting it"},
 		},
 		{
+			// Update overwrites the role.
+			name:     "overwrite comma name",
+			roleName: "a,b",
+			call: func(c *jenkinsAdapter, name string) error {
+				return c.AddRole(context.Background(), "globalRoles", name, []string{"hudson.model.Hudson.Read"}, "", true)
+			},
+			errHas:   []string{"comma", "no request was sent", "Use a name without a comma"},
+			errLacks: []string{"state rm", "removed block", "remain in Jenkins"},
+		},
+		{
+			name:     "remove comma item role",
+			roleName: "zz-team,admin",
+			call: func(c *jenkinsAdapter, name string) error {
+				return c.RemoveRole(context.Background(), "projectRoles", name)
+			},
+			errHas: []string{"comma", "no request was sent"},
+		},
+		{
+			name:     "remove comma agent role",
+			roleName: "zz-team,admin",
+			call: func(c *jenkinsAdapter, name string) error {
+				return c.RemoveRole(context.Background(), "slaveRoles", name)
+			},
+			errHas: []string{"comma", "no request was sent"},
+		},
+		{
 			name:     "remove plain name",
 			roleName: "zz-team",
 			call: func(c *jenkinsAdapter, name string) error {
@@ -238,6 +281,35 @@ func TestRoleAdapterRefusesCommaName(t *testing.T) {
 			},
 			action: "addRole",
 			param:  "roleName",
+		},
+		{
+			// The name passes plan-time validation; were it sent unencoded,
+			// role-strategy would decode it into "zz-team,admin".
+			name:     "remove percent-encoded comma",
+			roleName: "zz-team%2Cadmin",
+			call: func(c *jenkinsAdapter, name string) error {
+				return c.RemoveRole(context.Background(), "globalRoles", name)
+			},
+			action: "removeRoles",
+			param:  "roleNames",
+		},
+		{
+			name:     "add percent-encoded comma",
+			roleName: "zz-team%2Cadmin",
+			call: func(c *jenkinsAdapter, name string) error {
+				return c.AddRole(context.Background(), "globalRoles", name, []string{"hudson.model.Hudson.Read"}, "", false)
+			},
+			action: "addRole",
+			param:  "roleName",
+		},
+		{
+			name:     "remove fullwidth comma",
+			roleName: "zz-team\uff0cadmin",
+			call: func(c *jenkinsAdapter, name string) error {
+				return c.RemoveRole(context.Background(), "globalRoles", name)
+			},
+			action: "removeRoles",
+			param:  "roleNames",
 		},
 	}
 
@@ -308,22 +380,41 @@ func roleStateWithID(ctx context.Context, t *testing.T, s schema.Schema, roleTyp
 // Plan-time validation does not run on import or destroy, so the resource
 // itself must keep a comma role name from reaching removeRoles: ImportState
 // refuses one, and Delete of one already in state sends no request at all.
-// The resource runs on the real adapter here, because mockJenkinsClient does
-// not apply the adapter's guard.
+// Create and Update, reached with a name that skipped validation, send no
+// addRole either. The resource runs on the real adapter here, because
+// mockJenkinsClient does not apply the adapter's guard.
 func TestRoleResourceCommaName(t *testing.T) {
 	ctx := context.Background()
+	roleModel := func(name string, permissions ...string) *roleResourceModel {
+		perms := make([]attr.Value, 0, len(permissions))
+		for _, p := range permissions {
+			perms = append(perms, types.StringValue(p))
+		}
+		none := types.SetValueMust(types.StringType, []attr.Value{})
+		return &roleResourceModel{
+			Type: types.StringValue("global"), Name: types.StringValue(name), Pattern: types.StringNull(),
+			Permissions: types.SetValueMust(types.StringType, perms), Users: none, Groups: none, Assignments: none,
+		}
+	}
 
 	tests := []struct {
 		name      string
-		op        string // "import" or "delete"
+		op        string // "import", "delete", "create" or "update"
 		roleName  string
 		wantError string // substring of the error detail; "" means no error
 		wantPOST  bool   // exactly one removeRoles POST carrying roleNames=[roleName]
+		wantGETs  int    // getRole requests, which take the name whole
 	}{
 		{name: "import comma name", op: "import", roleName: "zz-team,admin", wantError: "comma"},
+		{name: "import comma in nested name", op: "import", roleName: "folder/zz-team,admin", wantError: "comma"},
+		{name: "import trailing comma", op: "import", roleName: "zz-team,", wantError: "comma"},
+		{name: "import comma only", op: "import", roleName: ",", wantError: "comma"},
 		{name: "import plain name", op: "import", roleName: "zz-team"},
 		{name: "delete comma name", op: "delete", roleName: "zz-team,admin", wantError: "remain in Jenkins"},
 		{name: "delete plain name", op: "delete", roleName: "zz-team", wantPOST: true},
+		// Create first checks, by name, that the role does not exist yet.
+		{name: "create comma name", op: "create", roleName: "zz-team,admin", wantError: "no request was sent", wantGETs: 1},
+		{name: "update comma name", op: "update", roleName: "zz-team,admin", wantError: "no request was sent"},
 	}
 
 	for _, tt := range tests {
@@ -348,6 +439,27 @@ func TestRoleResourceCommaName(t *testing.T) {
 				resp := &resource.DeleteResponse{State: st}
 				r.Delete(ctx, resource.DeleteRequest{State: st}, resp)
 				diags = resp.Diagnostics
+			case "create":
+				plan := tfsdk.Plan{Schema: s}
+				if d := plan.Set(ctx, roleModel(tt.roleName, "hudson.model.Hudson.Read")); d.HasError() {
+					t.Fatalf("building plan: %v", d)
+				}
+				resp := &resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: covMNull(ctx, s)}}
+				r.Create(ctx, resource.CreateRequest{Plan: plan}, resp)
+				diags, state = resp.Diagnostics, resp.State
+			case "update":
+				// A permission change makes Update overwrite the role.
+				st := tfsdk.State{Schema: s}
+				if d := st.Set(ctx, roleModel(tt.roleName, "hudson.model.Hudson.Read")); d.HasError() {
+					t.Fatalf("building state: %v", d)
+				}
+				plan := tfsdk.Plan{Schema: s}
+				if d := plan.Set(ctx, roleModel(tt.roleName, "hudson.model.Hudson.Read", "hudson.model.Item.Read")); d.HasError() {
+					t.Fatalf("building plan: %v", d)
+				}
+				resp := &resource.UpdateResponse{State: st}
+				r.Update(ctx, resource.UpdateRequest{Plan: plan, State: st}, resp)
+				diags = resp.Diagnostics
 			}
 
 			if tt.wantError == "" {
@@ -360,13 +472,13 @@ func TestRoleResourceCommaName(t *testing.T) {
 				t.Errorf("detail = %q, want it to contain %q", detail, tt.wantError)
 			}
 
-			if tt.op == "import" {
+			if tt.op == "import" || tt.op == "create" {
 				var got types.String
 				if d := state.GetAttribute(ctx, path.Root("name"), &got); d.HasError() {
 					t.Fatalf("reading name from state: %v", d)
 				}
 				if tt.wantError != "" && !got.IsNull() {
-					t.Errorf("name in state = %q after a refused import, want null", got.ValueString())
+					t.Errorf("name in state = %q after a refused %s, want null", got.ValueString(), tt.op)
 				}
 				if tt.wantError == "" && got.ValueString() != tt.roleName {
 					t.Errorf("name in state = %q, want %q", got.ValueString(), tt.roleName)
@@ -374,8 +486,8 @@ func TestRoleResourceCommaName(t *testing.T) {
 			}
 
 			if !tt.wantPOST {
-				if n := log.count(); n != 0 {
-					t.Errorf("sent %d request(s), want none; POSTs: %v", n, log.posts())
+				if n, posts := log.count(), log.posts(); n != tt.wantGETs || len(posts) != 0 {
+					t.Errorf("sent %d request(s), want %d getRole GET(s) and no POST; POSTs: %v", n, tt.wantGETs, posts)
 				}
 				return
 			}
