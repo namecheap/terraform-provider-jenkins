@@ -147,6 +147,28 @@ finish in seconds — cutting post-merge release latency roughly in half
 (the remaining time is GoReleaser's ~6-minute build) and dropping the
 repository's Actions consumption accordingly.
 
+## Go caches
+
+`actions/setup-go`'s built-in cache is keyed only on the runner, the Go
+version and `go.sum`, and a cache key can be saved only once, by whichever job
+finishes first. Lint, Unit Tests, Acceptance Tests, Integration Tests and
+CodeQL all shared that one key. The entry that won was saved by a job that
+only builds the provider binary, so it never held the test-only modules
+(`terraform-plugin-testing` and its dependencies) or their compiled packages.
+Every unit and acceptance run downloaded those modules again and recompiled
+them, and the unit job spent about 46 of its 48 seconds compiling `-race`
+builds.
+
+Lint, Unit Tests and Acceptance Tests therefore set `cache: false` on
+`setup-go` and restore their own `actions/cache` entry, keyed on
+`github.job`, the Go version and `go.sum`, holding `~/go/pkg/mod` and
+`~/.cache/go-build`. Each job's entry holds the modules and compiled packages
+that job needs. `restore-keys` falls back to the job's previous entry when
+`go.sum` changes, so a dependency bump only downloads and recompiles what
+changed. Integration Tests and CodeQL only build the binary and keep the
+shared `setup-go` cache. Docs keeps its own `setup-go` key, which also
+covers `tools/go.sum`.
+
 ## Editing the pipeline — invariants to keep
 
 - **Don't add `paths`/`paths-ignore` to `test.yml` or `codeql.yml` triggers**
@@ -164,3 +186,6 @@ repository's Actions consumption accordingly.
   the binary, tests, or published docs"** — when in doubt, let the job run.
   In particular `docs/**` must never be added to it: registry-published
   documentation is a user-visible deliverable.
+- **A new job that compiles test packages gets its own Go cache** (see
+  [Go caches](#go-caches)). On the shared `setup-go` key it would depend on
+  which job saved that key first.

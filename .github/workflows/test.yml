@@ -76,9 +76,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: setup-go
         with:
           go-version-file: go.mod
-          cache: true
+          # This job keeps its own Go cache (next step); see "Go caches" in CI.md.
+          cache: false
+      - name: Restore Go module and build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ github.job }}-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -101,9 +111,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: setup-go
         with:
           go-version-file: go.mod
-          cache: true
+          # This job keeps its own Go cache (next step); see "Go caches" in CI.md.
+          cache: false
+      - name: Restore Go module and build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ github.job }}-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
 
       - name: Test with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
@@ -192,9 +212,19 @@ jobs:
       # Install Go and restore module/build caches AFTER Jenkins has started,
       # so its boot overlaps this step and the warm compile below.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: setup-go
         with:
           go-version-file: go.mod
-          cache: true
+          # This job keeps its own Go cache (next step); see "Go caches" in CI.md.
+          cache: false
+      - name: Restore Go module and build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ github.job }}-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
 
       - name: Run acceptance tests
         env:

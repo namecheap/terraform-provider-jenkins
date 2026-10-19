@@ -52,7 +52,7 @@ Get the attributes of a folder within Jenkins.
 				Computed:            true,
 			},
 			"template": schema.StringAttribute{
-				MarkdownDescription: "The configuration file template, used to communicate with Jenkins.",
+				MarkdownDescription: "The folder's `config.xml` as read from Jenkins. Encrypted secrets are kept out of state: the folder credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is omitted and any other encrypted secret value is replaced with `{redacted}`. This value is therefore not a copy of the configuration and must not be used as a `jenkins_job` template: Jenkins would store `{redacted}` itself as each secret, and the folder credentials would not be copied. The `jenkins_job` resource rejects a template containing the marker.",
 				Computed:            true,
 			},
 		}),
@@ -118,7 +118,7 @@ func (d *folderDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	data.DisplayName = types.StringValue(f.DisplayName)
 	data.Folder = types.StringValue(formatFolderID(folders))
 	data.Description = types.StringValue(f.Description)
-	data.Template = types.StringValue(strings.TrimSpace(config))
+	data.Template = types.StringValue(strings.TrimSpace(redactJenkinsConfig(config)))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
