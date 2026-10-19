@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"net/http"
+	"path"
 	"strings"
 	"testing"
 
@@ -514,5 +515,82 @@ func TestCredentialIdentifierEncodedForms(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCredentialDomainFolderOutsideSystemStore: jenkins_credential_domain
+// checks its folder only at plan, so a folder from an import ID or from state
+// reaches credentialStoreBase as it is. "job" and "/job/" format to nothing,
+// which for a credential selects the system store, and "..", "?" and "#"
+// change the URL. Whatever request such a folder produces must stay out of
+// the system store once Jetty has removed its dot-segments; a domain import
+// or destroy that reached it would act on a system domain of the same name.
+// A runtime check that sends no request at all also passes.
+func TestCredentialDomainFolderOutsideSystemStore(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, folder string
+		// system marks the control: no folder is the system store.
+		system bool
+	}{
+		{name: "unset", folder: "", system: true},
+		{name: "job", folder: "job"},
+		{name: "job slashes", folder: "/job/"},
+		{name: "job job", folder: "job/job"},
+		{name: "dot-dot", folder: ".."},
+		{name: "job dot-dot", folder: "job/.."},
+		{name: "triple dot-dot", folder: "../../.."},
+		{name: "leading dot-dot", folder: "../x"},
+		{name: "trailing dot-dot", folder: "x/.."},
+		{name: "sibling", folder: "team-a/../team-b"},
+		{name: "question mark", folder: "a?"},
+		{name: "hash", folder: "a#"},
+		{name: "climb to system with question mark", folder: "x/../../../credentials/store/system/domain/_?"},
+	} {
+		for _, op := range []string{"import", "update", "delete"} {
+			t.Run(op+"/"+tc.name, func(t *testing.T) {
+				client, requests := credentialPathRecorder(t, func(r *http.Request) (int, string) {
+					if r.Method == http.MethodGet {
+						return http.StatusNotFound, ""
+					}
+					return http.StatusOK, `{}`
+				})
+				r, sr := pathTestResource(ctx, t, newCredentialDomainResource, client)
+				s := sr.Schema
+
+				if op == "import" {
+					id := "team"
+					if tc.folder != "" {
+						id = tc.folder + "/team"
+					}
+					imported := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+					r.(resource.ResourceWithImportState).ImportState(ctx, resource.ImportStateRequest{ID: id}, &imported)
+					if imported.Diagnostics.HasError() {
+						t.Fatalf("ImportState(%q): %v", id, imported.Diagnostics)
+					}
+					read := resource.ReadResponse{State: imported.State}
+					r.Read(ctx, resource.ReadRequest{State: imported.State}, &read)
+				} else {
+					folder := types.StringNull()
+					if tc.folder != "" {
+						folder = types.StringValue(tc.folder)
+					}
+					runCredentialOp(ctx, t, r, op, &credentialDomainResourceModel{
+						ID: types.StringValue("x"), Name: types.StringValue("team"), Folder: folder, Description: types.StringValue("d"),
+					})
+				}
+
+				got := requests()
+				if tc.system && len(got) == 0 {
+					t.Fatalf("folder %q: no request sent", tc.folder)
+				}
+				for _, req := range got {
+					resolved := path.Clean(req.path)
+					if inSystem := strings.Contains(resolved, "/credentials/store/system/"); inSystem != tc.system {
+						t.Errorf("folder %q: %v resolves to %s; in the system store = %v, want %v", tc.folder, req, resolved, inSystem, tc.system)
+					}
+				}
+			})
+		}
 	}
 }
