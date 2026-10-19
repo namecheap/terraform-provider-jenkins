@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -151,11 +152,14 @@ func TestRolePermissionsRejectComma(t *testing.T) {
 type roleRequestLog struct {
 	mu   sync.Mutex
 	reqs []roleRequest
+	// role is the JSON getRole answers with; empty means no such role. It is
+	// set before server is called, and only read afterwards.
+	role string
 }
 
 type roleRequest struct {
 	method, path string
-	form         url.Values
+	query, form  url.Values
 }
 
 func (l *roleRequestLog) server(t *testing.T) *httptest.Server {
@@ -164,15 +168,19 @@ func (l *roleRequestLog) server(t *testing.T) *httptest.Server {
 		b, _ := io.ReadAll(r.Body)
 		form, _ := url.ParseQuery(string(b))
 		l.mu.Lock()
-		l.reqs = append(l.reqs, roleRequest{method: r.Method, path: r.URL.Path, form: form})
+		l.reqs = append(l.reqs, roleRequest{method: r.Method, path: r.URL.Path, query: r.URL.Query(), form: form})
 		l.mu.Unlock()
 		if strings.Contains(r.URL.Path, "crumbIssuer") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/getRole") {
-			// No such role: getRole answers with an empty object.
-			_, _ = io.WriteString(w, "{}")
+			// For no such role, getRole answers with an empty object.
+			body := l.role
+			if body == "" {
+				body = "{}"
+			}
+			_, _ = io.WriteString(w, body)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -191,6 +199,12 @@ func (l *roleRequestLog) posts() []roleRequest {
 		}
 	}
 	return out
+}
+
+func (l *roleRequestLog) requests() []roleRequest {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]roleRequest(nil), l.reqs...)
 }
 
 func (l *roleRequestLog) count() int {
@@ -500,6 +514,141 @@ func TestRoleResourceCommaName(t *testing.T) {
 			}
 			if got := posts[0].form["roleNames"]; len(got) != 1 || got[0] != tt.roleName {
 				t.Errorf("roleNames = %q, want exactly [%q]", got, tt.roleName)
+			}
+		})
+	}
+}
+
+// An Update that changes only users, groups or assignments leaves the role in
+// place: it sends no addRole and reconciles the entries one request at a time.
+// With a comma role name in state, each of those requests carries the name
+// whole in roleName, which role-strategy looks up as one role, so only that
+// role's entries change, and no addRole or removeRoles is sent.
+func TestRoleResourceCommaNameEntriesOnly(t *testing.T) {
+	ctx := context.Background()
+	const name = "zz-team,admin"
+	type post struct{ action, param, sid string }
+	roleModel := func(roleType, pattern, permission string, entries []roleEntry) *roleResourceModel {
+		sids := map[string][]attr.Value{}
+		for _, e := range entries {
+			sids[e.Type] = append(sids[e.Type], types.StringValue(e.Sid))
+		}
+		set := func(typ string) types.Set {
+			return types.SetValueMust(types.StringType, append([]attr.Value{}, sids[typ]...))
+		}
+		p := types.StringNull()
+		if pattern != "" {
+			p = types.StringValue(pattern)
+		}
+		return &roleResourceModel{
+			ID: types.StringValue(roleType + "/" + name), Type: types.StringValue(roleType), Name: types.StringValue(name), Pattern: p,
+			Permissions: types.SetValueMust(types.StringType, []attr.Value{types.StringValue(permission)}),
+			Users:       set(roleEntryUser), Groups: set(roleEntryGroup), Assignments: set(roleEntryEither),
+		}
+	}
+
+	tests := []struct {
+		name       string
+		roleType   string
+		apiType    string
+		pattern    string // in state, plan and Jenkins alike; "" for a global role
+		permission string
+		held       []roleEntry // in state and in Jenkins
+		want       []roleEntry // in the plan
+		wantPOSTs  []post      // in order
+	}{
+		{
+			name: "global user swapped", roleType: "global", apiType: "globalRoles", permission: "hudson.model.Hudson.Read",
+			held:      []roleEntry{{Type: roleEntryUser, Sid: "alice"}},
+			want:      []roleEntry{{Type: roleEntryUser, Sid: "bob"}},
+			wantPOSTs: []post{{"assignUserRole", "user", "bob"}, {"unassignUserRole", "user", "alice"}},
+		},
+		{
+			name: "global entries all removed", roleType: "global", apiType: "globalRoles", permission: "hudson.model.Hudson.Read",
+			held:      []roleEntry{{Type: roleEntryUser, Sid: "alice"}, {Type: roleEntryGroup, Sid: "devs"}},
+			wantPOSTs: []post{{"unassignUserRole", "user", "alice"}, {"unassignGroupRole", "group", "devs"}},
+		},
+		{
+			name: "item group added", roleType: "item", apiType: "projectRoles", pattern: ".*", permission: "hudson.model.Item.Read",
+			held:      []roleEntry{{Type: roleEntryGroup, Sid: "devs"}},
+			want:      []roleEntry{{Type: roleEntryGroup, Sid: "devs"}, {Type: roleEntryGroup, Sid: "ops"}},
+			wantPOSTs: []post{{"assignGroupRole", "group", "ops"}},
+		},
+		{
+			name: "agent ambiguous entry made a user", roleType: "agent", apiType: "slaveRoles", pattern: "linux-.*", permission: "hudson.model.Computer.Connect",
+			held:      []roleEntry{{Type: roleEntryEither, Sid: "carol"}},
+			want:      []roleEntry{{Type: roleEntryUser, Sid: "carol"}},
+			wantPOSTs: []post{{"assignUserRole", "user", "carol"}, {"unassignRole", "sid", "carol"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			role, err := json.Marshal(roleStrategyRoleResponse{
+				PermissionIDs: map[string]bool{tt.permission: true}, Pattern: tt.pattern, Sids: tt.held,
+			})
+			if err != nil {
+				t.Fatalf("encoding getRole answer: %v", err)
+			}
+			log := roleRequestLog{role: string(role)}
+			c, err := newJenkinsClient(&Config{ServerURL: log.server(t).URL})
+			if err != nil {
+				t.Fatalf("newJenkinsClient error = %v", err)
+			}
+			r := &roleResource{resourceHelper: &resourceHelper{client: c}}
+			s := covMSchema(ctx, r)
+
+			st := tfsdk.State{Schema: s}
+			if d := st.Set(ctx, roleModel(tt.roleType, tt.pattern, tt.permission, tt.held)); d.HasError() {
+				t.Fatalf("building state: %v", d)
+			}
+			plan := tfsdk.Plan{Schema: s}
+			if d := plan.Set(ctx, roleModel(tt.roleType, tt.pattern, tt.permission, tt.want)); d.HasError() {
+				t.Fatalf("building plan: %v", d)
+			}
+			resp := &resource.UpdateResponse{State: st}
+			r.Update(ctx, resource.UpdateRequest{Plan: plan, State: st}, resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("unexpected diagnostics: %v", resp.Diagnostics)
+			}
+
+			var posts []roleRequest
+			gets := 0
+			for _, req := range log.requests() {
+				switch {
+				case strings.Contains(req.path, "crumbIssuer"):
+				case req.method == http.MethodGet && req.path == roleStrategyBase+"/getRole":
+					gets++
+					if got := req.query["roleName"]; len(got) != 1 || got[0] != name {
+						t.Errorf("getRole roleName = %q, want exactly [%q]", got, name)
+					}
+				case req.method == http.MethodPost:
+					posts = append(posts, req)
+				default:
+					t.Errorf("unexpected request %s %s", req.method, req.path)
+				}
+			}
+			// One read to reconcile the entries, one to read the role back.
+			if gets != 2 {
+				t.Errorf("sent %d getRole GET(s), want 2", gets)
+			}
+			if len(posts) != len(tt.wantPOSTs) {
+				t.Fatalf("sent POSTs %v, want %v", posts, tt.wantPOSTs)
+			}
+			for i, want := range tt.wantPOSTs {
+				got := posts[i]
+				if p := roleStrategyBase + "/" + want.action; got.path != p {
+					t.Errorf("POST %d path = %q, want %q", i, got.path, p)
+				}
+				if v := got.form["roleName"]; len(v) != 1 || v[0] != name {
+					t.Errorf("POST %d roleName = %q, want exactly [%q]", i, v, name)
+				}
+				if v := got.form.Get("type"); v != tt.apiType {
+					t.Errorf("POST %d type = %q, want %q", i, v, tt.apiType)
+				}
+				if v := got.form[want.param]; len(v) != 1 || v[0] != want.sid {
+					t.Errorf("POST %d %s = %q, want exactly [%q]", i, want.param, v, want.sid)
+				}
 			}
 		})
 	}
