@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -16,9 +17,10 @@ import (
 )
 
 type configurationAsCodeResourceModel struct {
-	ID      types.String `tfsdk:"id"`
-	Section types.String `tfsdk:"section"`
-	YAML    types.String `tfsdk:"yaml"`
+	ID             types.String `tfsdk:"id"`
+	Section        types.String `tfsdk:"section"`
+	YAML           types.String `tfsdk:"yaml"`
+	UnorderedPaths types.Set    `tfsdk:"unordered_paths"`
 }
 
 type configurationAsCodeResource struct {
@@ -48,6 +50,7 @@ Key behaviours:
 
 - **Merge, not replace.** Applying a section merges the declared keys into the running configuration; keys present on the controller but not in ` + "`yaml`" + ` are left untouched. Drift is detected as a *subset*: only keys you declare are compared.
 - **Secrets.** Use JCasC ` + "`${VAR}`" + ` interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.
+- **Sequences.** Lists compare in order and by length, since JCasC list configurators replace the list. ` + "`unordered_paths`" + ` opts a list into an order-insensitive comparison, for lists the controller exports in an order of its own.
 - **Drift.** When a declared key drifts, state keeps only the declared keys: ` + "`${VAR}`" + ` placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as ` + "`" + cascDriftMarker + "`" + ` instead.
 - **Import.** Import records only ` + "`section`" + `; ` + "`yaml`" + ` is not read from the controller, so the first apply after import re-applies the configured document.
 - **Delete is best-effort.** JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
@@ -75,6 +78,16 @@ Requires the ` + "`configuration-as-code`" + ` plugin and an account with ` + "`
 			"yaml": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "The YAML subtree for `section` (the content *under* the section key, not including the key itself). May reference secrets with JCasC `${VAR}` interpolation.",
+			},
+			"unordered_paths": schema.SetAttribute{
+				ElementType: types.StringType,
+				Optional:    true,
+				MarkdownDescription: "Paths, within `section`, of the lists compared without regard to order: same length, and each declared element matching a distinct controller element. " +
+					"A path is mapping keys joined by dots, where `*` stands for any key or any list element, e.g. `authorizationStrategy.roleBased.roles.*.*.permissions`. " +
+					"Only use it for lists whose order the controller does not keep: JCasC still applies the list as declared.",
+				Validators: []validator.Set{
+					setvalidator.ValueStringsAre(stringvalidator.RegexMatches(reCASCPath, "must be keys or '*' joined by '.', without whitespace, '*' standing for a whole segment")),
+				},
 			},
 		},
 	}
@@ -116,7 +129,12 @@ func (r *configurationAsCodeResource) Read(ctx context.Context, req resource.Rea
 	// compare against; the next plan applies the configured one.
 	if !data.YAML.IsNull() {
 		section := data.Section.ValueString()
-		inSync, err := cascInSync(data.YAML.ValueString(), exported, section)
+		unordered, diags := unorderedPaths(ctx, data.UnorderedPaths)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		inSync, err := cascInSync(data.YAML.ValueString(), exported, section, unordered)
 		if err != nil {
 			resp.Diagnostics.AddError("Unable to Compare Configuration", err.Error())
 			return
@@ -128,7 +146,7 @@ func (r *configurationAsCodeResource) Read(ctx context.Context, req resource.Rea
 			// apply) is produced without copying resolved ${...} values or
 			// unmanaged keys from the export into state. If the section is gone
 			// entirely, drop the resource so it is recreated.
-			view, found, err := cascDriftView(data.YAML.ValueString(), exported, section)
+			view, found, err := cascDriftView(data.YAML.ValueString(), exported, section, unordered)
 			if err != nil {
 				resp.Diagnostics.AddError("Unable to Read Section", err.Error())
 				return
@@ -203,6 +221,16 @@ func (r *configurationAsCodeResource) ImportState(ctx context.Context, req resou
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("section"), section)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), section)...)
+}
+
+// unorderedPaths converts the unordered_paths attribute into patterns.
+func unorderedPaths(ctx context.Context, set types.Set) (cascPaths, diag.Diagnostics) {
+	if set.IsNull() || set.IsUnknown() {
+		return nil, nil
+	}
+	var patterns []string
+	diags := set.ElementsAs(ctx, &patterns, false)
+	return newCASCPaths(patterns), diags
 }
 
 // apply wraps the declared subtree in its section key and POSTs it to JCasC.

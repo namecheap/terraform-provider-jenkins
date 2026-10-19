@@ -417,3 +417,51 @@ func testAccCheckCASCSectionContains(section, want string) resource.TestCheckFun
 		return nil
 	}
 }
+
+// testAccCASCMonitorsConfig declares disabledAdministrativeMonitors, a set the
+// controller exports in an order of its own, not in the declared one.
+func testAccCASCMonitorsConfig(unordered bool) string {
+	paths := ""
+	if unordered {
+		paths = `unordered_paths = ["disabledAdministrativeMonitors"]`
+	}
+	return fmt.Sprintf(`
+resource jenkins_configuration_as_code test {
+  section = "jenkins"
+  yaml    = yamlencode({
+    disabledAdministrativeMonitors = [
+      "jenkins.security.QueueItemAuthenticatorMonitor",
+      "hudson.diagnosis.ReverseProxySetupMonitor",
+      "jenkins.diagnostics.RootUrlNotSetMonitor",
+      "hudson.model.UpdateCenter$CoreUpdateMonitor",
+    ]
+  })
+  %s
+}`, paths)
+}
+
+// TestAccJenkinsConfigurationAsCode_unorderedPaths applies a list the
+// controller reorders: in order it never converges, with unordered_paths the
+// plan after the apply is empty.
+func TestAccJenkinsConfigurationAsCode_unorderedPaths(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config:             testAccCASCMonitorsConfig(false),
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				Config: testAccCASCMonitorsConfig(true),
+			},
+			{
+				// The same configuration again: a refresh must agree with it.
+				Config: testAccCASCMonitorsConfig(true),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectEmptyPlan(),
+				}},
+			},
+		},
+	})
+}
