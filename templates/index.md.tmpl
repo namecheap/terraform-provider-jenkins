@@ -256,9 +256,16 @@ resource "jenkins_credential_secret_text" "example" {
 Jenkins cannot update a credential while keeping a secret it already stores: an
 update replaces the whole credential, and a secret left out of it is stored as
 empty. Every update of a credential resource therefore re-sends the secrets
-Terraform knows (the write-only value is read from configuration on every apply).
-If an optional secret is not set in the configuration but Jenkins holds a value
-for it, the update fails instead of erasing that value.
+Terraform knows: the write-only value is read from configuration on every apply,
+and a plain value kept by `lifecycle.ignore_changes` is re-sent from state. An
+update fails instead of erasing a secret Terraform has no value for: one kept by
+`ignore_changes` while state holds none (as after an import), or an optional
+`password` (`jenkins_credential_username`), `secret_id`
+(`jenkins_credential_vault_approle`) or `passphrase` (`jenkins_credential_ssh`)
+that was never set in Terraform but for which Jenkins reports a value. Jenkins
+reports a username password or Vault `secret_id` even when it is empty, so such a
+credential needs the secret, or `""`, in its configuration before any in-place
+update. See [Credential updates and secrets](guides/credential-secret-updates).
 
 The plain and write-only forms are mutually exclusive. The plain `<secret>`
 attributes remain supported for backward compatibility, but the write-only form is

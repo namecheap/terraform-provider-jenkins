@@ -47,6 +47,9 @@ func usernameCredentialSpec() credentialSpec[credentialUsernameResourceModel] {
 		setID: func(m *credentialUsernameResourceModel, id string) {
 			m.ID = types.StringValue(id)
 		},
+		// The password is optional. Create sends an unset password as an empty
+		// element, which Jenkins then reports as a stored value, so an update
+		// without a password that Terraform has never managed fails.
 		secretFields: []credentialSecretField[credentialUsernameResourceModel]{{
 			name:         "password",
 			hasWriteOnly: true,
@@ -95,7 +98,7 @@ Manages a username credential within Jenkins. This username may then be referenc
 				Required:            true,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "The password to be associated with the credentials. Jenkins cannot update a credential without re-sending its password, so every update sends the configured password and overwrites one set manually within Jenkins. If neither `password` nor `password_wo` is set, the credential is created without a password, expected to be set manually within Jenkins; an update then fails instead of erasing it if Jenkins reports a stored password (Jenkins does not reveal whether it is empty). Set `password = \"\"` to manage an empty password.",
+				MarkdownDescription: "The password to be associated with the credentials. Jenkins cannot keep a stored password across an update, so every update re-sends the configured password, replacing one set within Jenkins, and removing `password` or `password_wo` from a configuration that set it clears the password. If neither is ever set, the credential is created with an empty password and **any later in-place update fails** (instead of erasing a password that may since have been set within Jenkins), because Jenkins reports a stored password even when it is empty. Set `password = \"\"` to manage an empty password.",
 				Optional:            true,
 				Sensitive:           true,
 			},

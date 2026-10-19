@@ -63,6 +63,9 @@ func vaultAppRoleCredentialSpec() credentialSpec[credentialVaultAppRoleResourceM
 		setID: func(m *credentialVaultAppRoleResourceModel, id string) {
 			m.ID = types.StringValue(id)
 		},
+		// The secret_id is optional. Create sends an unset secret_id as an empty
+		// element, which Jenkins then reports as a stored value, so an update
+		// without a secret_id that Terraform has never managed fails.
 		secretFields: []credentialSecretField[credentialVaultAppRoleResourceModel]{{
 			name:         "secret_id",
 			hasWriteOnly: true,
@@ -129,7 +132,7 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 				Required:            true,
 			},
 			"secret_id": schema.StringAttribute{
-				MarkdownDescription: "The secret_id to be associated with the credentials. Jenkins cannot update a credential without re-sending its secret_id, so every update sends the configured secret_id and overwrites one set manually within Jenkins. If neither `secret_id` nor `secret_id_wo` is set, the credential is created without a secret_id, expected to be set manually within Jenkins; an update then fails instead of erasing it if Jenkins reports a stored secret_id (Jenkins does not reveal whether it is empty). Set `secret_id = \"\"` to manage an empty secret_id.",
+				MarkdownDescription: "The secret_id to be associated with the credentials. Jenkins cannot keep a stored secret_id across an update, so every update re-sends the configured secret_id, replacing one set within Jenkins, and removing `secret_id` or `secret_id_wo` from a configuration that set it clears the secret_id. If neither is ever set, the credential is created with an empty secret_id and **any later in-place update fails** (instead of erasing a secret_id that may since have been set within Jenkins), because Jenkins reports a stored secret_id even when it is empty. Set `secret_id = \"\"` to manage an empty secret_id.",
 				Optional:            true,
 				Sensitive:           true,
 			},

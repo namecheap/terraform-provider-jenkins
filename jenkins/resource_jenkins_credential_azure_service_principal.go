@@ -226,15 +226,3 @@ func (r *credentialAzureServicePrincipalResource) ConfigValidators(_ context.Con
 		),
 	}
 }
-
-// buildAzureServicePrincipalUpdate constructs the plain-secret update payload the
-// same way the shared CRUD flow does (resolveSecretsUpdate, then build):
-// client_secret is always included, and certificate_id is always taken from the
-// model (an empty value means not certificate-based) and written to
-// CertificateId — never ClientId (the #95 bug). It delegates to the spec's build
-// so the #95 regression test (TestBuildAzureServicePrincipalUpdate) exercises
-// the real production mapping.
-func buildAzureServicePrincipalUpdate(data credentialAzureServicePrincipalResourceModel) AzureServicePrincipalCredentials {
-	secrets := map[string]string{"client_secret": data.ClientSecret.ValueString()}
-	return *azureServicePrincipalCredentialSpec().build(&data, secrets).(*AzureServicePrincipalCredentials)
-}
