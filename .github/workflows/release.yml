@@ -13,6 +13,13 @@ permissions:
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    # Gate for the signing secrets (#251). Until an admin configures it, GitHub
+    # creates `release` unprotected on the first run and the job behaves as
+    # before (organisation secrets are still visible to it). Moving
+    # GPG_PRIVATE_KEY and PASSPHRASE into this environment, with required
+    # reviewers and a deployment rule allowing `v*` tags, then needs no change
+    # here. See "Release hardening" in RELEASE.md.
+    environment: release
     steps:
       # fetch-depth: 0 pulls full history and all tags — required by goreleaser
       # to identify the previous tag (changelog is owned by release-please).
@@ -26,6 +33,44 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Refuse to sign or publish a tag that is not a release of main (#251).
+      # Release tags are made by release-please on the Release PR merge commit,
+      # or by hand on main after a merged manifest bump (RELEASE.md), so the
+      # tagged commit is on main and its manifest names the tag's version. A tag
+      # on an unreviewed branch commit, or an older main commit tagged as a newer
+      # version, fails here before the GPG key is imported.
+      #
+      # GitHub runs the copy of this file at the tagged commit, so this stops
+      # mistaken tags but not a writer who also edits it out on that commit;
+      # the tag ruleset and protected `release` environment in RELEASE.md do.
+      #
+      # The tag name is chosen by whoever pushes it: it is read only from the
+      # environment, only compared, and never put into a workflow command.
+      - name: Verify tag is a release of main
+        run: |
+          set -euo pipefail
+          if ! commit=$(git rev-parse --verify --quiet "${GITHUB_SHA}^{commit}"); then
+            echo "::error title=Release refused::The pushed tag does not point at a commit."
+            exit 1
+          fi
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
+            echo "::error title=Release refused::The tagged commit is not on main."
+            printf 'tag=%s commit=%s\n' "$GITHUB_REF_NAME" "$commit" >&2
+            exit 1
+          fi
+          if ! version=$(git show "${commit}:.release-please-manifest.json" \
+              | jq -er '."." | strings | select(length > 0)'); then
+            echo "::error title=Release refused::No version under \".\" in .release-please-manifest.json at the tagged commit."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "v${version}" ]; then
+            echo "::error title=Release refused::The tag name is not v<version> from .release-please-manifest.json at the tagged commit."
+            printf 'tag=%s manifest=%s commit=%s\n' "$GITHUB_REF_NAME" "$version" "$commit" >&2
+            exit 1
+          fi
+          printf 'Releasing %s: commit %s is on main and matches the manifest.\n' "$GITHUB_REF_NAME" "$commit"
 
       - name: Import GPG key
         id: import_gpg
