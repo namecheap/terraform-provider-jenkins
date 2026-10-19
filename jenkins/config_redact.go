@@ -38,7 +38,7 @@ const redactedSecretMarker = "{redacted}"
 
 // folderCredentialsPropertyElement is the folder property holding the folder's
 // credentials store (credentials plugin, FolderCredentialsProvider).
-const folderCredentialsPropertyElement = "com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty"
+const folderCredentialsPropertyElement = "com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty" //nolint:gosec // G101 false positive: an XML element name, not a credential
 
 var (
 	// reFolderCredentialsProperty matches a whole FolderCredentialsProperty

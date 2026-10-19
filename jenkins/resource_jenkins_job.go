@@ -23,7 +23,7 @@ import (
 // store (FolderCredentialsProperty), i.e. that the template manages the store.
 // Read only keeps that element in state, and Update only lets a template
 // without it delete the store, when the key is set; see jobTemplateFromServer.
-const jobTemplateFolderCredentialsKey = "template_has_folder_credentials"
+const jobTemplateFolderCredentialsKey = "template_has_folder_credentials" //nolint:gosec // G101 false positive: a private-state key name, not a credential
 
 type jobResourceModel struct {
 	ID       types.String `tfsdk:"id"`
