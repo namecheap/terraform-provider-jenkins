@@ -6,7 +6,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
 
 type (
@@ -77,7 +76,7 @@ func (d *dataSourceHelper) schemaCredential(s map[string]schema.Attribute) map[s
 		s["domain"] = schema.StringAttribute{
 			MarkdownDescription: "The domain store containing this resource.",
 			Optional:            true,
-			Validators:          []validator.String{preEncodedValidator{}},
+			Validators:          preEncodedValidators(),
 		}
 	}
 	if _, ok := s["scope"]; !ok {

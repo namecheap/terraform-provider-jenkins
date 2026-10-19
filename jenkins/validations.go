@@ -88,6 +88,12 @@ type preEncodedValidator struct{}
 
 var _ validator.String = preEncodedValidator{}
 
+// preEncodedValidators returns the validator list for a data-source domain
+// attribute. It lives here so data_source.go does not need the validator import.
+func preEncodedValidators() []validator.String {
+	return []validator.String{preEncodedValidator{}}
+}
+
 func (preEncodedValidator) Description(context.Context) string {
 	return "should be the literal value, not percent-encoded"
 }
