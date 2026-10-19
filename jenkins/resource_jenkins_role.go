@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -109,9 +110,17 @@ Assignments are **authoritative**: the provider makes the role's entries exactly
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The unique name of the role.",
+				MarkdownDescription: "The unique name of the role. Must not contain a comma.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					// role-strategy's removeRoles splits role names on ",", so
+					// deleting "team,admin" would delete the role "admin".
+					stringvalidator.RegexMatches(regexp.MustCompile(`^[^,]*$`), "must not contain a comma "+
+						"(role-strategy cannot delete such a role without deleting other roles; to stop managing one, "+
+						"replace its resource block with a removed block that sets lifecycle { destroy = false }, "+
+						"or run terraform state rm, then delete the role in Jenkins by hand)"),
 				},
 			},
 			"pattern": schema.StringAttribute{
@@ -132,6 +141,8 @@ Assignments are **authoritative**: the provider makes the role's entries exactly
 				ElementType:         types.StringType,
 				MarkdownDescription: "The permission IDs granted by the role, e.g. `hudson.model.Item.Build`.",
 				Validators: []validator.Set{
+					// addRole receives the IDs joined with ",".
+					setvalidator.ValueStringsAre(stringvalidator.RegexMatches(regexp.MustCompile(`^[^,]*$`), "must not contain a comma")),
 					setvalidator.SizeAtLeast(1),
 				},
 			},
@@ -331,6 +342,11 @@ func (r *roleResource) ImportState(ctx context.Context, req resource.ImportState
 			"Unexpected Import Identifier",
 			`Expected import identifier with format: "<type>/<name>" (e.g. "item/team-a-developer"). Got: `+req.ID,
 		)
+		return
+	}
+	if err := checkRoleName(req.ID[idx+1:]); err != nil {
+		resp.Diagnostics.AddError("Unable to Import Role",
+			err.Error()+", so this provider could not delete the role without deleting other roles and does not import it.")
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("type"), req.ID[:idx])...)

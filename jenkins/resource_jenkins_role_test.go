@@ -262,6 +262,368 @@ resource jenkins_role foo {
 	})
 }
 
+// testAccRoleCommaTypes lists each role type with its role-strategy API type
+// and a permission it grants, so the comma tests cover every role map.
+var testAccRoleCommaTypes = []struct{ roleType, apiType, permission string }{
+	{"global", "globalRoles", "hudson.model.Hudson.Read"},
+	{"item", "projectRoles", "hudson.model.Item.Read"},
+	{"agent", "slaveRoles", "hudson.model.Computer.Connect"},
+}
+
+// testAccJenkinsRoleCommaConfig renders one role assigned to user. The comma
+// tests use it for the comma-free roles a comma name could reach. An item or
+// agent role gets the ".*" pattern role-strategy stores when none is set.
+func testAccJenkinsRoleCommaConfig(roleType, label, name, permissions, user string) string {
+	return fmt.Sprintf(`
+resource jenkins_role %s {
+	type        = %q
+	name        = %q
+	permissions = %s
+	users       = [%q]
+}`, label, roleType, name, permissions, user)
+}
+
+// role-strategy's removeRoles splits role names on ",", so destroying a role
+// named "<team>,<victim>" would delete the victim role and leave the comma
+// role behind. The name is refused at plan, for a new role and for a rename,
+// and the comma-free roles around it keep their permissions and entries. Every
+// role type is covered: removeRoles splits the names for each role map.
+func TestAccJenkinsRole_commaName(t *testing.T) {
+	for _, tc := range testAccRoleCommaTypes {
+		t.Run(tc.roleType, func(t *testing.T) {
+			prefix := "tfacc-sec256-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+			victim, team := prefix+"-victim", prefix+"-team"
+			commaName := team + "," + victim
+			permissions := fmt.Sprintf("[%q]", tc.permission)
+			victimConfig := testAccJenkinsRoleCommaConfig(tc.roleType, "victim", victim, permissions, prefix+"-alice")
+			teamConfig := func(name string) string {
+				return victimConfig + testAccJenkinsRoleCommaConfig(tc.roleType, "team", name, permissions, prefix+"-bob")
+			}
+			nameRejected := regexp.MustCompile(`Attribute\s+name\s+must\s+not\s+contain\s+a\s+comma`)
+			victimIntact := testAccCheckJenkinsRoleEntries(tc.apiType, victim, roleEntry{Type: roleEntryUser, Sid: prefix + "-alice"})
+
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProviders,
+				CheckDestroy:             testAccCheckJenkinsRoleDestroy,
+				Steps: []resource.TestStep{
+					{
+						Config: victimConfig,
+						Check:  victimIntact,
+					},
+					{
+						// A new role: refused by plan, so nothing is ever applied.
+						Config:      teamConfig(commaName),
+						PlanOnly:    true,
+						ExpectError: nameRejected,
+					},
+					{
+						// Neither the comma role nor a role named after its first
+						// part was created, and the victim is untouched.
+						Config:           victimConfig,
+						ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+						Check: resource.ComposeTestCheckFunc(
+							victimIntact,
+							testAccCheckJenkinsRolesAbsent(tc.apiType, commaName, team),
+						),
+					},
+					{
+						Config: teamConfig(team),
+						Check:  testAccCheckJenkinsRoleEntries(tc.apiType, team, roleEntry{Type: roleEntryUser, Sid: prefix + "-bob"}),
+					},
+					{
+						// A rename replaces the role: refused by plan as well, so the
+						// comma-free role is neither destroyed nor recreated.
+						Config:      teamConfig(commaName),
+						PlanOnly:    true,
+						ExpectError: nameRejected,
+					},
+					{
+						Config:           teamConfig(team),
+						ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+						Check: resource.ComposeTestCheckFunc(
+							victimIntact,
+							testAccCheckJenkinsRolePermissions(tc.apiType, victim, tc.permission),
+							testAccCheckJenkinsRoleEntries(tc.apiType, team, roleEntry{Type: roleEntryUser, Sid: prefix + "-bob"}),
+							testAccCheckJenkinsRolesAbsent(tc.apiType, commaName),
+						),
+					},
+				},
+			})
+		})
+	}
+}
+
+// addRole receives the permission IDs joined with ",", so the element
+// "hudson.model.Hudson.Read,hudson.model.Hudson.Administer" would grant
+// Administer through a role planned with a single permission. It is refused at
+// plan, on update and on create, and the role keeps exactly its permissions.
+func TestAccJenkinsRole_commaPermission(t *testing.T) {
+	prefix := "tfacc-sec256-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+	reader, other := prefix+"-reader", prefix+"-other"
+	const read = `["hudson.model.Hudson.Read"]`
+	const joined = `["hudson.model.Hudson.Read,hudson.model.Hudson.Administer"]`
+	readerConfig := func(permissions string) string {
+		return testAccJenkinsRoleCommaConfig("global", "reader", reader, permissions, prefix+"-alice")
+	}
+	permissionRejected := regexp.MustCompile(`Attribute\s+permissions\[.*\]\s+must\s+not\s+contain\s+a\s+comma`)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsRoleDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: readerConfig(read),
+				Check:  testAccCheckJenkinsRolePermissions("globalRoles", reader, "hudson.model.Hudson.Read"),
+			},
+			{
+				// Update: the overwrite would grant Administer.
+				Config:      readerConfig(joined),
+				PlanOnly:    true,
+				ExpectError: permissionRejected,
+			},
+			{
+				// Create.
+				Config:      readerConfig(read) + testAccJenkinsRoleCommaConfig("global", "other", other, joined, prefix+"-bob"),
+				PlanOnly:    true,
+				ExpectError: permissionRejected,
+			},
+			{
+				Config:           readerConfig(read),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsRolePermissions("globalRoles", reader, "hudson.model.Hudson.Read"),
+					testAccCheckJenkinsRoleEntries("globalRoles", reader, roleEntry{Type: roleEntryUser, Sid: prefix + "-alice"}),
+					testAccCheckJenkinsRolesAbsent("globalRoles", other),
+				),
+			},
+		},
+	})
+}
+
+// A name or permission computed by another resource is unknown at plan, so
+// the plan-time check passes it. Terraform validates the configuration again
+// at apply, once the value is known, and the role is refused before it is
+// created.
+func TestAccJenkinsRole_commaUnknownAtPlan(t *testing.T) {
+	prefix := "tfacc-sec256-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+	victim, team, reader := prefix+"-victim", prefix+"-team", prefix+"-reader"
+	commaName := team + "," + victim
+	victimConfig := testAccJenkinsRoleCommaConfig("global", "victim", victim, `["hudson.model.Hudson.Read"]`, prefix+"-alice")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsRoleDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: victimConfig,
+			},
+			{
+				Config: victimConfig + fmt.Sprintf(`
+resource terraform_data name {
+	input = %q
+}
+
+resource jenkins_role team {
+	type        = "global"
+	name        = terraform_data.name.output
+	permissions = ["hudson.model.Hudson.Read"]
+}`, commaName),
+				ExpectError: regexp.MustCompile(`Attribute\s+name\s+must\s+not\s+contain\s+a\s+comma`),
+			},
+			{
+				Config: victimConfig + fmt.Sprintf(`
+resource terraform_data permission {
+	input = "hudson.model.Hudson.Read,hudson.model.Hudson.Administer"
+}
+
+resource jenkins_role reader {
+	type        = "global"
+	name        = %q
+	permissions = [terraform_data.permission.output]
+}`, reader),
+				ExpectError: regexp.MustCompile(`Attribute\s+permissions\[.*\]\s+must\s+not\s+contain\s+a\s+comma`),
+			},
+			{
+				Config: victimConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsRoleEntries("globalRoles", victim, roleEntry{Type: roleEntryUser, Sid: prefix + "-alice"}),
+					testAccCheckJenkinsRolesAbsent("globalRoles", commaName, team, reader),
+				),
+			},
+		},
+	})
+}
+
+// ImportState refuses a role name holding a comma, since the imported role
+// could not be destroyed without deleting other roles. terraform import and an
+// import block are both refused, for every role type, and the role the name
+// points at is left as it was.
+func TestAccJenkinsRole_commaImport(t *testing.T) {
+	for _, tc := range testAccRoleCommaTypes {
+		t.Run(tc.roleType, func(t *testing.T) {
+			prefix := "tfacc-sec256-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+			victim, team := prefix+"-victim", prefix+"-team"
+			commaName := team + "," + victim
+			importID := tc.roleType + "/" + commaName
+			victimConfig := fmt.Sprintf(`
+resource jenkins_role victim {
+	type        = %q
+	name        = %q
+	permissions = [%q]
+	groups      = [%q]
+}`, tc.roleType, victim, tc.permission, prefix+"-group")
+			// The import target's own attributes are never used: only the import
+			// identifier carries the comma name.
+			importConfig := fmt.Sprintf(`
+resource jenkins_role team {
+	type        = %q
+	name        = %q
+	permissions = [%q]
+}`, tc.roleType, team, tc.permission)
+			importRejected := regexp.MustCompile(`(?s)Unable to Import Role.*contains\s+a\s+comma`)
+
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProviders,
+				CheckDestroy:             testAccCheckJenkinsRoleDestroy,
+				Steps: []resource.TestStep{
+					{
+						Config: victimConfig,
+					},
+					{
+						Config:        importConfig,
+						ResourceName:  "jenkins_role.team",
+						ImportState:   true,
+						ImportStateId: importID,
+						ExpectError:   importRejected,
+					},
+					{
+						// An import block imports at plan.
+						Config: victimConfig + importConfig + fmt.Sprintf(`
+import {
+	to = jenkins_role.team
+	id = %q
+}`, importID),
+						PlanOnly:    true,
+						ExpectError: importRejected,
+					},
+					{
+						Config:           victimConfig,
+						ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+						Check: resource.ComposeTestCheckFunc(
+							testAccCheckJenkinsRoleEntries(tc.apiType, victim, roleEntry{Type: roleEntryGroup, Sid: prefix + "-group"}),
+							testAccCheckJenkinsRolePermissions(tc.apiType, victim, tc.permission),
+							testAccCheckJenkinsRolesAbsent(tc.apiType, commaName, team),
+						),
+					},
+				},
+			})
+		})
+	}
+}
+
+// The comma check matches the ASCII comma only, so a name holding "%2C"
+// passes it. That is safe only while role-strategy takes the name literally:
+// a release that URL-decoded role names would read this one as
+// "<team>,<victim>", and removeRoles would delete those two roles instead.
+// role-strategy 927 creates, reads, imports and deletes the role under
+// exactly its own name, and the roles its decoded form names are untouched.
+func TestAccJenkinsRole_percentEncodedComma(t *testing.T) {
+	prefix := "tfacc-sec256-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+	victim, team := prefix+"-victim", prefix+"-team"
+	encodedName := team + "%2C" + victim
+	resourceName := "jenkins_role.encoded"
+	const read = `["hudson.model.Hudson.Read"]`
+	// The two roles a decoded name would point at.
+	baseConfig := testAccJenkinsRoleCommaConfig("global", "victim", victim, read, prefix+"-alice") +
+		testAccJenkinsRoleCommaConfig("global", "team", team, read, prefix+"-bob")
+	encodedConfig := baseConfig + testAccJenkinsRoleCommaConfig("global", "encoded", encodedName, read, prefix+"-carol")
+	othersIntact := resource.ComposeTestCheckFunc(
+		testAccCheckJenkinsRoleEntries("globalRoles", victim, roleEntry{Type: roleEntryUser, Sid: prefix + "-alice"}),
+		testAccCheckJenkinsRoleEntries("globalRoles", team, roleEntry{Type: roleEntryUser, Sid: prefix + "-bob"}),
+		testAccCheckJenkinsRolesAbsent("globalRoles", team+","+victim),
+	)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsRoleDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: encodedConfig,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "id", "global/"+encodedName),
+					resource.TestCheckResourceAttr(resourceName, "name", encodedName),
+					testAccCheckJenkinsRoleEntries("globalRoles", encodedName, roleEntry{Type: roleEntryUser, Sid: prefix + "-carol"}),
+					othersIntact,
+				),
+			},
+			{
+				Config:           encodedConfig,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
+				// Destroying the role sends its name to removeRoles.
+				Config: baseConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsRolesAbsent("globalRoles", encodedName),
+					othersIntact,
+				),
+			},
+			{
+				Config:           baseConfig,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+			},
+		},
+	})
+}
+
+// testAccCheckJenkinsRolesAbsent asserts that none of the named roles exists
+// on the controller. getRole takes a role name whole, so it is safe to call
+// with a comma name.
+func testAccCheckJenkinsRolesAbsent(apiType string, names ...string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		for _, name := range names {
+			var role roleStrategyRoleResponse
+			if err := testAccClient.GetRole(context.Background(), apiType, name, &role); err != nil {
+				return err
+			}
+			if role.PermissionIDs != nil {
+				return fmt.Errorf("role %s exists, want it absent", name)
+			}
+		}
+		return nil
+	}
+}
+
+// testAccCheckJenkinsRolePermissions asserts the role's permissions on the
+// controller, which the state cannot show when an element was split.
+func testAccCheckJenkinsRolePermissions(apiType, name string, want ...string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		var role roleStrategyRoleResponse
+		if err := testAccClient.GetRole(context.Background(), apiType, name, &role); err != nil {
+			return err
+		}
+		if len(role.PermissionIDs) != len(want) {
+			return fmt.Errorf("role %s permissions = %v, want %v", name, role.PermissionIDs, want)
+		}
+		for _, p := range want {
+			if !role.PermissionIDs[p] {
+				return fmt.Errorf("role %s permissions = %v, want %v", name, role.PermissionIDs, want)
+			}
+		}
+		return nil
+	}
+}
+
 // testAccCheckJenkinsRoleEntries asserts the role's entries on the controller,
 // types included, which the state alone cannot show for the deprecated
 // assignments attribute.

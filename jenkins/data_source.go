@@ -54,6 +54,17 @@ func (d *dataSourceHelper) schemaCredential(s map[string]schema.Attribute) map[s
 	// Pull in the base schema
 	s = d.schema(s)
 
+	// The folder, domain and credential ID are interpolated into
+	// credentials-store URLs (issue #250).
+	if folder, ok := s["folder"].(schema.StringAttribute); ok {
+		folder.Validators = append(folder.Validators, credentialFolderValidator{})
+		s["folder"] = folder
+	}
+	if name, ok := s["name"].(schema.StringAttribute); ok {
+		name.Validators = append(name.Validators, preEncodedValidator{})
+		s["name"] = name
+	}
+
 	// Add credential-specific attributes
 	if _, ok := s["description"]; !ok {
 		s["description"] = schema.StringAttribute{
@@ -65,6 +76,7 @@ func (d *dataSourceHelper) schemaCredential(s map[string]schema.Attribute) map[s
 		s["domain"] = schema.StringAttribute{
 			MarkdownDescription: "The domain store containing this resource.",
 			Optional:            true,
+			Validators:          preEncodedValidators(),
 		}
 	}
 	if _, ok := s["scope"]; !ok {

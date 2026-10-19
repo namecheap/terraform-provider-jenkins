@@ -6,7 +6,7 @@ description: |-
   Manages one top-level section of the controller configuration through the configuration-as-code (JCasC) plugin.
   Each instance owns a single top-level JCasC section (jenkins, security, unclassified, tool, ...) named by section, and applies the yaml subtree for it. See the design notes https://github.com/namecheap/terraform-provider-jenkins/blob/main/docs/design/casc.md for the full model.
   Key behaviours:
-  Merge, not replace. Applying a section merges the declared keys into the running configuration; keys present on the controller but not in yaml are left untouched. Drift is detected as a subset: only keys you declare are compared.Secrets. Use JCasC ${VAR} interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.Delete is best-effort. JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
+  Merge, not replace. Applying a section merges the declared keys into the running configuration; keys present on the controller but not in yaml are left untouched. Drift is detected as a subset: only keys you declare are compared.Secrets. Use JCasC ${VAR} interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.Drift. When a declared key drifts, state keeps only the declared keys: ${VAR} placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as <drifted: controller value hidden> instead.Import. Import records only section; yaml is not read from the controller, so the first apply after import re-applies the configured document.Delete is best-effort. JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
   Requires the configuration-as-code plugin and an account with Overall/Administer.
 ---
 
@@ -20,6 +20,8 @@ Key behaviours:
 
 - **Merge, not replace.** Applying a section merges the declared keys into the running configuration; keys present on the controller but not in `yaml` are left untouched. Drift is detected as a *subset*: only keys you declare are compared.
 - **Secrets.** Use JCasC `${VAR}` interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.
+- **Drift.** When a declared key drifts, state keeps only the declared keys: `${VAR}` placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as `<drifted: controller value hidden>` instead.
+- **Import.** Import records only `section`; `yaml` is not read from the controller, so the first apply after import re-applies the configured document.
 - **Delete is best-effort.** JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
 
 Requires the `configuration-as-code` plugin and an account with `Overall/Administer`.
@@ -74,6 +76,8 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 
 ```shell
 # Import an existing controller section by its top-level JCasC section name.
-# The section's current configuration is read from the controller's JCasC export.
+# Only the section is imported: yaml is not read back from the controller, since
+# the export holds resolved secrets and keys this resource does not manage. The
+# first apply after import re-applies the configured yaml.
 terraform import jenkins_configuration_as_code.system_message jenkins
 ```

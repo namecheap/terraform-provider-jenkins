@@ -25,6 +25,16 @@ import (
 // and the resolved secret must never influence drift or leak into state.
 var reSecretPlaceholder = regexp.MustCompile(`^\s*\$\{[^}]+\}\s*$`)
 
+// reInterpolation matches a JCasC ${...} expression anywhere in a string.
+// JCasC resolves embedded expressions too, so the value exported for such a
+// string may hold a resolved secret.
+var reInterpolation = regexp.MustCompile(`\$\{[^}]+\}`)
+
+// cascDriftMarker stands in, in a drift view, for a controller value that is
+// not copied into state because it could hold a resolved secret or keys the
+// resource does not manage.
+const cascDriftMarker = "<drifted: controller value hidden>"
+
 // reCASCSection matches a valid top-level JCasC section key: a bare identifier
 // of letters, digits, underscores, or hyphens (e.g. "jenkins", "unclassified").
 var reCASCSection = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -108,24 +118,136 @@ func cascInSync(declaredSectionYAML, exportedFullYAML, section string) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("parsing declared YAML: %w", err)
 	}
-	exported, err := parseYAML(exportedFullYAML)
+	actual, found, err := exportedSection(exportedFullYAML, section)
 	if err != nil {
-		return false, fmt.Errorf("parsing exported YAML: %w", err)
+		return false, err
 	}
-
-	exportedMap, ok := exported.(map[string]interface{})
-	if !ok {
-		return false, fmt.Errorf("exported configuration is not a YAML mapping")
-	}
-
-	actual, ok := exportedMap[section]
-	if !ok {
+	if !found {
 		// The section is absent from the controller: in sync only if nothing is
 		// declared for it.
 		return declared == nil, nil
 	}
 
 	return yamlSubset(declared, actual), nil
+}
+
+// cascDriftView renders the yaml Read stores when the controller no longer
+// satisfies the declared section. Storing the exported section instead would
+// put the values JCasC resolved for ${...} placeholders, and every unmanaged
+// key, into plan output and state (#249). The view keeps the declared
+// document's shape:
+//
+//   - subtrees that are in sync, including ${...} placeholders, stay exactly as
+//     declared;
+//   - a declared key missing on the controller is dropped;
+//   - a drifted plain scalar takes the controller's scalar value;
+//   - a drifted sequence the controller did not grow takes the controller's
+//     length, each element viewed against the declared element at the same
+//     index;
+//   - anything else, including a drifted sequence the controller grew, is
+//     replaced by cascDriftMarker.
+//
+// Under drift the view therefore always differs from the declared document,
+// so the plan shows which keys moved without showing what it cannot show
+// safely. found is false when the section is absent from the export.
+func cascDriftView(declaredSectionYAML, exportedFullYAML, section string) (view string, found bool, err error) {
+	declared, err := parseYAML(declaredSectionYAML)
+	if err != nil {
+		return "", false, fmt.Errorf("parsing declared YAML: %w", err)
+	}
+	actual, found, err := exportedSection(exportedFullYAML, section)
+	if err != nil || !found {
+		return "", found, err
+	}
+	out, err := yaml.Marshal(driftView(declared, actual))
+	if err != nil {
+		return "", false, err
+	}
+	return string(out), true, nil
+}
+
+// driftView restricts actual to the keys of declared; see cascDriftView.
+func driftView(declared, actual interface{}) interface{} {
+	if yamlSubset(declared, actual) {
+		return declared
+	}
+
+	switch d := declared.(type) {
+	case map[string]interface{}:
+		a, ok := actual.(map[string]interface{})
+		if !ok {
+			return cascDriftMarker
+		}
+		out := make(map[string]interface{}, len(d))
+		for k, dv := range d {
+			if av, ok := a[k]; ok {
+				out[k] = driftView(dv, av)
+			}
+		}
+		return out
+	case []interface{}:
+		// Elements are matched by index, so once the controller reorders a
+		// list a resolved placeholder could land under a plain declared
+		// value. A drifted list holding any ${...} is hidden whole. So is a
+		// list the controller grew: an element the document does not
+		// declare is unmanaged content that may hold ciphertext or a value
+		// another JCasC source resolved, and inserted before the declared
+		// ones it shifts into a declared index.
+		a, ok := actual.([]interface{})
+		if !ok || hasInterpolation(d) || len(a) > len(d) {
+			return cascDriftMarker
+		}
+		out := make([]interface{}, len(a))
+		for i, av := range a {
+			out[i] = driftView(d[i], av)
+		}
+		return out
+	default:
+		// A refresh after a drifted one receives the stored view as declared,
+		// so a value hidden once must stay hidden.
+		if declared == cascDriftMarker || hasInterpolation(declared) || !isYAMLScalar(actual) {
+			return cascDriftMarker
+		}
+		return actual
+	}
+}
+
+// hasInterpolation reports whether any string scalar in v contains a ${...}
+// expression.
+func hasInterpolation(v interface{}) bool {
+	switch t := v.(type) {
+	case string:
+		return reInterpolation.MatchString(t)
+	case map[string]interface{}:
+		for _, e := range t {
+			if hasInterpolation(e) {
+				return true
+			}
+		}
+	case map[interface{}]interface{}:
+		for _, e := range t {
+			if hasInterpolation(e) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, e := range t {
+			if hasInterpolation(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isYAMLScalar reports whether a parsed YAML value is neither a mapping nor a
+// sequence.
+func isYAMLScalar(v interface{}) bool {
+	switch v.(type) {
+	case map[string]interface{}, map[interface{}]interface{}, []interface{}:
+		return false
+	}
+	return true
 }
 
 // wrapSection wraps a declared section subtree under its top-level section key,
@@ -148,21 +270,28 @@ func wrapSection(section, declaredSectionYAML string) (string, error) {
 // exported JCasC document, marshaled back to YAML. found is false when the
 // section is absent from the export.
 func extractSectionYAML(exportedFullYAML, section string) (yamlDoc string, found bool, err error) {
-	exported, err := parseYAML(exportedFullYAML)
-	if err != nil {
-		return "", false, fmt.Errorf("parsing exported YAML: %w", err)
-	}
-	m, ok := exported.(map[string]interface{})
-	if !ok {
-		return "", false, fmt.Errorf("exported configuration is not a YAML mapping")
-	}
-	sub, ok := m[section]
-	if !ok {
-		return "", false, nil
+	sub, found, err := exportedSection(exportedFullYAML, section)
+	if err != nil || !found {
+		return "", found, err
 	}
 	out, err := yaml.Marshal(sub)
 	if err != nil {
 		return "", false, err
 	}
 	return string(out), true, nil
+}
+
+// exportedSection parses a full exported JCasC document and returns the given
+// top-level section's subtree. found is false when the section is absent.
+func exportedSection(exportedFullYAML, section string) (subtree interface{}, found bool, err error) {
+	exported, err := parseYAML(exportedFullYAML)
+	if err != nil {
+		return nil, false, fmt.Errorf("parsing exported YAML: %w", err)
+	}
+	m, ok := exported.(map[string]interface{})
+	if !ok {
+		return nil, false, fmt.Errorf("exported configuration is not a YAML mapping")
+	}
+	subtree, found = m[section]
+	return subtree, found, nil
 }

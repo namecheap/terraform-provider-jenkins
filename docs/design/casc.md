@@ -110,6 +110,20 @@ every default value. Comparing it verbatim would report constant drift.
   resolved value — the export re-emits such keys as their interpolated form or a
   redacted marker, so we compare structurally and never resolve. This prevents
   both false drift and secret leakage.
+- **Drift view.** When a declared key drifts, Read does not store the exported
+  section, which holds the resolved values and every unmanaged key (#249). It
+  stores a view limited to the declared keys: in-sync subtrees and `${...}`
+  placeholders stay as declared, and drifted plain scalars take the
+  controller's value. A value that could carry a resolved secret is replaced by
+  a fixed marker. That covers a type change, a drifted list that holds a
+  `${...}` (its elements are matched by index, so a reorder could move a
+  resolved value), a drifted list the controller grew (it holds elements the
+  document does not declare, and one inserted before the declared ones shifts
+  into a declared index), and a string with an embedded `${...}`. Such a list
+  is hidden whole.
+- **Import.** There is no declared document to limit the export to, so import
+  records only `section` and leaves `yaml` null; the first apply re-applies the
+  configured document.
 - **Tested invariant.** An acceptance test asserts that a secret supplied via
   `${...}` does not appear in the resource state.
 

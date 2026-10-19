@@ -2,10 +2,10 @@ package jenkins
 
 import (
 	"context"
-	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -37,6 +37,20 @@ func newCredentialDomainResource() resource.Resource {
 	}
 }
 
+// checkCredentialDomainFolder makes the runtime folder check that the
+// credential resources make through credentialManager, appending an "Invalid
+// Folder" diagnostic and returning false unless folder is unset or names a
+// folder (see credentialsFolder). The folder validator covers config only; a
+// folder from an import ID or from state would otherwise reach
+// credentialStoreBase as it is (issue #250).
+func checkCredentialDomainFolder(folder string, diags *diag.Diagnostics) bool {
+	if _, err := credentialsFolder(folder); err != nil {
+		diags.AddError("Invalid Folder", err.Error())
+		return false
+	}
+	return true
+}
+
 func (r *credentialDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_credential_domain"
 }
@@ -59,12 +73,10 @@ Manages a credentials domain within a Jenkins credentials store. Domains group c
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
-				Validators: []validator.String{
-					stringvalidator.RegexMatches(
-						regexp.MustCompile(`^[^/]+$`),
-						"must not be empty or include path characters; use the 'folder' property to scope the domain to a folder",
-					),
-				},
+				Validators: append(
+					[]validator.String{stringvalidator.LengthAtLeast(1)},
+					domainNameValidators()...,
+				),
 			},
 			"folder": schema.StringAttribute{
 				Optional:            true,
@@ -72,6 +84,7 @@ Manages a credentials domain within a Jenkins credentials store. Domains group c
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
+				Validators: []validator.String{credentialFolderValidator{}},
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
@@ -92,6 +105,9 @@ func (r *credentialDomainResource) Create(ctx context.Context, req resource.Crea
 		return
 	}
 
+	if !checkCredentialDomainFolder(data.Folder.ValueString(), &resp.Diagnostics) {
+		return
+	}
 	if err := folderExists(ctx, r.client, data.Folder.ValueString()); err != nil {
 		resp.Diagnostics.AddError("Invalid Folder", "Could not find folder "+data.Folder.ValueString()+".\n\nError: "+err.Error())
 		return
@@ -116,6 +132,10 @@ func (r *credentialDomainResource) Read(ctx context.Context, req resource.ReadRe
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if !checkCredentialDomainFolder(data.Folder.ValueString(), &resp.Diagnostics) {
 		return
 	}
 
@@ -147,6 +167,10 @@ func (r *credentialDomainResource) Update(ctx context.Context, req resource.Upda
 		return
 	}
 
+	if !checkCredentialDomainFolder(data.Folder.ValueString(), &resp.Diagnostics) {
+		return
+	}
+
 	if err := r.client.UpdateCredentialDomain(ctx, data.Folder.ValueString(), data.Name.ValueString(), data.Description.ValueString()); err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Update Resource",
@@ -166,6 +190,10 @@ func (r *credentialDomainResource) Delete(ctx context.Context, req resource.Dele
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if !checkCredentialDomainFolder(data.Folder.ValueString(), &resp.Diagnostics) {
 		return
 	}
 
