@@ -240,6 +240,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    env:
+      # Drops Terraform's interactive hints ("Try running terraform plan").
+      TF_IN_AUTOMATION: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -272,9 +275,12 @@ jobs:
 
       - name: Init integration
         working-directory: integration/
-        # terraform init fails on the jenkins registry lookup; we tolerate that exit code so
-        # downstream steps can use the dev_override binary instead.
-        run: terraform init || true
+        # namecheap/jenkins comes from the dev_overrides above, so init skips it
+        # and prints "Provider development overrides are in effect"; that
+        # warning is expected. The other providers install at the versions and
+        # checksums in .terraform.lock.hcl (Dependabot bumps it), and
+        # -lockfile=readonly fails the job rather than pick new ones.
+        run: terraform init -input=false -lockfile=readonly
 
       - name: Run integration
         working-directory: integration/
