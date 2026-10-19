@@ -265,6 +265,11 @@ every pull request inside CI, the **Security Review** workflow
   fails a PR.
 - **Advisory:** it is not a required check, and findings are review comments
   to weigh like any other.
+- **A broken review fails the job:** the action only warns when the review
+  itself errors (for example "Credit balance is too low" from the API), so a
+  final step checks the review's `claudecode-results.json`. A findings list
+  passes, findings or not. An `error` object, or anything else, fails the job.
+  No file means the PR had already been reviewed, which passes.
 - **Pinning:** the action publishes no releases, so the workflow pins a commit
   on its `main` branch. Bump the SHA by hand to pick up changes.
 

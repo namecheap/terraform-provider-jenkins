@@ -62,3 +62,21 @@ jobs:
           # Out of scope in the threat model; templates/ is the docs source.
           exclude-directories: docs,templates,examples,demo,integration,tools
           run-every-commit: ${{ github.event.action == 'labeled' }}
+
+      # The action only warns when the review itself fails (an API error such
+      # as an exhausted credit balance), so the job would pass with no review
+      # done. Whenever the review runs, the action leaves claudecode-results.json
+      # here: a findings list if it completed, an "error" object if not. No file
+      # means the PR had already been reviewed and the review was skipped.
+      - name: Fail if the review did not complete
+        if: env.HAS_KEY == 'true'
+        run: |
+          if [ ! -f claudecode-results.json ]; then
+            echo "No review ran: this PR was already reviewed. Add the security-review label to review it again."
+            exit 0
+          fi
+          if ! jq -e 'type == "object" and has("findings")' claudecode-results.json >/dev/null 2>&1; then
+            echo "::error::The security review did not complete. Its error is in the review step's log above and in the security-review-results artifact."
+            exit 1
+          fi
+          echo "The security review completed with $(jq '.findings | length' claudecode-results.json) finding(s)."
