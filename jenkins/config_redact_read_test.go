@@ -158,11 +158,13 @@ func assertNoFolderSecrets(t *testing.T, template string) {
 }
 
 // redactFolderServer serves a folder's config.xml like Jenkins: GET returns the
-// current document, POST replaces it. It records every POSTed body.
+// current document, POST replaces it. It records every POSTed body. With
+// dropGet set, GET drops the connection instead of answering.
 type redactFolderServer struct {
-	mu     sync.Mutex
-	config string
-	posted []string
+	mu      sync.Mutex
+	config  string
+	posted  []string
+	dropGet bool
 }
 
 func (s *redactFolderServer) job(t *testing.T, base string) *jenkins.Job {
@@ -177,6 +179,10 @@ func (s *redactFolderServer) job(t *testing.T, base string) *jenkins.Job {
 			b, _ := io.ReadAll(r.Body)
 			s.config = string(b)
 			s.posted = append(s.posted, s.config)
+		case strings.Contains(r.URL.Path, "/config.xml") && s.dropGet:
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close()
+			}
 		case strings.Contains(r.URL.Path, "/config.xml"):
 			w.Header().Set("Content-Type", "application/xml")
 			_, _ = io.WriteString(w, s.config)
@@ -699,6 +705,76 @@ func TestJobResourceUpdateFolderCredentials(t *testing.T) {
 			}
 			if !templatesEqual(stored, planned) {
 				t.Errorf("refreshed template is not equal to the applied one, so every plan would show a diff:\nstate:\n%s\nconfig:\n%s", stored, planned)
+			}
+		})
+	}
+}
+
+// TestJobResourceUpdateFailsClosed pins that jenkins_job Update fails, posting
+// nothing, when it cannot carry an unmanaged folder credentials store over to
+// the template: posting the template without it would delete every folder
+// credential, and refreshes hide the store, so no plan would have shown that.
+func TestJobResourceUpdateFailsClosed(t *testing.T) {
+	ctx := context.Background()
+
+	renamed := strings.Replace(redactFolderNoCredentials,
+		"<description>team folder</description>", "<description>renamed</description>", 1)
+
+	tests := []struct {
+		name     string
+		template string
+		dropGet  bool
+	}{
+		{
+			name:     "current config.xml cannot be read",
+			template: renamed,
+			dropGet:  true,
+		},
+		{
+			// Rejected at plan by jobXMLValidator; Update must not rely on that.
+			name:     "store cannot be added to the template",
+			template: "<com.cloudbees.hudson.plugins.folder.Folder><properties><description>renamed</description></com.cloudbees.hudson.plugins.folder.Folder>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &redactFolderServer{config: redactFolderWithCredentials(redactCipherToken), dropGet: tt.dropGet}
+			job := srv.job(t, "/job/team")
+			r := &jobResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockGetJob: func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },
+			}}}
+			var sr resource.SchemaResponse
+			r.Schema(ctx, resource.SchemaRequest{}, &sr)
+
+			// Prior state from a template without the store, as refreshed.
+			state := tfsdk.State{Schema: sr.Schema}
+			if d := state.Set(ctx, &jobResourceModel{
+				ID: types.StringValue("/job/team"), Name: types.StringValue("team"), Folder: types.StringNull(),
+				Template: types.StringValue(redactFolderNoCredentials), Disabled: types.BoolNull(),
+			}); d.HasError() {
+				t.Fatalf("state.Set: %v", d)
+			}
+			plan := tfsdk.Plan{Schema: sr.Schema}
+			if d := plan.Set(ctx, &jobResourceModel{
+				ID: types.StringValue("/job/team"), Name: types.StringValue("team"), Folder: types.StringNull(),
+				Template: types.StringValue(tt.template), Disabled: types.BoolNull(),
+			}); d.HasError() {
+				t.Fatalf("plan.Set: %v", d)
+			}
+
+			req := resource.UpdateRequest{Plan: plan, State: state}
+			initPrivateState(t, &req)
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: sr.Schema}, Private: req.Private}
+			r.Update(ctx, req, &resp)
+
+			if !resp.Diagnostics.HasError() {
+				t.Errorf("Update succeeded, want an error")
+			}
+			srv.mu.Lock()
+			defer srv.mu.Unlock()
+			if len(srv.posted) != 0 {
+				t.Errorf("Update posted config.xml %d times, want 0; the folder now has no credentials store:\n%s", len(srv.posted), srv.posted[0])
 			}
 		})
 	}

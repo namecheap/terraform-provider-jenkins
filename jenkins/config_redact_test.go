@@ -7,6 +7,16 @@ import (
 func TestRedactJenkinsConfig(t *testing.T) {
 	const prop = folderCredentialsPropertyElement
 
+	// A hudson.util.Secret payload is 25+16n bytes, so its base64 ends in "=",
+	// "==" or no padding depending on the secret's length; SecretBytes values
+	// can have any length. redactCipherToken and redactCipherPassword cover
+	// "=" and none.
+	const (
+		cipherDoublePad      = "{AQAAABAAAAAwAwoRGB8mLTQ7QklQV15lbAUQGyYxPEdSXWhzfomUn6q1wMvW4ez3Ag0YIy45RE9aZXB7hpGcp7K9yNPe6fT/Cg==}"
+		secretBytesDoublePad = "{AQ4bKDVCT1xpdoOQnaq3xA==}"
+		secretBytesNoPad     = "{CRwvQlVoe46htMfa7QATJjlM}"
+	)
+
 	tests := []struct {
 		name string
 		in   string
@@ -44,6 +54,36 @@ func TestRedactJenkinsConfig(t *testing.T) {
 			name: "multiple ciphertexts outside the property",
 			in:   `<p><password>` + redactCipherToken + `</password><token>` + redactCipherPassword + `</token><key>` + redactSecretBytes + `</key></p>`,
 			want: `<p><password>{redacted}</password><token>{redacted}</token><key>{redacted}</key></p>`,
+		},
+		{
+			name: "ciphertext with every base64 padding",
+			in:   `<p><a>` + cipherDoublePad + `</a><b>` + redactCipherPassword + `</b><c>` + secretBytesDoublePad + `</c><d>` + secretBytesNoPad + `</d><e>x ` + cipherDoublePad + `</e></p>`,
+			want: `<p><a>{redacted}</a><b>{redacted}</b><c>{redacted}</c><d>{redacted}</d><e>x {redacted}</e></p>`,
+		},
+		{
+			// A braced token that is not ciphertext must not end the scan: in a
+			// job's config.xml a ${VAR} in the description comes before the
+			// encrypted password parameter default.
+			name: "ciphertext after a placeholder",
+			in:   `<description>uses ${TOKEN} and {abcd}</description><defaultValue>` + redactCipherToken + `</defaultValue><key>` + redactSecretBytes + `</key>`,
+			want: `<description>uses ${TOKEN} and {abcd}</description><defaultValue>{redacted}</defaultValue><key>{redacted}</key>`,
+		},
+		{
+			name: "AQAA ciphertext in an attribute value",
+			in:   `<p token="` + redactCipherToken + `"/>`,
+			want: `<p token="{redacted}"/>`,
+		},
+		{
+			// The element-text check looks one byte either side of the token,
+			// which must not run off either end of the document.
+			name: "prefix-less braced base64 opening the document",
+			in:   redactSecretBytes + `<a/>`,
+			want: redactSecretBytes + `<a/>`,
+		},
+		{
+			name: "prefix-less braced base64 closing the document",
+			in:   `<a>` + redactSecretBytes,
+			want: `<a>` + redactSecretBytes,
 		},
 		{
 			name: "AQAA ciphertext embedded in text",
@@ -144,6 +184,13 @@ func TestStripFolderCredentials(t *testing.T) {
 			name: `attribute value containing "/>"`,
 			in:   `<properties><` + folderCredentialsPropertyElement + ` plugin="x/>y"/><x/></properties>`,
 			want: `<properties><x/></properties>`,
+		},
+		{
+			// Any XML whitespace may separate the attributes and end either
+			// tag, not just the single space Jenkins writes.
+			name: "tags broken over lines and tabs",
+			in:   "<properties>\r\n  <" + folderCredentialsPropertyElement + "\n\tplugin=\"credentials@1514\"\n\tnote = 'a'\n><secret>" + redactCipherToken + "</secret></" + folderCredentialsPropertyElement + "\n>\r\n  <x/>\r\n</properties>",
+			want: "<properties>\r\n  <x/>\r\n</properties>",
 		},
 	}
 
