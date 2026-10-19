@@ -111,7 +111,7 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"template": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "The Jenkins-compatible XML template describing the folder, as used to communicate with Jenkins. An existing folder's XML can be retrieved by appending `/config.xml` to its URL.",
+				MarkdownDescription: "The folder's `config.xml` as read back from Jenkins. Encrypted secrets are kept out of state: the folder credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is omitted and any other encrypted secret value is replaced with `{redacted}`, so this is not a byte-for-byte copy of the folder's `config.xml`.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -330,7 +330,10 @@ func (r *folderResource) populate(ctx context.Context, data *folderResourceModel
 	}
 
 	data.ID = types.StringValue(job.Base)
-	data.Template = types.StringValue(config)
+	// Never store the folder credentials store or other encrypted secrets in
+	// state (#255). Update re-reads config.xml from Jenkins rather than using
+	// this value, so the redaction cannot drop credentials on write.
+	data.Template = types.StringValue(redactJenkinsConfig(config))
 	data.DisplayName = types.StringValue(f.DisplayName)
 	data.Description = types.StringValue(f.Description)
 	data.Security = securityToSet(ctx, f.Properties.Security, diags)
