@@ -68,3 +68,16 @@ updates:
     groups:
       docker:
         patterns: ["*"]
+
+  # The OSS Scanner image (Go, Terraform, Jenkins LTS) — never shipped,
+  # non-releasing. See "OSS Scanner image" in CI.md.
+  - package-ecosystem: "docker"
+    directory: "/.oss-scanner"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      oss-scanner:
+        patterns: ["*"]

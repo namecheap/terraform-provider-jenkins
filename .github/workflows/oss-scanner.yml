@@ -1,0 +1,75 @@
+name: OSS Scanner image
+
+# Builds .oss-scanner/Dockerfile the way Anthropic's OSS Scanner does (the
+# repository root as the build context, with network access) and runs
+# .oss-scanner/selftest.sh in the result with the network off, as the scanner
+# does. A scan fails if the image does not build or cannot build and test the
+# provider offline, so this keeps it working. See "OSS Scanner image" in CI.md.
+#
+# Not a required status check, so the paths filter below is safe: a PR that
+# touches none of these files simply does not run it.
+on:
+  pull_request:
+    paths:
+      - ".oss-scanner/**"
+      - "go.mod"
+      - "go.sum"
+      - "integration/Dockerfile"
+      - "integration/jenkins.yaml"
+      - ".github/workflows/oss-scanner.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".oss-scanner/**"
+      - "go.mod"
+      - "go.sum"
+      - "integration/Dockerfile"
+      - "integration/jenkins.yaml"
+      - ".github/workflows/oss-scanner.yml"
+  # Weekly, because the base images and the plugins jenkins-plugin-cli
+  # resolves change without a commit here.
+  schedule:
+    - cron: "30 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  image:
+    name: OSS Scanner image
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      # The checkout is copied into the image, so keep the token out of .git/.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the plugin lists match
+        run: |
+          plugins() {
+            awk '/jenkins-plugin-cli --plugins/ { on = 1 }
+                 on { for (i = 1; i <= NF; i++) if ($i !~ /^(RUN|jenkins-plugin-cli|--plugins|\\)$/) print $i
+                      if ($0 !~ /\\$/) on = 0 }' "$1" | sort
+          }
+          if ! diff <(plugins integration/Dockerfile) <(plugins .oss-scanner/Dockerfile); then
+            echo "::error::The jenkins-plugin-cli plugin lists in integration/Dockerfile and .oss-scanner/Dockerfile differ."
+            exit 1
+          fi
+
+      - name: Build the scanner image
+        run: docker build -f .oss-scanner/Dockerfile -t oss-scanner-image .
+
+      - name: Self-test with the network off
+        run: docker run --rm --network none oss-scanner-image .oss-scanner/selftest.sh

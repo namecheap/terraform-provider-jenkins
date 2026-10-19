@@ -15,6 +15,7 @@ the CI mechanics.
 | Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
 | Release | `.github/workflows/release.yml` | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries |
 | Stale | `.github/workflows/stale.yml` | Daily cron | Labels inactive issues/PRs |
+| OSS Scanner image | `.github/workflows/oss-scanner.yml` | PR and push touching the image's inputs, weekly cron, manual | Builds the OSS Scanner image and runs its self-test offline (not a required check; see [OSS Scanner image](#oss-scanner-image)) |
 
 ## Life of a change
 
@@ -142,6 +143,45 @@ that job needs. `restore-keys` falls back to the job's previous entry when
 changed. Integration Tests and CodeQL only build the binary and keep the
 shared `setup-go` cache. Docs keeps its own `setup-go` key, which also
 covers `tools/go.sum`.
+
+## OSS Scanner image
+
+[Anthropic's OSS Scanner](https://red.anthropic.com/oss-scanner/) audits
+enrolled open-source projects with AI agents and emails the maintainers what
+it finds. It clones the repository, builds `.oss-scanner/Dockerfile` with the
+repository root as the build context and with network access, and then runs
+the image **with no network**, as root in `/src`. Everything an agent needs
+must be in the image:
+
+- Go at the `go.mod` toolchain version with every module downloaded
+  (`GOTOOLCHAIN=local`, so Go never tries to fetch a toolchain), the provider
+  built and the test binaries compiled;
+- the Terraform CLI, with `TF_ACC_TERRAFORM_PATH` set so acceptance tests do
+  not download one;
+- the test Jenkins: the same LTS and plugins as `integration/Dockerfile`, with
+  `integration/jenkins.yaml`. `.oss-scanner/start-jenkins.sh` starts it at
+  `http://localhost:8080` (admin/admin).
+
+`.oss-scanner/threat_model.md` tells the scanner what to audit, which inputs
+are adversarial, how to rate severity and what to leave alone.
+
+The **OSS Scanner image** workflow (`.github/workflows/oss-scanner.yml`) keeps
+the image working:
+- It fails if the `jenkins-plugin-cli` plugin lists in the two Dockerfiles
+  differ.
+- It builds the image the way the scanner does.
+- It runs `.oss-scanner/selftest.sh` in the image with `--network none`: a build,
+  the unit tests, then Jenkins and three acceptance tests.
+
+It runs on PRs and pushes that touch the image's inputs, and weekly, because
+base images and plugin releases move without a commit here. It is not a required
+check, which is why a `paths` filter is safe on it. Dependabot bumps the image's
+base images monthly.
+
+Enrolling the project is a separate, manual step that only a core maintainer
+can take: a PR to [anthropics/oss-scanner](https://github.com/anthropics/oss-scanner)
+adding `projects/<name>/project.yaml` that points at this Dockerfile and
+threat model.
 
 ## Editing the pipeline — invariants to keep
 
