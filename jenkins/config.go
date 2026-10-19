@@ -775,7 +775,8 @@ func (j *jenkinsAdapter) rolePostForm(ctx context.Context, action string, form u
 // before reconciling them.
 func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {
 	if err := checkRoleName(name); err != nil {
-		return err
+		return fmt.Errorf("%w, so the role could not be deleted later without deleting other roles; "+
+			"no request was sent. Use a name without a comma", err)
 	}
 	form := url.Values{}
 	form.Set("type", roleType)
@@ -827,7 +828,10 @@ func (j *jenkinsAdapter) roleEntryPost(ctx context.Context, roleType, name strin
 // RemoveRole deletes a role (and its assignments) of the given type.
 func (j *jenkinsAdapter) RemoveRole(ctx context.Context, roleType, name string) error {
 	if err := checkRoleName(name); err != nil {
-		return err
+		return fmt.Errorf("%w, so deleting it would delete other roles; no request was sent. "+
+			"The role and its assignments remain in Jenkins: to stop managing it, replace its resource block "+
+			"with a removed block (lifecycle { destroy = false }) or run terraform state rm, "+
+			"then delete the role or its assignments in Jenkins by hand", err)
 	}
 	form := url.Values{}
 	form.Set("type", roleType)
@@ -838,12 +842,11 @@ func (j *jenkinsAdapter) RemoveRole(ctx context.Context, roleType, name string) 
 // checkRoleName refuses a role name containing a comma before any request is
 // sent. role-strategy's removeRoles splits roleNames on ",", while addRole and
 // getRole take the name whole: removing the role "team,admin" deletes the
-// roles "team" and "admin" instead and leaves "team,admin" in place.
+// roles "team" and "admin" instead and leaves "team,admin" in place. Callers
+// add what the refusal means for their operation.
 func checkRoleName(name string) error {
 	if strings.Contains(name, ",") {
-		return fmt.Errorf("role name %q contains a comma, which role-strategy's removeRoles reads as a list of role names, "+
-			"so deleting it would delete other roles; no request was sent. Use a name without a comma; "+
-			"to stop managing a role that already has one, run terraform state rm", name)
+		return fmt.Errorf("role name %q contains a comma, which role-strategy's removeRoles reads as a list of role names", name)
 	}
 	return nil
 }
