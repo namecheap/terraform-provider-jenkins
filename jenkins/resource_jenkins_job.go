@@ -330,11 +330,34 @@ func jobTemplateForUpdate(ctx context.Context, job *jenkins.Job, template string
 	if managed || hasFolderCredentials(template) {
 		return template, nil
 	}
-	live, err := job.GetConfig(ctx)
+	live, err := currentItemConfig(ctx, job)
 	if err != nil {
 		return "", fmt.Errorf("reading the current configuration: %w", err)
 	}
 	return withFolderCredentials(template, live)
+}
+
+// currentItemConfig returns job's config.xml for jobTemplateForUpdate. Unlike
+// job.GetConfig, which returns the body of any response the client does not
+// report as an error (a 4xx, a 404 turned into "{}", a 200 sign-in page), it
+// fails unless the GET succeeded with an item document (checkItemConfig).
+// Anything else has no folder credentials store, so taking it for config.xml
+// would post the template without the store and delete every folder
+// credential; a proxy that blocks config.xml downloads but passes the POST is
+// enough for that.
+func currentItemConfig(ctx context.Context, job *jenkins.Job) (string, error) {
+	var config string
+	resp, err := job.Jenkins.Requester.GetXML(ctx, job.Base+"/config.xml", &config, nil)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("the server answered HTTP %d", resp.StatusCode)
+	}
+	if err := checkItemConfig(config); err != nil {
+		return "", err
+	}
+	return config, nil
 }
 
 // folderCredentialsFlag is the private-state value Create and Update store

@@ -160,8 +160,9 @@ func assertNoFolderSecrets(t *testing.T, template string) {
 // redactFolderServer serves a folder's config.xml like Jenkins: GET returns the
 // current document, POST replaces it. It records every POSTed body. With
 // dropGet set, GET drops the connection instead of answering. With errorStatus
-// set, GET answers with that status and errorPage instead: the client reports
-// a 5xx as an error, but GetConfig returns a 4xx body as the document.
+// set, GET answers with that status and errorPage instead, as a proxy or WAF
+// in front of Jenkins may: the client reports a 5xx as an error, but
+// GetConfig returns the body of any other status as the document.
 type redactFolderServer struct {
 	mu          sync.Mutex
 	config      string
@@ -657,6 +658,18 @@ func TestJobResourceUpdateFolderCredentials(t *testing.T) {
 			wantPostedContains: []string{"<description>renamed</description>"},
 		},
 		{
+			// XML 1.1, which Jenkins serves, allows references to control
+			// characters that XML 1.0 parsers such as encoding/xml reject. Jenkins
+			// writes one for an ANSI colour escape pasted into a description.
+			name:    "unmanaged store kept from a config.xml with a control character",
+			created: redactFolderNoCredentials,
+			server: strings.Replace(redactFolderWithCredentials(redactCipherToken),
+				"<description>team folder</description>", "<description>team &#x1b;[1mfolder&#x1b;[0m</description>", 1),
+			planned:            func(string) string { return renamed },
+			wantPostedStore:    redactCipherToken,
+			wantPostedContains: []string{"<description>renamed</description>"},
+		},
+		{
 			// lifecycle { ignore_changes = [template] }: Terraform plans the
 			// refreshed state as the template, and toggling disabled posts it.
 			// Before #255 that value held the raw store, so it was posted back.
@@ -834,6 +847,7 @@ func TestJobResourceUpdateFailsClosed(t *testing.T) {
 		template    string
 		dropGet     bool
 		errorStatus int
+		errorPage   string
 	}{
 		{
 			name:     "current config.xml cannot be read",
@@ -846,6 +860,65 @@ func TestJobResourceUpdateFailsClosed(t *testing.T) {
 			name:        "current config.xml answers with a server error",
 			template:    renamed,
 			errorStatus: http.StatusServiceUnavailable,
+			errorPage:   "<html><body><h1>Service Unavailable</h1></body></html>",
+		},
+		// GetConfig returns the body of any status but a 5xx as config.xml,
+		// and the client turns a 404 into "{}". None of these has a store, so
+		// taking one for the folder's config.xml would delete its credentials.
+		{
+			// A proxy or WAF that blocks config.xml downloads but lets the POST
+			// through.
+			name:        "current config.xml answers 403 with an HTML page",
+			template:    renamed,
+			errorStatus: http.StatusForbidden,
+			errorPage:   "<html><head><title>403 Forbidden</title></head><body><h1>Forbidden</h1></body></html>",
+		},
+		{
+			name:        "current config.xml answers 403 with an XML error document",
+			template:    renamed,
+			errorStatus: http.StatusForbidden,
+			errorPage:   `<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code></Error>`,
+		},
+		{
+			name:        "current config.xml answers 404 with an empty body",
+			template:    renamed,
+			errorStatus: http.StatusNotFound,
+		},
+		{
+			name:        "current config.xml answers 404 with {}",
+			template:    renamed,
+			errorStatus: http.StatusNotFound,
+			errorPage:   "{}",
+		},
+		{
+			// A single sign-on proxy's login page, well-formed as XML.
+			name:        "current config.xml answers 200 with an HTML page",
+			template:    renamed,
+			errorStatus: http.StatusOK,
+			errorPage:   `<html><head><title>Sign in</title></head><body><form action="/login"></form></body></html>`,
+		},
+		{
+			name:        "current config.xml answers 200 with an HTML page that is not XML",
+			template:    renamed,
+			errorStatus: http.StatusOK,
+			errorPage:   "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Sign in</title></head><body></body></html>",
+		},
+		{
+			name:        "current config.xml answers 200 with text that is not XML",
+			template:    renamed,
+			errorStatus: http.StatusOK,
+			errorPage:   "Request blocked by policy.",
+		},
+		{
+			name:        "current config.xml answers 200 with {}",
+			template:    renamed,
+			errorStatus: http.StatusOK,
+			errorPage:   "{}",
+		},
+		{
+			name:        "current config.xml answers 200 with an empty body",
+			template:    renamed,
+			errorStatus: http.StatusOK,
 		},
 		{
 			// Rejected at plan by jobXMLValidator; Update must not rely on that.
@@ -860,7 +933,7 @@ func TestJobResourceUpdateFailsClosed(t *testing.T) {
 				config:      redactFolderWithCredentials(redactCipherToken),
 				dropGet:     tt.dropGet,
 				errorStatus: tt.errorStatus,
-				errorPage:   "<html><body><h1>Service Unavailable</h1></body></html>",
+				errorPage:   tt.errorPage,
 			}
 			job := srv.job(t, "/job/team")
 			r := &jobResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{

@@ -208,6 +208,77 @@ resource jenkins_credential_secret_text token {
 	})
 }
 
+// TestAccJenkinsJob_folderTemplateUpdateReadsXML11 covers the config.xml
+// Update reads to keep an unmanaged store: it must be an item document, but
+// one Jenkins serves in XML 1.1 with a reference to a control character, which
+// XML 1.0 parsers reject, still is one. Jenkins writes such a reference for an
+// ANSI escape in a description edited out of band.
+func TestAccJenkinsJob_folderTemplateUpdateReadsXML11(t *testing.T) {
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	name := "tfacc-gap257-job-" + randString
+	credID := "tfacc-gap257-token-" + randString
+	config := fmt.Sprintf(`
+resource jenkins_job foo {
+  name     = %q
+  template = <<EOT
+%s
+EOT
+}
+
+resource jenkins_credential_secret_text token {
+  name   = %q
+  folder = jenkins_job.foo.id
+  secret = "tfacc-gap257-plaintext-%s"
+}`, name, fmt.Sprintf(testAccFolderJobXML, "created"), credID, randString)
+
+	var ciphertext string
+	credentialKept := testAccCheckFolderCredentialCiphertext("jenkins_job.foo", credID, "secret", &ciphertext)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy: resource.ComposeTestCheckFunc(
+			testAccCheckJenkinsCredentialSecretTextDestroy,
+			testAccCheckJenkinsJobDestroy,
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check:  credentialKept,
+			},
+			{
+				PreConfig: func() {
+					ctx := context.Background()
+					job, err := testAccClient.GetJob(ctx, name)
+					if err != nil {
+						t.Fatalf("GetJob: %v", err)
+					}
+					live, err := job.GetConfig(ctx)
+					if err != nil {
+						t.Fatalf("GetConfig: %v", err)
+					}
+					edited := strings.Replace(live, "<description>created</description>", "<description>created &#x1b;[1m</description>", 1)
+					if edited == live {
+						t.Fatalf("description not found in config.xml:\n%s", live)
+					}
+					if err := job.UpdateConfig(ctx, edited); err != nil {
+						t.Fatalf("UpdateConfig: %v", err)
+					}
+				},
+				// The drift is reverted by an Update that keeps the store.
+				Config: config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("jenkins_job.foo", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestMatchResourceAttr("jenkins_job.foo", "template", regexp.MustCompile("<description>created</description>")),
+					credentialKept,
+				),
+			},
+		},
+	})
+}
+
 // TestAccJenkinsJob_rejectsRedactedTemplate covers copying a jenkins_job data
 // source's template, whose encrypted values read {redacted}, into a jenkins_job:
 // Jenkins would store the marker itself as the secret, so the copy must be

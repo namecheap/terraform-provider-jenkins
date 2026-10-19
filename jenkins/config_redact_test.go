@@ -361,3 +361,39 @@ func TestWithFolderCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckItemConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{name: "folder config.xml", config: redactFolderWithCredentials(redactCipherToken)},
+		{name: "job config.xml", config: redactJobXML},
+		{
+			// XML 1.1 allows references to control characters; encoding/xml
+			// does not.
+			name:   "control character reference",
+			config: "<?xml version=\"1.1\" encoding=\"UTF-8\"?>\n<project><description>&#x1b;[1mbold&#27;[0m</description></project>",
+		},
+		{name: "comment before the root", config: "<!-- managed elsewhere -->\n<project/>\n"},
+		{name: "empty", config: "", wantErr: true},
+		{name: "whitespace", config: " \n", wantErr: true},
+		{name: "JSON", config: "{}", wantErr: true},
+		{name: "text", config: "Request blocked by policy.", wantErr: true},
+		{name: "text before the root", config: "blocked <project/>", wantErr: true},
+		{name: "two roots", config: "<project/><project/>", wantErr: true},
+		{name: "unclosed root", config: "<project><description>x</description>", wantErr: true},
+		{name: "HTML page", config: "<html><body><h1>Forbidden</h1></body></html>", wantErr: true},
+		{name: "XHTML page", config: `<?xml version="1.0"?><HTML xmlns="http://www.w3.org/1999/xhtml"><body/></HTML>`, wantErr: true},
+		{name: "HTML page that is not XML", config: "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"></head><body></body></html>", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := checkItemConfig(tt.config); (err != nil) != tt.wantErr {
+				t.Errorf("checkItemConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -70,6 +70,9 @@ var (
 
 	// reLeadingXMLDecl matches the XML declaration opening a document.
 	reLeadingXMLDecl = regexp.MustCompile(`\A\s*<\?xml[^?]*\?>`)
+
+	// reNumericCharRef matches a numeric character reference such as &#x1b;.
+	reNumericCharRef = regexp.MustCompile(`&#(?:[0-9]+|x[0-9A-Fa-f]+);`)
 )
 
 // redactJenkinsConfig returns config with every FolderCredentialsProperty
@@ -156,6 +159,54 @@ func withFolderCredentials(template, live string) (string, error) {
 		return "", errors.New("the template has no root element")
 	}
 	return template[:from] + insert + template[to:], nil
+}
+
+// checkItemConfig returns an error unless config, the body read from an item's
+// config.xml URL, is an item document: well-formed XML with a single root
+// element other than <html>. That rules out what may be served in its place,
+// by Jenkins or by a proxy in front of it, such as an error or sign-in page,
+// an empty body, or the "{}" the client puts in a 404's place. The item type
+// the root names is not checked: a template may change it.
+func checkItemConfig(config string) error {
+	// encoding/xml implements XML 1.0. Jenkins serves XML 1.1, whose
+	// declaration it rejects, as it does the references to control characters
+	// only 1.1 allows (Jenkins writes one for an escape character in a
+	// description, say). Neither affects the document's structure.
+	src := reNumericCharRef.ReplaceAllLiteralString(reLeadingXMLDecl.ReplaceAllLiteralString(config, ""), "")
+	dec := xml.NewDecoder(strings.NewReader(src))
+	depth, root := 0, ""
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("not an item's config.xml: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if depth == 0 && root != "" {
+				return errors.New("not an item's config.xml: more than one root element")
+			}
+			if depth == 0 {
+				root = t.Name.Local
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			if depth == 0 && strings.TrimSpace(string(t)) != "" {
+				return errors.New("not an item's config.xml: text outside the root element")
+			}
+		}
+	}
+	switch {
+	case root == "":
+		return errors.New("not an item's config.xml: no root element")
+	case strings.EqualFold(root, "html"):
+		return errors.New("not an item's config.xml: an HTML page")
+	}
+	return nil
 }
 
 // redactedSecretValidator rejects a jenkins_job template in which an element's
