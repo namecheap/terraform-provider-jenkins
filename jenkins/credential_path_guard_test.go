@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -590,6 +591,95 @@ func TestCredentialDomainFolderOutsideSystemStore(t *testing.T) {
 						t.Errorf("folder %q: %v resolves to %s; in the system store = %v, want %v", tc.folder, req, resolved, inSystem, tc.system)
 					}
 				}
+			})
+		}
+	}
+}
+
+// TestCredentialDomainInvalidFolder: jenkins_credential_domain must make the
+// runtime folder check that the credential resources make, not only the plan
+// time one, because an import ID or older state can hold a folder the
+// validator rejects. Import IDs "team-a/../team" and "../team-a/team" read
+// team-a's store once Jetty resolves the dot-segments, but record a folder
+// that is not team-a; "team-a?" and "team-a#" send Update and Delete to
+// team-a's job page, which answers 200 without changing anything; import IDs
+// "job/team" and "../team" build "/job//credentials/..." and
+// "/job/../credentials/...". Each op must fail with "Invalid Folder" before
+// sending any request. The valid folders are the control, including
+// "job/team-a", the canonical form of "team-a".
+func TestCredentialDomainInvalidFolder(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, folder string
+		// store is the store a valid folder's requests go to; empty marks an
+		// invalid folder.
+		store string
+	}{
+		{name: "unset", folder: "", store: "/credentials/store/system/"},
+		{name: "plain", folder: "team-a", store: teamAStore},
+		{name: "canonical", folder: "/job/team-a", store: teamAStore},
+		{name: "canonical without slash", folder: "job/team-a", store: teamAStore},
+		{name: "question mark", folder: "team-a?"},
+		{name: "hash", folder: "team-a#"},
+		{name: "job", folder: "job"},
+		{name: "job slashes", folder: "/job/"},
+		{name: "dot-dot", folder: ".."},
+		{name: "trailing dot-dot", folder: "team-a/.."},
+		{name: "leading dot-dot", folder: "../team-a"},
+		{name: "sibling", folder: "team-a/../team-b"},
+	} {
+		for _, op := range []string{"import", "create", "read", "update", "delete"} {
+			t.Run(op+"/"+tc.name, func(t *testing.T) {
+				// A 404 ends a read cleanly by dropping the resource.
+				client, requests := credentialPathRecorder(t, func(r *http.Request) (int, string) {
+					if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config.xml") {
+						return http.StatusNotFound, ""
+					}
+					return http.StatusOK, `{}`
+				})
+				r, sr := pathTestResource(ctx, t, newCredentialDomainResource, client)
+				s := sr.Schema
+
+				var diags diag.Diagnostics
+				if op == "import" {
+					id := "team"
+					if tc.folder != "" {
+						id = tc.folder + "/team"
+					}
+					imported := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}}
+					r.(resource.ResourceWithImportState).ImportState(ctx, resource.ImportStateRequest{ID: id}, &imported)
+					diags = imported.Diagnostics
+					if !diags.HasError() {
+						read := resource.ReadResponse{State: imported.State}
+						r.Read(ctx, resource.ReadRequest{State: imported.State}, &read)
+						diags = read.Diagnostics
+					}
+				} else {
+					folder := types.StringNull()
+					if tc.folder != "" {
+						folder = types.StringValue(tc.folder)
+					}
+					diags = runCredentialOp(ctx, t, r, op, &credentialDomainResourceModel{
+						ID: types.StringValue("x"), Name: types.StringValue("team"), Folder: folder, Description: types.StringValue("d"),
+					})
+				}
+				got := requests()
+
+				if tc.store != "" {
+					if diags.HasError() {
+						t.Fatalf("folder %q: %v", tc.folder, diags)
+					}
+					if len(got) == 0 || !strings.HasPrefix(got[len(got)-1].path, tc.store) {
+						t.Errorf("folder %q: requests = %v, want the last one in %s", tc.folder, got, tc.store)
+					}
+					return
+				}
+				if !diags.HasError() {
+					t.Errorf("folder %q: want an error, got none", tc.folder)
+				} else if summary := diags.Errors()[0].Summary(); summary != "Invalid Folder" {
+					t.Errorf("folder %q: error summary = %q, want %q", tc.folder, summary, "Invalid Folder")
+				}
+				assertRequests(t, got)
 			})
 		}
 	}

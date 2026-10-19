@@ -781,6 +781,8 @@ resource jenkins_credential_certificate cert {
 // system store: imported with them, a domain must not be read from the system
 // store, or destroying it would delete the system domain of that name. A "?"
 // or "#" in the folder cuts the URL short and must not import anything either.
+// Nor must "<folder>/.." or "../<folder>": Jetty resolves them to the folder's
+// own store, but state would record a folder that is not the folder.
 func TestAccJenkinsCredentialPath_domainImportFolder(t *testing.T) {
 	prefix := testAccCredentialPathPrefix()
 	config := fmt.Sprintf(`
@@ -818,7 +820,7 @@ resource jenkins_credential_domain dom {
 			ImportStateVerify: true,
 		},
 	}
-	for _, folder := range []string{"job", "/job", "job/job", prefix + "?", prefix + "#"} {
+	for _, folder := range []string{"job", "/job", "job/job", prefix + "?", prefix + "#", prefix + "/..", "../" + prefix} {
 		steps = append(steps, resource.TestStep{
 			ResourceName:  "jenkins_credential_domain.dom",
 			ImportState:   true,
