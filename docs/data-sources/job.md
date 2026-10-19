@@ -32,4 +32,4 @@ data "jenkins_job" "example" {
 ### Read-Only
 
 - `id` (String) The full canonical job path, e.g. `/job/job-name`
-- `template` (String) A Jenkins-compatible XML template to describe the job.
+- `template` (String) The job's `config.xml` as read from Jenkins. Encrypted secrets are kept out of state: a folder credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element, present when the item is a folder) is omitted and any other encrypted secret value is replaced with `{redacted}`.

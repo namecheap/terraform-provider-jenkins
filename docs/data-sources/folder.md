@@ -37,4 +37,4 @@ data "jenkins_folder" "example" {
 - `description` (String) The description of this folder's purpose.
 - `display_name` (String) The name of the folder to display in the UI.
 - `id` (String) The full canonical job path, e.g. `/job/job-name`
-- `template` (String) The configuration file template, used to communicate with Jenkins.
+- `template` (String) The folder's `config.xml` as read from Jenkins. Encrypted secrets are kept out of state: the folder credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is omitted and any other encrypted secret value is replaced with `{redacted}`.

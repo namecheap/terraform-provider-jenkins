@@ -44,7 +44,7 @@ resource "jenkins_folder" "squad" {
 ### Read-Only
 
 - `id` (String) The full canonical folder path, e.g. `/job/folder-name`.
-- `template` (String) The Jenkins-compatible XML template describing the folder, as used to communicate with Jenkins. An existing folder's XML can be retrieved by appending `/config.xml` to its URL.
+- `template` (String) The folder's `config.xml` as read back from Jenkins. Encrypted secrets are kept out of state: the folder credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is omitted and any other encrypted secret value is replaced with `{redacted}`, so this is not a byte-for-byte copy of the folder's `config.xml`.
 
 <a id="nestedblock--security"></a>
 ### Nested Schema for `security`

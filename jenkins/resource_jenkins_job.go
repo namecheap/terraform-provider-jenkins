@@ -17,6 +17,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
+// jobTemplateFolderCredentialsKey is the private-state key under which Create and
+// Update record that the configured template itself contains a folder
+// credentials store (FolderCredentialsProperty). Read only keeps that element
+// in state when the key is set; see jobTemplateFromServer.
+const jobTemplateFolderCredentialsKey = "template_has_folder_credentials"
+
 type jobResourceModel struct {
 	ID       types.String `tfsdk:"id"`
 	Name     types.String `tfsdk:"name"`
@@ -79,7 +85,7 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"template": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff.",
+				MarkdownDescription: "The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is left out of the refreshed value unless this template itself contains that element, so encrypted folder credentials are not copied into state. Like any other element missing from the template, a credentials store the template does not contain is still removed from the folder whenever the job is updated; manage folders that hold credentials with `jenkins_folder` instead.",
 				Validators: []validator.String{
 					jobXMLValidator{},
 				},
@@ -141,6 +147,9 @@ func (r *jobResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
+	if resp.Private != nil {
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, jobTemplateFolderCredentialsKey, folderCredentialsFlag(data.Template.ValueString()))...)
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -168,7 +177,9 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		resp.Diagnostics.AddError("Unable to Refresh Resource", "Could not read job configuration.\n\nError: "+err.Error())
 		return
 	}
-	data.Template = types.StringValue(config)
+	keep, d := req.Private.GetKey(ctx, jobTemplateFolderCredentialsKey)
+	resp.Diagnostics.Append(d...)
+	data.Template = types.StringValue(jobTemplateFromServer(config, string(keep) == "true"))
 
 	if !r.refreshMeta(ctx, job, &data, &resp.Diagnostics) {
 		return
@@ -210,6 +221,9 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
+	if resp.Private != nil {
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, jobTemplateFolderCredentialsKey, folderCredentialsFlag(data.Template.ValueString()))...)
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -256,6 +270,46 @@ func (r *jobResource) refreshMeta(ctx context.Context, job *jenkins.Job, data *j
 	}
 
 	return true
+}
+
+// jobTemplateFromServer returns the template Read stores for config, the job's
+// config.xml as served by Jenkins (#255).
+//
+// The computed templates of jenkins_folder and the jenkins_folder/jenkins_job
+// data sources are fully redacted (redactJenkinsConfig). This one cannot be:
+// it is the practitioner's own configuration, and templatePlanModifier keeps
+// state only while it stays semantically equal to the configured template. So
+// only the folder credentials store is removed, and only when the configured
+// template does not contain it (keepFolderCredentials false). Removing an
+// element the configuration does not have can only bring state closer to it,
+// never open a diff. What Update posts is unchanged: always the configured
+// template or a state value semantically equal to it, so a store the template
+// lacks is dropped by the next update exactly as before; only its showing up
+// as drift at plan time goes away. Ciphertext anywhere else is left alone: a
+// configured template that carries an encrypted value (say a password
+// parameter default pasted from config.xml) would never again compare equal to
+// a redacted state, and every plan would re-apply it.
+//
+// Whether the configured template contains the element is only known when it
+// is applied, so Create and Update record it in private state. An imported
+// job, or state written by an earlier provider version, has no record and is
+// stripped; if its configuration does contain the element, the next plan shows
+// it once and that apply records it.
+func jobTemplateFromServer(config string, keepFolderCredentials bool) string {
+	if keepFolderCredentials {
+		return config
+	}
+	return stripFolderCredentials(config)
+}
+
+// folderCredentialsFlag is the private-state value Create and Update store
+// under jobTemplateFolderCredentialsKey for the applied template: JSON true when
+// it contains a folder credentials store, otherwise nil, which removes the key.
+func folderCredentialsFlag(template string) []byte {
+	if hasFolderCredentials(template) {
+		return []byte("true")
+	}
+	return nil
 }
 
 // applyDisabledState forces job to the desired enabled/disabled state. Enable and

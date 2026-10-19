@@ -68,7 +68,7 @@ And in `pipeline.xml`:
 ### Required
 
 - `name` (String) The unique name of the JenkinsCI job.
-- `template` (String) The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff.
+- `template` (String) The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is left out of the refreshed value unless this template itself contains that element, so encrypted folder credentials are not copied into state. Like any other element missing from the template, a credentials store the template does not contain is still removed from the folder whenever the job is updated; manage folders that hold credentials with `jenkins_folder` instead.
 
 ### Optional
 

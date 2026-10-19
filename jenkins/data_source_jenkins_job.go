@@ -39,7 +39,7 @@ func (d *jobDataSource) Schema(ctx context.Context, req datasource.SchemaRequest
 		MarkdownDescription: "Get the attributes of a job within Jenkins.",
 		Attributes: d.schema(map[string]schema.Attribute{
 			"template": schema.StringAttribute{
-				MarkdownDescription: "A Jenkins-compatible XML template to describe the job.",
+				MarkdownDescription: "The job's `config.xml` as read from Jenkins. Encrypted secrets are kept out of state: a folder credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element, present when the item is a folder) is omitted and any other encrypted secret value is replaced with `{redacted}`.",
 				Computed:            true,
 			},
 		}),
@@ -90,7 +90,7 @@ func (d *jobDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 	data.ID = types.StringValue(job.Base)
 	data.Name = types.StringValue(name)
 	data.Folder = types.StringValue(formatFolderID(folders))
-	data.Template = types.StringValue(strings.TrimSpace(config))
+	data.Template = types.StringValue(strings.TrimSpace(redactJenkinsConfig(config)))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
