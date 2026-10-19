@@ -35,10 +35,17 @@ func newResourceHelper() *resourceHelper {
 }
 
 // credentialManager returns a CredentialsManager scoped to the given (unformatted)
-// folder. Shared by the credential resources' CRUD methods.
-func (r *resourceHelper) credentialManager(folder string) *jenkins.CredentialsManager {
+// folder. Shared by the credential resources' CRUD methods. On an invalid folder
+// (see credentialsFolder) it appends an "Invalid Folder" diagnostic and returns
+// nil, so callers should `if cm == nil { return }`.
+func (r *resourceHelper) credentialManager(folder string, diags *diag.Diagnostics) *jenkins.CredentialsManager {
+	formatted, err := credentialsFolder(folder)
+	if err != nil {
+		diags.AddError("Invalid Folder", err.Error())
+		return nil
+	}
 	cm := r.client.Credentials()
-	cm.Folder = formatFolderName(folder)
+	cm.Folder = formatted
 	return cm
 }
 
@@ -46,7 +53,10 @@ func (r *resourceHelper) credentialManager(folder string) *jenkins.CredentialsMa
 // folder exists. On failure it appends an "Invalid Folder" diagnostic and returns nil,
 // so callers should `if cm == nil { return }`.
 func (r *resourceHelper) credentialManagerForFolder(ctx context.Context, folder string, diags *diag.Diagnostics) *jenkins.CredentialsManager {
-	cm := r.credentialManager(folder)
+	cm := r.credentialManager(folder, diags)
+	if cm == nil {
+		return nil
+	}
 	if err := folderExists(ctx, r.client, cm.Folder); err != nil {
 		diags.AddError(
 			"Invalid Folder",
@@ -64,9 +74,16 @@ func (r *resourceHelper) credentialManagerForFolder(ctx context.Context, folder 
 // appending an "Unable to Delete Resource" diagnostic on failure. Shared by every
 // credential resource's Delete method.
 func (r *resourceHelper) deleteCredential(ctx context.Context, folder, domain, name string, diags *diag.Diagnostics) {
-	cm := r.credentialManager(folder)
+	cm := r.credentialManager(folder, diags)
+	if cm == nil {
+		return
+	}
 	tflog.Debug(ctx, "deleting credential", map[string]interface{}{"folder": cm.Folder, "domain": domain, "name": name})
-	if err := cm.Delete(ctx, domain, name); err != nil {
+	pathDomain, pathName, err := escapeCredentialPath(domain, name)
+	if err == nil {
+		err = cm.Delete(ctx, pathDomain, pathName)
+	}
+	if err != nil {
 		diags.AddError(
 			"Unable to Delete Resource",
 			"An unexpected error occurred while deleting the resource. "+
@@ -199,6 +216,17 @@ func (r *resourceHelper) schemaCredential(s map[string]schema.Attribute) map[str
 	// Pull in the base schema
 	s = r.schema(s)
 
+	// The credential ID and folder are interpolated into credentials-store URLs,
+	// so the base schema's "/" check on the ID is not enough (issue #250).
+	if name, ok := s["name"].(schema.StringAttribute); ok {
+		name.Validators = pathSegmentValidators()
+		s["name"] = name
+	}
+	if folder, ok := s["folder"].(schema.StringAttribute); ok {
+		folder.Validators = append(folder.Validators, credentialFolderValidator{})
+		s["folder"] = folder
+	}
+
 	// Add credential-specific attributes
 	if _, ok := s["description"]; !ok {
 		s["description"] = schema.StringAttribute{
@@ -218,6 +246,7 @@ func (r *resourceHelper) schemaCredential(s map[string]schema.Attribute) map[str
 				// In-place updates should be possible, but gojenkins does not support move operations
 				stringplanmodifier.RequiresReplace(),
 			},
+			Validators: domainNameValidators(),
 		}
 	}
 	if _, ok := s["scope"]; !ok {

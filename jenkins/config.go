@@ -686,7 +686,11 @@ func (j *jenkinsAdapter) UpdateCredentialDomain(ctx context.Context, folder, nam
 	if err != nil {
 		return err
 	}
-	resp, err := j.Requester.PostXML(ctx, credentialStoreBase(folder)+"/domain/"+name+"/config.xml", string(payload), j.Raw, map[string]string{})
+	segment, err := escapePathSegment(name)
+	if err != nil {
+		return err
+	}
+	resp, err := j.Requester.PostXML(ctx, credentialStoreBase(folder)+"/domain/"+segment+"/config.xml", string(payload), j.Raw, map[string]string{})
 	if err != nil {
 		return err
 	}
@@ -698,7 +702,11 @@ func (j *jenkinsAdapter) UpdateCredentialDomain(ctx context.Context, folder, nam
 
 // DeleteCredentialDomain removes a domain (and any credentials it contains).
 func (j *jenkinsAdapter) DeleteCredentialDomain(ctx context.Context, folder, name string) error {
-	resp, err := j.Requester.Post(ctx, credentialStoreBase(folder)+"/domain/"+name+"/doDelete", nil, j.Raw, map[string]string{})
+	segment, err := escapePathSegment(name)
+	if err != nil {
+		return err
+	}
+	resp, err := j.Requester.Post(ctx, credentialStoreBase(folder)+"/domain/"+segment+"/doDelete", nil, j.Raw, map[string]string{})
 	if err != nil {
 		return err
 	}
@@ -716,7 +724,11 @@ func (j *jenkinsAdapter) GetCredentialDomain(ctx context.Context, folder, name s
 		return fmt.Errorf("unexpected requester type %T", j.Requester)
 	}
 
-	endpoint := strings.TrimRight(r.Base, "/") + credentialStoreBase(folder) + "/domain/" + url.PathEscape(name) + "/config.xml"
+	segment, err := escapePathSegment(name)
+	if err != nil {
+		return err
+	}
+	endpoint := strings.TrimRight(r.Base, "/") + credentialStoreBase(folder) + "/domain/" + segment + "/config.xml"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
