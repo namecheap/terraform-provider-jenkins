@@ -139,7 +139,8 @@ func addWriteOnlySecret(attrs map[string]schema.Attribute, name, desc string) ma
 	}
 	attrs[name+"_wo_version"] = schema.StringAttribute{
 		MarkdownDescription: "Version identifier for `" + name + "_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; " +
-			"change this value (e.g. after rotating the secret) to have Terraform re-send `" + name + "_wo` to Jenkins. Required when `" + name + "_wo` is set.",
+			"change this value (e.g. after rotating the secret) to have Terraform re-send `" + name + "_wo` to Jenkins. " +
+			"Any other update of the credential re-sends it too, as Jenkins cannot keep a stored secret across an update. Required when `" + name + "_wo` is set.",
 		Optional: true,
 	}
 	return attrs

@@ -2,8 +2,12 @@ package jenkins
 
 import (
 	"context"
+	"encoding/xml"
+	"fmt"
 
+	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -47,18 +51,20 @@ const (
 //
 //   - hasWriteOnly: a "<name>_wo" / "<name>_wo_version" companion pair exists
 //     (added via addWriteOnlySecret). When false, no _wo attribute is read.
-//   - alwaysSend: the field must be sent on every update regardless of whether
-//     it changed (e.g. SSH's private-key source is structural and must always be
-//     present in the payload). When false, it is sent only when it changed.
+//   - element: the field's XML element in the credential's config.xml, set only
+//     for an optional secret that a configuration may leave unmanaged (plain and
+//     write-only both unset). Update checks that Jenkins holds no value for such
+//     a secret before sending a payload without it (see resolveSecretsUpdate).
+//     When empty, an unset value is sent as empty: the secret is required, has a
+//     schema default, or is replaced by another attribute (Azure's
+//     certificate_id).
 //
-// plainValue returns the model's plain value; woVersion returns its write-only
-// rotation trigger (only consulted when hasWriteOnly is true).
+// plainValue returns the model's plain value.
 type credentialSecretField[M any] struct {
 	name         string
 	hasWriteOnly bool
-	alwaysSend   bool
+	element      string
 	plainValue   func(*M) types.String
-	woVersion    func(*M) types.String
 }
 
 // credentialSpec captures everything type-specific about one credential kind so
@@ -72,8 +78,9 @@ type credentialSpec[M any] struct {
 	secretFields []credentialSecretField[M]
 	// build returns a pointer to the gojenkins credential struct to Add/Update.
 	// secrets holds the resolved secret values to set, keyed by field name; a
-	// field absent from the map is left unset — on Update this leaves Jenkins'
-	// stored value untouched.
+	// field absent from the map is left unset. Jenkins stores an unset secret as
+	// empty, so on Update a field is absent only when Terraform does not manage it
+	// and Jenkins was found to hold no value for it.
 	build func(m *M, secrets map[string]string) interface{}
 	// newAPIValue returns a fresh pointer to the gojenkins credential struct to
 	// decode a read into; fromAPI copies its readable (non-secret) fields into m.
@@ -158,9 +165,8 @@ func (c *credentialCRUD[M]) Read(ctx context.Context, req resource.ReadRequest, 
 }
 
 func (c *credentialCRUD[M]) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan, state M
+	var plan M
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -171,12 +177,18 @@ func (c *credentialCRUD[M]) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	secrets := c.resolveSecretsUpdate(ctx, &plan, &state, req.Config, &resp.Diagnostics)
+	secrets, unmanaged := c.resolveSecretsUpdate(ctx, &plan, req.Config, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	pathDomain, pathName, err := escapeCredentialPath(domain, name)
+	if err == nil && len(unmanaged) > 0 {
+		checkUnmanagedSecrets(ctx, cm, pathDomain, pathName, unmanaged, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 	if err == nil {
 		err = cm.Update(ctx, pathDomain, pathName, c.spec.build(&plan, secrets))
 	}
@@ -223,26 +235,94 @@ func (c *credentialCRUD[M]) resolveSecretsCreate(ctx context.Context, m *M, conf
 	return secrets
 }
 
-// resolveSecretsUpdate resolves each secret field for an update. An alwaysSend
-// field is always included (e.g. SSH's structural private-key source). Otherwise
-// the field is sent only when it should change: for a write-only secret when its
-// version trigger changed, else when the plain value changed. Fields left out
-// keep Jenkins' stored value (also correct under lifecycle.ignore_changes).
-func (c *credentialCRUD[M]) resolveSecretsUpdate(ctx context.Context, plan, state *M, config tfsdk.Config, diags *diag.Diagnostics) map[string]string {
-	secrets := make(map[string]string)
+// resolveSecretsUpdate resolves the secret fields for an update. Jenkins'
+// config.xml update replaces the whole credential, and a secret element that is
+// left out, empty or redacted is stored as empty: there is no way to keep a
+// stored secret. So every secret Terraform knows is re-sent on every update —
+// the write-only companion from config when set (write-only values are present
+// in config on every apply), otherwise the plain value from the plan. A
+// "<name>_wo_version" change only forces the update; it does not decide what is
+// sent. Under lifecycle.ignore_changes on a plain secret the plan holds the
+// value from state, so that value is re-sent.
+//
+// An optional field (element set) that Terraform does not manage — plain and
+// write-only both null — is returned in unmanaged instead of being resolved;
+// Update must check that Jenkins holds no value for it before sending.
+func (c *credentialCRUD[M]) resolveSecretsUpdate(ctx context.Context, plan *M, config tfsdk.Config, diags *diag.Diagnostics) (map[string]string, []unmanagedSecret) {
+	secrets := make(map[string]string, len(c.spec.secretFields))
+	var unmanaged []unmanagedSecret
 	for _, f := range c.spec.secretFields {
-		switch {
-		case f.alwaysSend:
-			secrets[f.name] = c.resolvePlainOrWo(ctx, plan, config, f, diags)
-		case f.hasWriteOnly && !c.readWriteOnly(ctx, config, f.name+"_wo", diags).IsNull():
-			if !f.woVersion(plan).Equal(f.woVersion(state)) {
-				secrets[f.name] = c.readWriteOnly(ctx, config, f.name+"_wo", diags).ValueString()
+		if f.element != "" && f.plainValue(plan).IsNull() &&
+			(!f.hasWriteOnly || c.readWriteOnly(ctx, config, f.name+"_wo", diags).IsNull()) {
+			unmanaged = append(unmanaged, unmanagedSecret{attr: f.name, element: f.element, hasWriteOnly: f.hasWriteOnly})
+			continue
+		}
+		secrets[f.name] = c.resolvePlainOrWo(ctx, plan, config, f, diags)
+	}
+	return secrets, unmanaged
+}
+
+// unmanagedSecret is an optional secret attribute that the configuration leaves
+// unset, so an update has no value to send for it.
+type unmanagedSecret struct {
+	attr         string // Terraform attribute name, e.g. "password"
+	element      string // XML element in the credential's config.xml
+	hasWriteOnly bool   // whether "<attr>_wo" exists
+}
+
+// checkUnmanagedSecrets refuses an update that would erase a secret Terraform
+// does not manage. It reads the credential's config.xml, where Jenkins writes
+// each secret it holds as <element><secret-redacted/></element> and omits one it
+// does not hold, and adds an error for every unmanaged secret that is present.
+// Jenkins does not reveal whether a stored value is empty, so a present element
+// always counts as a value. pathDomain and pathName must already be escaped
+// (escapeCredentialPath).
+func checkUnmanagedSecrets(ctx context.Context, cm *jenkins.CredentialsManager, pathDomain, pathName string, unmanaged []unmanagedSecret, diags *diag.Diagnostics) {
+	var stored credentialXMLElements
+	if err := cm.GetSingle(ctx, pathDomain, pathName, &stored); err != nil {
+		diags.AddError(crudUpdateErrSummary, crudUpdateErrDetail+"reading the stored credential: "+err.Error())
+		return
+	}
+	for _, u := range unmanaged {
+		if !stored.names[u.element] {
+			continue
+		}
+		manage := fmt.Sprintf("`%s`", u.attr)
+		if u.hasWriteOnly {
+			manage = fmt.Sprintf("`%s`, or `%s_wo` with `%s_wo_version`", u.attr, u.attr, u.attr)
+		}
+		diags.AddAttributeError(path.Root(u.attr), "Update Would Erase Credential Secret",
+			fmt.Sprintf("Jenkins holds a value for %q on this credential, but the configuration does not set it. "+
+				"Jenkins cannot update a credential without re-sending every secret it holds: a secret left out of "+
+				"the update is stored as empty, so this update would erase %q. Jenkins does not reveal the stored "+
+				"value, nor whether it is empty.\n\n"+
+				"To update the credential, manage the secret in Terraform by setting %s (set it to \"\" if it "+
+				"should be empty), or replace the resource to recreate the credential without it.",
+				u.attr, u.attr, manage))
+	}
+}
+
+// credentialXMLElements records the names of the direct children of a
+// credential's config.xml root element.
+type credentialXMLElements struct {
+	names map[string]bool
+}
+
+func (e *credentialXMLElements) UnmarshalXML(d *xml.Decoder, _ xml.StartElement) error {
+	e.names = make(map[string]bool)
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			e.names[t.Name.Local] = true
+			if err := d.Skip(); err != nil {
+				return err
 			}
-		default:
-			if !f.plainValue(plan).Equal(f.plainValue(state)) {
-				secrets[f.name] = f.plainValue(plan).ValueString()
-			}
+		case xml.EndElement:
+			return nil
 		}
 	}
-	return secrets
 }

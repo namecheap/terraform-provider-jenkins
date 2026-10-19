@@ -296,15 +296,11 @@ func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
 	}
 
 	t.Run("certificate credential, description-only change", func(t *testing.T) {
-		state := base()
-		state.CertificateId = types.StringValue("my-cred-id/123")
-		state.Description = types.StringValue("initial")
-
 		data := base()
 		data.CertificateId = types.StringValue("my-cred-id/123")
 		data.Description = types.StringValue("updated")
 
-		cred := buildAzureServicePrincipalUpdate(data, state)
+		cred := buildAzureServicePrincipalUpdate(data)
 
 		if cred.Data.ClientId != "client-abc" {
 			t.Errorf("client_id: got %q, want %q (must not be overwritten with the certificate reference)", cred.Data.ClientId, "client-abc")
@@ -317,17 +313,16 @@ func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
 		}
 	})
 
-	t.Run("secret credential, secret unchanged (ignore_changes)", func(t *testing.T) {
-		state := base()
-		state.ClientSecret = types.StringValue("sekret")
-
+	// Jenkins stores a secret left out of an update as empty, so an unchanged
+	// secret (including one under ignore_changes) must be re-sent.
+	t.Run("secret credential, secret unchanged", func(t *testing.T) {
 		data := base()
 		data.ClientSecret = types.StringValue("sekret")
 
-		cred := buildAzureServicePrincipalUpdate(data, state)
+		cred := buildAzureServicePrincipalUpdate(data)
 
-		if cred.Data.ClientSecret != "" {
-			t.Errorf("client_secret: got %q, want empty (unchanged secret must not be re-sent)", cred.Data.ClientSecret)
+		if cred.Data.ClientSecret != "sekret" {
+			t.Errorf("client_secret: got %q, want %q (an unchanged secret must be re-sent)", cred.Data.ClientSecret, "sekret")
 		}
 		if cred.Data.CertificateId != "" {
 			t.Errorf("certificate_id: got %q, want empty for a secret-based credential", cred.Data.CertificateId)
@@ -338,13 +333,10 @@ func TestBuildAzureServicePrincipalUpdate(t *testing.T) {
 	})
 
 	t.Run("secret credential, secret changed", func(t *testing.T) {
-		state := base()
-		state.ClientSecret = types.StringValue("old")
-
 		data := base()
 		data.ClientSecret = types.StringValue("new")
 
-		cred := buildAzureServicePrincipalUpdate(data, state)
+		cred := buildAzureServicePrincipalUpdate(data)
 
 		if cred.Data.ClientSecret != "new" {
 			t.Errorf("client_secret: got %q, want %q (changed secret must be sent)", cred.Data.ClientSecret, "new")

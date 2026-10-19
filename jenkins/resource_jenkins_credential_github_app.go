@@ -64,7 +64,6 @@ func gitHubAppCredentialSpec() credentialSpec[credentialGitHubAppResourceModel] 
 			name:         "private_key",
 			hasWriteOnly: true,
 			plainValue:   func(m *credentialGitHubAppResourceModel) types.String { return m.PrivateKey },
-			woVersion:    func(m *credentialGitHubAppResourceModel) types.String { return m.PrivateKeyWoVersion },
 		}},
 		build: func(m *credentialGitHubAppResourceModel, secrets map[string]string) interface{} {
 			cred := &GitHubAppCredentials{

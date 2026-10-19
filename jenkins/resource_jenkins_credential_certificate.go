@@ -73,7 +73,7 @@ Manages a certificate credential within Jenkins, backed by an uploaded PKCS#12 k
 				Sensitive:           true,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "The password protecting the keystore. Omit for a keystore with no password.",
+				MarkdownDescription: "The password protecting the keystore. For a keystore with no password, omit it or set it to `\"\"`. Jenkins cannot update a credential without re-sending its password, and does not reveal whether a stored password is empty: when this is omitted and Jenkins holds a password for the credential, an update fails instead of erasing it, so set `\"\"` explicitly if the keystore has no password.",
 				Optional:            true,
 				Sensitive:           true,
 			},
@@ -224,6 +224,16 @@ func (r *credentialCertificateResource) Update(ctx context.Context, req resource
 	}
 
 	pathDomain, pathName, err := escapeCredentialPath(data.Domain.ValueString(), data.Name.ValueString())
+	// The password is re-sent on every update, as Jenkins stores a secret left out
+	// of one as empty. When the configuration does not set it, the update may
+	// only proceed if Jenkins holds no password (see checkUnmanagedSecrets).
+	if err == nil && data.Password.IsNull() {
+		checkUnmanagedSecrets(ctx, cm, pathDomain, pathName,
+			[]unmanagedSecret{{attr: "password", element: "password"}}, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 	if err == nil {
 		err = cm.Update(ctx, pathDomain, pathName, &cred)
 	}

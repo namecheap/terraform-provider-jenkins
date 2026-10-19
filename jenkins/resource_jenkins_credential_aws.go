@@ -62,11 +62,12 @@ func awsCredentialSpec() credentialSpec[credentialAwsResourceModel] {
 		setID: func(m *credentialAwsResourceModel, id string) {
 			m.ID = types.StringValue(id)
 		},
+		// secret_key defaults to "", so an unset secret key is managed as empty
+		// and sent as such on every update.
 		secretFields: []credentialSecretField[credentialAwsResourceModel]{{
 			name:         "secret_key",
 			hasWriteOnly: true,
 			plainValue:   func(m *credentialAwsResourceModel) types.String { return m.SecretKey },
-			woVersion:    func(m *credentialAwsResourceModel) types.String { return m.SecretKeyWoVersion },
 		}},
 		build: func(m *credentialAwsResourceModel, secrets map[string]string) interface{} {
 			cred := &credentialAws{

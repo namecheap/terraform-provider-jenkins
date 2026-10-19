@@ -300,9 +300,6 @@ func exerciseCredSpec[M any](t *testing.T, s credentialSpec[M], m *M) interface{
 	secrets := map[string]string{}
 	for _, f := range s.secretFields {
 		_ = f.plainValue(m)
-		if f.woVersion != nil {
-			_ = f.woVersion(m)
-		}
 		secrets[f.name] = "sekret-" + f.name
 	}
 

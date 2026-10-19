@@ -66,8 +66,8 @@ func vaultAppRoleCredentialSpec() credentialSpec[credentialVaultAppRoleResourceM
 		secretFields: []credentialSecretField[credentialVaultAppRoleResourceModel]{{
 			name:         "secret_id",
 			hasWriteOnly: true,
+			element:      "secretId",
 			plainValue:   func(m *credentialVaultAppRoleResourceModel) types.String { return m.SecretID },
-			woVersion:    func(m *credentialVaultAppRoleResourceModel) types.String { return m.SecretIDWoVersion },
 		}},
 		build: func(m *credentialVaultAppRoleResourceModel, secrets map[string]string) interface{} {
 			cred := &VaultAppRoleCredentials{
@@ -129,7 +129,7 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 				Required:            true,
 			},
 			"secret_id": schema.StringAttribute{
-				MarkdownDescription: "The secret_id to be associated with the credentials. If empty then the secret_id property will become unmanaged and expected to be set manually within Jenkins. If set then the secret_id will be updated only upon changes -- if the secret_id is set manually within Jenkins then it will not reconcile this drift until the next time the secret_id property is changed.",
+				MarkdownDescription: "The secret_id to be associated with the credentials. Jenkins cannot update a credential without re-sending its secret_id, so every update sends the configured secret_id and overwrites one set manually within Jenkins. If neither `secret_id` nor `secret_id_wo` is set, the credential is created without a secret_id, expected to be set manually within Jenkins; an update then fails instead of erasing it if Jenkins reports a stored secret_id (Jenkins does not reveal whether it is empty). Set `secret_id = \"\"` to manage an empty secret_id.",
 				Optional:            true,
 				Sensitive:           true,
 			},

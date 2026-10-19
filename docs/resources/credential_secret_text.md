@@ -36,7 +36,7 @@ resource "jenkins_credential_secret_text" "example" {
 - `scope` (String) The visibility of the credentials to Jenkins agents. This must be set to either "GLOBAL" or "SYSTEM". If not set will default to "GLOBAL".
 - `secret` (String, Sensitive) The secret text to be associated with the credentials.
 - `secret_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The secret text to be associated with the credentials. Write-only: the value is used only during apply and is **never stored in Terraform state or plan**. Requires Terraform >= 1.11, conflicts with `secret`, and must be paired with `secret_wo_version`.
-- `secret_wo_version` (String) Version identifier for `secret_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `secret_wo` to Jenkins. Required when `secret_wo` is set.
+- `secret_wo_version` (String) Version identifier for `secret_wo`. Because a write-only value is not stored in state, Terraform cannot detect when it changes; change this value (e.g. after rotating the secret) to have Terraform re-send `secret_wo` to Jenkins. Any other update of the credential re-sends it too, as Jenkins cannot keep a stored secret across an update. Required when `secret_wo` is set.
 
 ### Read-Only
 

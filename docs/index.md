@@ -267,6 +267,13 @@ resource "jenkins_credential_secret_text" "example" {
 }
 ` + "```" + `
 
+Jenkins cannot update a credential while keeping a secret it already stores: an
+update replaces the whole credential, and a secret left out of it is stored as
+empty. Every update of a credential resource therefore re-sends the secrets
+Terraform knows (the write-only value is read from configuration on every apply).
+If an optional secret is not set in the configuration but Jenkins holds a value
+for it, the update fails instead of erasing that value.
+
 The plain and write-only forms are mutually exclusive. The plain `<secret>`
 attributes remain supported for backward compatibility, but the write-only form is
 recommended for any security-sensitive deployment. Even with write-only secrets,

@@ -50,7 +50,6 @@ func secretTextCredentialSpec() credentialSpec[credentialSecretTextResourceModel
 			name:         "secret",
 			hasWriteOnly: true,
 			plainValue:   func(m *credentialSecretTextResourceModel) types.String { return m.Secret },
-			woVersion:    func(m *credentialSecretTextResourceModel) types.String { return m.SecretWoVersion },
 		}},
 		build: func(m *credentialSecretTextResourceModel, secrets map[string]string) interface{} {
 			cred := &jenkins.StringCredentials{

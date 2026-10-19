@@ -50,8 +50,8 @@ func usernameCredentialSpec() credentialSpec[credentialUsernameResourceModel] {
 		secretFields: []credentialSecretField[credentialUsernameResourceModel]{{
 			name:         "password",
 			hasWriteOnly: true,
+			element:      "password",
 			plainValue:   func(m *credentialUsernameResourceModel) types.String { return m.Password },
-			woVersion:    func(m *credentialUsernameResourceModel) types.String { return m.PasswordWoVersion },
 		}},
 		build: func(m *credentialUsernameResourceModel, secrets map[string]string) interface{} {
 			cred := &jenkins.UsernameCredentials{
@@ -95,7 +95,7 @@ Manages a username credential within Jenkins. This username may then be referenc
 				Required:            true,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "The password to be associated with the credentials. If empty then the password property will become unmanaged and expected to be set manually within Jenkins. If set then the password will be updated only upon changes -- if the password is set manually within Jenkins then it will not reconcile this drift until the next time the password property is changed.",
+				MarkdownDescription: "The password to be associated with the credentials. Jenkins cannot update a credential without re-sending its password, so every update sends the configured password and overwrites one set manually within Jenkins. If neither `password` nor `password_wo` is set, the credential is created without a password, expected to be set manually within Jenkins; an update then fails instead of erasing it if Jenkins reports a stored password (Jenkins does not reveal whether it is empty). Set `password = \"\"` to manage an empty password.",
 				Optional:            true,
 				Sensitive:           true,
 			},
