@@ -2,15 +2,20 @@ package jenkins
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"testing"
 
 	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -77,23 +82,85 @@ func covMSchema(ctx context.Context, r resource.Resource) rschema.Schema {
 
 func TestCovM_Role(t *testing.T) {
 	ctx := context.Background()
+	// The role exists once AddRole ran, so Create's existence check passes.
+	var created bool
 	okGet := func(_ context.Context, _, _ string, out interface{}) error {
-		out.(*roleStrategyRoleResponse).PermissionIDs = map[string]bool{"hudson.model.Item.Build": true}
+		if created {
+			out.(*roleStrategyRoleResponse).PermissionIDs = map[string]bool{"hudson.model.Item.Build": true}
+		}
 		return nil
 	}
 	model := &roleResourceModel{
 		Type: types.StringValue("global"), Name: types.StringValue("reader"),
 		Permissions: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("hudson.model.Item.Build")}),
-		Assignments: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("authenticated")}),
+		Users:       types.SetValueMust(types.StringType, []attr.Value{}),
+		Groups:      types.SetValueMust(types.StringType, []attr.Value{types.StringValue("authenticated")}),
+		Assignments: types.SetValueMust(types.StringType, []attr.Value{}),
 	}
 	r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-		mockAddRole:    func(_ context.Context, _, _ string, _ []string, _ string, _ bool) error { return nil },
-		mockAssignRole: func(_ context.Context, _, _, _ string) error { return nil },
+		mockAddRole:    func(_ context.Context, _, _ string, _ []string, _ string, _ bool) error { created = true; return nil },
+		mockAssignRole: func(_ context.Context, _, _ string, _ roleEntry) error { return nil },
 		mockGetRole:    okGet,
 		mockRemoveRole: func(_ context.Context, _, _ string) error { return nil },
 	}}}
 	s := covMSchema(ctx, r)
 	covMResourceCRUD(ctx, t, "role", r, s, model)
+
+	// Create refuses a role that already exists instead of taking it over.
+	var adopted bool
+	rExists := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+		mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+			out.(*roleStrategyRoleResponse).PermissionIDs = map[string]bool{"hudson.model.Hudson.Administer": true}
+			return nil
+		},
+		mockAddRole:      func(context.Context, string, string, []string, string, bool) error { adopted = true; return nil },
+		mockUnassignRole: func(context.Context, string, string, roleEntry) error { adopted = true; return nil },
+	}}}
+	existsPlan := tfsdk.Plan{Schema: s}
+	existsPlan.Set(ctx, model)
+	existsResp := resource.CreateResponse{State: tfsdk.State{Schema: s}}
+	rExists.Create(ctx, resource.CreateRequest{Plan: existsPlan}, &existsResp)
+	if !existsResp.Diagnostics.HasError() || adopted {
+		t.Errorf("role Create on an existing role: diags=%v, modified=%v; want an error and no change", existsResp.Diagnostics, adopted)
+	}
+
+	// role-strategy allows a role with entries but no permissions, and getRole
+	// answers "permissionIds":{} for it but {} for a missing role. Create must
+	// treat it as existing, and Read must keep it in state.
+	zeroPerms := func(_ context.Context, _, _ string, out interface{}) error {
+		return json.Unmarshal([]byte(`{"permissionIds":{},"sids":[{"type":"USER","sid":"bob"}]}`), out)
+	}
+	var stripped bool
+	rZero := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+		mockGetRole:      zeroPerms,
+		mockAddRole:      func(context.Context, string, string, []string, string, bool) error { stripped = true; return nil },
+		mockUnassignRole: func(context.Context, string, string, roleEntry) error { stripped = true; return nil },
+		mockRemoveRole:   func(context.Context, string, string) error { stripped = true; return nil },
+	}}}
+	zeroResp := resource.CreateResponse{State: tfsdk.State{Schema: s}}
+	rZero.Create(ctx, resource.CreateRequest{Plan: existsPlan}, &zeroResp)
+	if !zeroResp.Diagnostics.HasError() || stripped {
+		t.Errorf("role Create on an existing zero-permission role: diags=%v, modified=%v; want an error and no change", zeroResp.Diagnostics, stripped)
+	}
+	zeroState := tfsdk.State{Schema: s}
+	zeroState.Set(ctx, model)
+	zeroRead := resource.ReadResponse{State: zeroState}
+	rZero.Read(ctx, resource.ReadRequest{State: zeroState}, &zeroRead)
+	if zeroRead.Diagnostics.HasError() || zeroRead.State.Raw.IsNull() {
+		t.Errorf("role Read of a zero-permission role: diags=%v, removed=%v; want it kept", zeroRead.Diagnostics, zeroRead.State.Raw.IsNull())
+	}
+
+	// Create stops when the existence check itself fails.
+	var added bool
+	rGetErr := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+		mockGetRole: func(context.Context, string, string, interface{}) error { return covMErr() },
+		mockAddRole: func(context.Context, string, string, []string, string, bool) error { added = true; return nil },
+	}}}
+	getErrResp := resource.CreateResponse{State: tfsdk.State{Schema: s}}
+	rGetErr.Create(ctx, resource.CreateRequest{Plan: existsPlan}, &getErrResp)
+	if !getErrResp.Diagnostics.HasError() || added {
+		t.Errorf("role Create with a failing existence check: diags=%v, added=%v; want an error and no addRole", getErrResp.Diagnostics, added)
+	}
 
 	// Create error
 	rErr := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
@@ -118,6 +185,194 @@ func TestCovM_Role(t *testing.T) {
 	// ImportState
 	isResp := resource.ImportStateResponse{State: tfsdk.State{Schema: s, Raw: covMNull(ctx, s)}}
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "global/reader"}, &isResp)
+}
+
+// TestCovM_RoleUpdateOverwrite checks that Update only overwrites the role when
+// its permissions or pattern change: role-strategy releases before 927 drop
+// every entry of an overwritten role.
+func TestCovM_RoleCreateRollback(t *testing.T) {
+	ctx := context.Background()
+	model := &roleResourceModel{
+		Type: types.StringValue("global"), Name: types.StringValue("reader"),
+		Permissions: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("hudson.model.Hudson.Read")}),
+		Users:       types.SetValueMust(types.StringType, []attr.Value{types.StringValue("alice")}),
+		Groups:      types.SetValueMust(types.StringType, []attr.Value{}),
+		Assignments: types.SetValueMust(types.StringType, []attr.Value{}),
+	}
+
+	tests := []struct {
+		name            string
+		assignErr       error
+		readBackErr     error // returned by populate's GetRole, the second after addRole
+		readBackMissing bool  // populate's GetRole finds no role
+		removeErr       error
+		wantRollback    bool
+		wantState       bool
+		wantDiags       []string
+	}{
+		{name: "success keeps the role", wantState: true},
+		{
+			name:         "reconcile failure deletes the role",
+			assignErr:    covMErr(),
+			wantRollback: true,
+			wantDiags:    []string{"Unable to Assign Role"},
+		},
+		{
+			// The role is correct, only reading it failed: keep it and save
+			// state, so Terraform taints it instead of the role being deleted.
+			name:        "read-back failure keeps the role",
+			readBackErr: covMErr(),
+			wantState:   true,
+			wantDiags:   []string{"Unable to Refresh Resource"},
+		},
+		{
+			name:            "role missing on read-back deletes it",
+			readBackMissing: true,
+			wantRollback:    true,
+			wantDiags:       []string{"Unable to Read Created Resource"},
+		},
+		{
+			name:         "failed rollback reports the orphan",
+			assignErr:    covMErr(),
+			removeErr:    covMErr(),
+			wantRollback: true,
+			wantDiags:    []string{"Unable to Assign Role", "Role Left Orphaned After Failed Create"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var created, removed bool
+			var reads int
+			r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+					if !created {
+						return nil
+					}
+					if reads++; reads == 2 && tt.readBackErr != nil {
+						return tt.readBackErr
+					}
+					if reads == 2 && tt.readBackMissing {
+						return nil
+					}
+					resp := out.(*roleStrategyRoleResponse)
+					resp.PermissionIDs = map[string]bool{"hudson.model.Hudson.Read": true}
+					if !tt.wantRollback {
+						resp.Sids = []roleEntry{{Type: roleEntryUser, Sid: "alice"}}
+					}
+					return nil
+				},
+				mockAddRole:    func(context.Context, string, string, []string, string, bool) error { created = true; return nil },
+				mockAssignRole: func(context.Context, string, string, roleEntry) error { return tt.assignErr },
+				mockRemoveRole: func(context.Context, string, string) error { removed = true; return tt.removeErr },
+			}}}
+			s := covMSchema(ctx, r)
+			plan := tfsdk.Plan{Schema: s}
+			plan.Set(ctx, model)
+			resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: covMNull(ctx, s)}}
+			r.Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+
+			if removed != tt.wantRollback {
+				t.Errorf("RemoveRole called = %v, want %v", removed, tt.wantRollback)
+			}
+			if got := !resp.State.Raw.IsNull(); got != tt.wantState {
+				t.Errorf("state saved = %v, want %v", got, tt.wantState)
+			}
+			var got []string
+			for _, d := range resp.Diagnostics.Errors() {
+				got = append(got, d.Summary())
+			}
+			if !reflect.DeepEqual(got, tt.wantDiags) {
+				t.Errorf("error summaries = %v, want %v", got, tt.wantDiags)
+			}
+		})
+	}
+}
+
+func TestCovM_RoleUpdateOverwrite(t *testing.T) {
+	ctx := context.Background()
+	strs := func(v ...string) types.Set {
+		vals := make([]attr.Value, 0, len(v))
+		for _, s := range v {
+			vals = append(vals, types.StringValue(s))
+		}
+		return types.SetValueMust(types.StringType, vals)
+	}
+	model := func(pattern string, perms, users types.Set) *roleResourceModel {
+		return &roleResourceModel{
+			Type: types.StringValue("item"), Name: types.StringValue("dev"), Pattern: types.StringValue(pattern),
+			Permissions: perms, Users: users, Groups: strs(), Assignments: strs(),
+		}
+	}
+	build, read := strs("hudson.model.Item.Build"), strs("hudson.model.Item.Read")
+
+	tests := []struct {
+		name          string
+		prior, plan   *roleResourceModel
+		addRoleErr    error
+		wantOverwrite bool
+		wantErr       bool
+	}{
+		{
+			name:  "entries only",
+			prior: model("team/.*", build, strs("alice")),
+			plan:  model("team/.*", build, strs("bob")),
+		},
+		{
+			// ".*" is what rolePatternPlanModifier plans for an item role
+			// without a configured pattern.
+			name:  "unset pattern, entries only",
+			prior: model(".*", build, strs("alice")),
+			plan:  model(".*", build, strs("bob")),
+		},
+		{
+			name:          "permissions change",
+			prior:         model("team/.*", build, strs("alice")),
+			plan:          model("team/.*", read, strs("alice")),
+			wantOverwrite: true,
+		},
+		{
+			name:          "pattern change",
+			prior:         model("team/.*", build, strs("alice")),
+			plan:          model("other/.*", build, strs("alice")),
+			wantOverwrite: true,
+		},
+		{
+			name:          "overwrite error",
+			prior:         model("team/.*", build, strs("alice")),
+			plan:          model("team/.*", read, strs("alice")),
+			addRoleErr:    covMErr(),
+			wantOverwrite: true,
+			wantErr:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var overwritten bool
+			r := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockAddRole: func(_ context.Context, _, _ string, _ []string, _ string, _ bool) error {
+					overwritten = true
+					return tt.addRoleErr
+				},
+				mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+					out.(*roleStrategyRoleResponse).PermissionIDs = map[string]bool{"hudson.model.Item.Build": true}
+					return nil
+				},
+			}}}
+			s := covMSchema(ctx, r)
+			plan := tfsdk.Plan{Schema: s}
+			plan.Set(ctx, tt.plan)
+			st := tfsdk.State{Schema: s}
+			st.Set(ctx, tt.prior)
+			resp := resource.UpdateResponse{State: tfsdk.State{Schema: s}}
+			r.Update(ctx, resource.UpdateRequest{Plan: plan, State: st}, &resp)
+			if resp.Diagnostics.HasError() != tt.wantErr {
+				t.Errorf("Update diagnostics = %v, want error %v", resp.Diagnostics, tt.wantErr)
+			}
+			if overwritten != tt.wantOverwrite {
+				t.Errorf("AddRole called = %v, want %v", overwritten, tt.wantOverwrite)
+			}
+		})
+	}
 }
 
 // --- user ---
@@ -399,4 +654,78 @@ func TestCovM_Folder(t *testing.T) {
 	}}}
 	fdResp := resource.DeleteResponse{State: st}
 	frDel.Delete(ctx, resource.DeleteRequest{State: st}, &fdResp)
+}
+
+func TestRolePatternPlanModifier(t *testing.T) {
+	ctx := context.Background()
+	r := &roleResource{resourceHelper: &resourceHelper{}}
+	s := covMSchema(ctx, r)
+
+	tests := []struct {
+		name     string
+		roleType tftypes.Value
+		config   types.String
+		want     types.String
+	}{
+		{"item without pattern", tftypes.NewValue(tftypes.String, "item"), types.StringNull(), types.StringValue(".*")},
+		{"agent without pattern", tftypes.NewValue(tftypes.String, "agent"), types.StringNull(), types.StringValue(".*")},
+		{"global without pattern", tftypes.NewValue(tftypes.String, "global"), types.StringNull(), types.StringNull()},
+		{"configured pattern kept", tftypes.NewValue(tftypes.String, "item"), types.StringValue("team/.*"), types.StringValue("team/.*")},
+		{"unknown type left unknown", tftypes.NewValue(tftypes.String, tftypes.UnknownValue), types.StringNull(), types.StringUnknown()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objType := s.Type().TerraformType(ctx).(tftypes.Object)
+			vals := map[string]tftypes.Value{}
+			for k, at := range objType.AttributeTypes {
+				vals[k] = tftypes.NewValue(at, nil)
+			}
+			vals["type"] = tt.roleType
+			plan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(objType, vals)}
+
+			planValue := tt.config
+			if tt.config.IsNull() {
+				planValue = types.StringUnknown()
+			}
+			req := planmodifier.StringRequest{Plan: plan, ConfigValue: tt.config, PlanValue: planValue}
+			resp := &planmodifier.StringResponse{PlanValue: planValue}
+			rolePatternPlanModifier{}.PlanModifyString(ctx, req, resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("diagnostics: %v", resp.Diagnostics)
+			}
+			if !resp.PlanValue.Equal(tt.want) {
+				t.Errorf("plan = %v, want %v", resp.PlanValue, tt.want)
+			}
+		})
+	}
+}
+
+func TestRolePatternValidators(t *testing.T) {
+	ctx := context.Background()
+	s := covMSchema(ctx, &roleResource{resourceHelper: &resourceHelper{}})
+	patternAttr := s.Attributes["pattern"].(rschema.StringAttribute)
+
+	tests := []struct {
+		name    string
+		value   types.String
+		wantErr bool
+	}{
+		// role-strategy stores "" as ".*", so the apply would end in an
+		// inconsistent result.
+		{"empty", types.StringValue(""), true},
+		{"pattern", types.StringValue("team/.*"), false},
+		{"unset", types.StringNull(), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := validator.StringRequest{Path: path.Root("pattern"), ConfigValue: tt.value}
+			resp := &validator.StringResponse{}
+			for _, v := range patternAttr.Validators {
+				v.ValidateString(ctx, req, resp)
+			}
+			if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+				t.Errorf("error = %v, want %v: %v", got, tt.wantErr, resp.Diagnostics)
+			}
+		})
+	}
 }

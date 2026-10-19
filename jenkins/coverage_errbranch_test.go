@@ -64,16 +64,14 @@ func TestCovE_RoleErrors(t *testing.T) {
 	model := &roleResourceModel{
 		Type: types.StringValue("global"), Name: types.StringValue("r"),
 		Permissions: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("p")}),
-		Assignments: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("u")}),
+		Users:       types.SetValueMust(types.StringType, []attr.Value{types.StringValue("u")}),
+		Groups:      types.SetValueMust(types.StringType, []attr.Value{}),
+		Assignments: types.SetValueMust(types.StringType, []attr.Value{}),
 	}
-	// Update error (AddRole overwrite fails)
+	// Update error (assign fails; plan and state match, so the role is not
+	// overwritten and the AddRole error path lives in TestCovM_RoleUpdateOverwrite)
 	covEUpdateErr(ctx, t, &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-		mockAddRole: func(context.Context, string, string, []string, string, bool) error { return covEBoom() },
-	}}}, model)
-	// Update error (assign fails after AddRole ok)
-	covEUpdateErr(ctx, t, &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-		mockAddRole:    func(context.Context, string, string, []string, string, bool) error { return nil },
-		mockAssignRole: func(context.Context, string, string, string) error { return covEBoom() },
+		mockAssignRole: func(context.Context, string, string, roleEntry) error { return covEBoom() },
 	}}}, model)
 	// Delete error
 	covEDeleteErr(ctx, t, &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{

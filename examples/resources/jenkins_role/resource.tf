@@ -8,7 +8,7 @@ resource "jenkins_role" "reader" {
     "hudson.model.Hudson.Read",
     "hudson.model.Item.Read",
   ]
-  assignments = ["authenticated"]
+  groups = ["authenticated"]
 }
 
 # A developer role scoped to a team's folder, allowing builds and configuration
@@ -23,7 +23,8 @@ resource "jenkins_role" "developer" {
     "hudson.model.Item.Configure",
     "hudson.model.Item.Cancel",
   ]
-  assignments = ["alice", "bob", "team-a-group"]
+  users  = ["alice", "bob"]
+  groups = ["team-a-group"]
 }
 
 # A global administrator role.
@@ -31,5 +32,5 @@ resource "jenkins_role" "admin" {
   type        = "global"
   name        = "admin"
   permissions = ["hudson.model.Hudson.Administer"]
-  assignments = ["admin-group"]
+  groups      = ["admin-group"]
 }

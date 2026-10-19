@@ -82,7 +82,8 @@ type frameworkClient interface {
 	// plugin's REST endpoints. roleType is one of the role-strategy type strings
 	// ("globalRoles", "projectRoles", "slaveRoles").
 	AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error
-	AssignRole(ctx context.Context, roleType, name, sid string) error
+	AssignRole(ctx context.Context, roleType, name string, entry roleEntry) error
+	UnassignRole(ctx context.Context, roleType, name string, entry roleEntry) error
 	GetRole(ctx context.Context, roleType, name string, out interface{}) error
 	RemoveRole(ctx context.Context, roleType, name string) error
 
@@ -768,9 +769,10 @@ func (j *jenkinsAdapter) rolePostForm(ctx context.Context, action string, form u
 	return nil
 }
 
-// AddRole creates (or, when overwrite is true, replaces) a role. Replacing a
-// role via the plugin drops its existing SID assignments, so callers that
-// overwrite must re-assign afterwards.
+// AddRole creates (or, when overwrite is true, replaces) a role. Whether
+// replacing keeps the role's assignments depends on the plugin release
+// (927 keeps them, older ones drop them), so callers re-read the entries
+// before reconciling them.
 func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {
 	form := url.Values{}
 	form.Set("type", roleType)
@@ -783,14 +785,40 @@ func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, per
 	return j.rolePostForm(ctx, "addRole", form)
 }
 
-// AssignRole assigns a role to a sid (user or group; the plugin resolves the
-// kind automatically).
-func (j *jenkinsAdapter) AssignRole(ctx context.Context, roleType, name, sid string) error {
+// roleEntryEndpoints maps a role entry type to the role-strategy web methods
+// that assign and unassign it, and to the form parameter carrying the SID.
+// EITHER entries go through the legacy endpoints, which only match EITHER
+// entries: unassignRole does not remove a USER or GROUP entry of the same SID.
+var roleEntryEndpoints = map[string]struct{ assign, unassign, param string }{
+	roleEntryUser:   {"assignUserRole", "unassignUserRole", "user"},
+	roleEntryGroup:  {"assignGroupRole", "unassignGroupRole", "group"},
+	roleEntryEither: {"assignRole", "unassignRole", "sid"},
+}
+
+// AssignRole adds one typed entry to a role.
+func (j *jenkinsAdapter) AssignRole(ctx context.Context, roleType, name string, entry roleEntry) error {
+	return j.roleEntryPost(ctx, roleType, name, entry, true)
+}
+
+// UnassignRole removes one typed entry from a role.
+func (j *jenkinsAdapter) UnassignRole(ctx context.Context, roleType, name string, entry roleEntry) error {
+	return j.roleEntryPost(ctx, roleType, name, entry, false)
+}
+
+func (j *jenkinsAdapter) roleEntryPost(ctx context.Context, roleType, name string, entry roleEntry, assign bool) error {
+	ep, ok := roleEntryEndpoints[entry.Type]
+	if !ok {
+		return fmt.Errorf("unknown role entry type %q", entry.Type)
+	}
+	action := ep.unassign
+	if assign {
+		action = ep.assign
+	}
 	form := url.Values{}
 	form.Set("type", roleType)
 	form.Set("roleName", name)
-	form.Set("sid", sid)
-	return j.rolePostForm(ctx, "assignRole", form)
+	form.Set(ep.param, entry.Sid)
+	return j.rolePostForm(ctx, action, form)
 }
 
 // RemoveRole deletes a role (and its assignments) of the given type.
