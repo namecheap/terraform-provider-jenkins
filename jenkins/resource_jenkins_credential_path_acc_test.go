@@ -2,11 +2,20 @@ package jenkins
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"os"
 	"regexp"
+	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -60,7 +69,7 @@ func testAccCheckCredentialPathDescription(folder, domain, name, want string) re
 func testAccCheckCredentialPathDestroy(s *terraform.State) error {
 	for _, rs := range s.RootModule().Resources {
 		switch rs.Type {
-		case "jenkins_credential_secret_text", "jenkins_credential_username":
+		case "jenkins_credential_secret_text", "jenkins_credential_username", "jenkins_credential_certificate":
 		default:
 			continue
 		}
@@ -68,6 +77,120 @@ func testAccCheckCredentialPathDestroy(s *terraform.State) error {
 		if _, err := testAccCredentialPathDescription(a["folder"], a["domain"], a["name"]); err == nil {
 			return fmt.Errorf("credential %s/%s/%s still exists", a["folder"], a["domain"], a["name"])
 		}
+	}
+	return nil
+}
+
+// testAccCheckCredentialPathGone fails if any of the given folder
+// credentials, each a {domain, ID} pair, still exists in Jenkins.
+func testAccCheckCredentialPathGone(folder string, creds ...[2]string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		for _, c := range creds {
+			if _, err := testAccCredentialPathDescription(folder, c[0], c[1]); err == nil {
+				return fmt.Errorf("credential %s/%s/%s still exists", folder, c[0], c[1])
+			}
+		}
+		return nil
+	}
+}
+
+// testAccCredentialDomainPathDescription reads a credentials domain's
+// description straight from Jenkins, building and escaping the URL itself so
+// it does not depend on the domain URL code under test.
+func testAccCredentialDomainPathDescription(folder, name string) (string, error) {
+	store := "/credentials/store/system"
+	if folder != "" {
+		store = "/job/" + formatFolderName(folder) + "/credentials/store/folder"
+	}
+	endpoint := strings.TrimRight(os.Getenv("JENKINS_URL"), "/") + store + "/domain/" + url.PathEscape(name) + "/config.xml"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.SetBasicAuth(os.Getenv("JENKINS_USERNAME"), os.Getenv("JENKINS_PASSWORD"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s: status %d", endpoint, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var dom credentialDomainXML
+	if err := xml.Unmarshal(stripXMLDeclaration(body), &dom); err != nil {
+		return "", err
+	}
+	return dom.Description, nil
+}
+
+// testAccCheckCredentialDomainPathDescription fails unless the domain exists
+// in Jenkins with the given description.
+func testAccCheckCredentialDomainPathDescription(folder, name, want string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		got, err := testAccCredentialDomainPathDescription(folder, name)
+		if err != nil {
+			return fmt.Errorf("reading domain %s/%s: %w", folder, name, err)
+		}
+		if got != want {
+			return fmt.Errorf("domain %s/%s has description %q, want %q", folder, name, got, want)
+		}
+		return nil
+	}
+}
+
+// testAccPreValidatorProviders serves the provider under test with the
+// plan-time name, domain and folder validators removed from every credential
+// resource. It stands in for a release from before issue #250: a step run
+// with it writes state that the current provider no longer accepts in config,
+// as an upgraded workspace can hold. Everything else, including the runtime
+// path guards, is the real code.
+func testAccPreValidatorProviders() map[string]func() (tfprotov6.ProviderServer, error) {
+	return map[string]func() (tfprotov6.ProviderServer, error){
+		"jenkins": providerserver.NewProtocol6WithError(testAccPreValidatorProvider{&JenkinsProvider{}}),
+	}
+}
+
+type testAccPreValidatorProvider struct{ *JenkinsProvider }
+
+func (p testAccPreValidatorProvider) Resources(ctx context.Context) []func() fwresource.Resource {
+	var out []func() fwresource.Resource
+	for _, newResource := range p.JenkinsProvider.Resources(ctx) {
+		var meta fwresource.MetadataResponse
+		newResource().Metadata(ctx, fwresource.MetadataRequest{ProviderTypeName: "jenkins"}, &meta)
+		if !strings.HasPrefix(meta.TypeName, "jenkins_credential_") || meta.TypeName == "jenkins_credential_domain" {
+			out = append(out, newResource)
+			continue
+		}
+		out = append(out, func() fwresource.Resource { return testAccPreValidatorResource{newResource()} })
+	}
+	return out
+}
+
+// testAccPreValidatorResource is a credential resource without the plan-time
+// checks on its name, domain and folder.
+type testAccPreValidatorResource struct{ fwresource.Resource }
+
+func (r testAccPreValidatorResource) Schema(ctx context.Context, req fwresource.SchemaRequest, resp *fwresource.SchemaResponse) {
+	r.Resource.Schema(ctx, req, resp)
+	for _, attr := range []string{"name", "domain", "folder"} {
+		if a, ok := resp.Schema.Attributes[attr].(rschema.StringAttribute); ok {
+			a.Validators = nil
+			resp.Schema.Attributes[attr] = a
+		}
+	}
+}
+
+func (r testAccPreValidatorResource) Configure(ctx context.Context, req fwresource.ConfigureRequest, resp *fwresource.ConfigureResponse) {
+	r.Resource.(fwresource.ResourceWithConfigure).Configure(ctx, req, resp)
+}
+
+func (r testAccPreValidatorResource) ConfigValidators(ctx context.Context) []fwresource.ConfigValidator {
+	if v, ok := r.Resource.(fwresource.ResourceWithConfigValidators); ok {
+		return v.ConfigValidators(ctx)
 	}
 	return nil
 }
@@ -335,6 +458,22 @@ resource jenkins_credential_domain dom {
 				ExpectError:   regexp.MustCompile(`does\s+not\s+name\s+a\s+folder`),
 			},
 			{
+				// A folder with a ".." segment can still resolve to a real folder:
+				// Jetty turns /job/<folder>/job/.. and /job/../job/<folder> into
+				// /job/<folder>. Unchecked, both imports would read the credential
+				// above into state whose folder is not the one it came from.
+				ResourceName:  "jenkins_credential_secret_text.cred",
+				ImportState:   true,
+				ImportStateId: prefix + "/../_/" + prefix + "-cred",
+				ExpectError:   regexp.MustCompile(`has\s+an\s+invalid\s+segment`),
+			},
+			{
+				ResourceName:  "jenkins_credential_secret_text.cred",
+				ImportState:   true,
+				ImportStateId: "../" + prefix + "/_/" + prefix + "-cred",
+				ExpectError:   regexp.MustCompile(`has\s+an\s+invalid\s+segment`),
+			},
+			{
 				ResourceName:  "jenkins_credential_secret_text.cred",
 				ImportState:   true,
 				ImportStateId: prefix + "/../" + prefix + "-cred",
@@ -412,5 +551,295 @@ resource jenkins_credential_secret_text cred {
 				ImportStateVerifyIgnore: []string{"secret"},
 			},
 		},
+	})
+}
+
+// TestAccJenkinsCredentialPath_preValidatorState: state written before the
+// plan-time checks existed can hold a domain or ID that climbs out of the
+// folder's store. The current provider refuses such a value in config, but
+// refresh and Delete still take it from state, so the runtime escaping alone
+// must keep Read, Update and Delete on the folder credential, on the shared
+// CRUD (secret text) and the hand-written certificate resource. Jenkins
+// accepts "/" in domain names and IDs, so the test puts folder credentials at
+// exactly the escaped paths: each op succeeds there, where unescaped it would
+// reach the system credential the value climbs to (and Delete would remove it).
+func TestAccJenkinsCredentialPath_preValidatorState(t *testing.T) {
+	prefix := testAccCredentialPathPrefix()
+	// climbingID climbs from .../domain/_/credential/ in the folder store to
+	// the system store's victim.
+	climbingID := "../../../../../../../../credentials/store/system/domain/_/credential/" + prefix + "-victim"
+	base := fmt.Sprintf(`
+resource jenkins_folder team {
+  name = "%[1]s"
+}
+
+resource jenkins_credential_secret_text victim {
+  name        = "%[1]s-victim"
+  description = "victim"
+  secret      = "original"
+}
+
+resource jenkins_credential_certificate victim_cert {
+  name        = "%[1]s-victim-cert"
+  description = "victim"
+  keystore    = %[2]q
+  password    = "changeit"
+}
+`, prefix, testCertificateKeystoreB64)
+	tenants := func(description string) string {
+		return base + fmt.Sprintf(`
+resource jenkins_credential_secret_text tenant_domain {
+  folder      = jenkins_folder.team.name
+  domain      = %[2]q
+  name        = "%[1]s-victim"
+  description = %[4]q
+  secret      = "tenant"
+}
+
+resource jenkins_credential_secret_text tenant_id {
+  folder      = jenkins_folder.team.name
+  name        = %[3]q
+  description = %[4]q
+  secret      = "tenant"
+}
+
+resource jenkins_credential_certificate tenant_cert {
+  folder      = jenkins_folder.team.name
+  domain      = %[2]q
+  name        = "%[1]s-victim-cert"
+  description = %[4]q
+  keystore    = %[5]q
+  password    = "changeit"
+}
+`, prefix, testAccClimbingDomain, climbingID, description, testCertificateKeystoreB64)
+	}
+	victimsUnchanged := resource.ComposeTestCheckFunc(
+		testAccCheckCredentialPathDescription("", defaultCredentialDomain, prefix+"-victim", "victim"),
+		testAccCheckCredentialPathDescription("", defaultCredentialDomain, prefix+"-victim-cert", "victim"),
+	)
+	tenantCreds := [][2]string{
+		{testAccClimbingDomain, prefix + "-victim"},
+		{defaultCredentialDomain, climbingID},
+		{testAccClimbingDomain, prefix + "-victim-cert"},
+	}
+	tenantsHave := func(description string) resource.TestCheckFunc {
+		var checks []resource.TestCheckFunc
+		for _, c := range tenantCreds {
+			checks = append(checks, testAccCheckCredentialPathDescription(prefix, c[0], c[1], description))
+		}
+		return resource.ComposeTestCheckFunc(checks...)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		CheckDestroy: resource.ComposeTestCheckFunc(testAccCheckCredentialPathDestroy, testAccCheckJenkinsFolderDestroy),
+		Steps: []resource.TestStep{
+			{
+				ProtoV6ProviderFactories: testAccProviders,
+				Config:                   base,
+				Check:                    victimsUnchanged,
+			},
+			{
+				// An older provider writes the climbing values to state. The
+				// domain lives in the folder's store and goes with the folder.
+				PreConfig: func() {
+					if err := testAccClient.CreateCredentialDomain(context.Background(), prefix, testAccClimbingDomain, ""); err != nil {
+						t.Errorf("creating domain %q in %s: %v", testAccClimbingDomain, prefix, err)
+					}
+				},
+				ProtoV6ProviderFactories: testAccPreValidatorProviders(),
+				Config:                   tenants("tenant"),
+				Check:                    resource.ComposeTestCheckFunc(victimsUnchanged, tenantsHave("tenant")),
+			},
+			{
+				// Update with the climbing values in plan and state.
+				ProtoV6ProviderFactories: testAccPreValidatorProviders(),
+				Config:                   tenants("tenant v2"),
+				Check:                    resource.ComposeTestCheckFunc(victimsUnchanged, tenantsHave("tenant v2")),
+			},
+			{
+				// The current provider refuses the same update at plan.
+				ProtoV6ProviderFactories: testAccProviders,
+				Config:                   tenants("tenant v3"),
+				ExpectError:              regexp.MustCompile(`must\s+not\s+include\s+path\s+characters`),
+			},
+			{
+				// The tenants leave the config: refresh and Delete take the
+				// climbing values from state.
+				PreConfig: func() {
+					if err := resource.ComposeTestCheckFunc(victimsUnchanged, tenantsHave("tenant v2"))(nil); err != nil {
+						t.Errorf("after the rejected update: %v", err)
+					}
+				},
+				ProtoV6ProviderFactories: testAccProviders,
+				Config:                   base,
+				Check:                    resource.ComposeTestCheckFunc(victimsUnchanged, testAccCheckCredentialPathGone(prefix, tenantCreds...)),
+			},
+		},
+	})
+}
+
+// TestAccJenkinsCredentialPath_specialCharacterDomainUpdate: Update and
+// Delete of a domain whose name contains "#" and "?", and of a certificate in
+// it, must act on that one domain. Unescaped, the "#" cuts each URL short to
+// the domain named by the text before it, which the test creates as a decoy.
+func TestAccJenkinsCredentialPath_specialCharacterDomainUpdate(t *testing.T) {
+	prefix := testAccCredentialPathPrefix()
+	domain := prefix + " C# builds?"
+	decoy := prefix + " C"
+	decoyConfig := fmt.Sprintf(`
+resource jenkins_folder team {
+  name = "%[1]s"
+}
+
+resource jenkins_credential_domain decoy {
+  folder      = jenkins_folder.team.name
+  name        = %[2]q
+  description = "decoy"
+}
+`, prefix, decoy)
+	config := func(description string) string {
+		return decoyConfig + fmt.Sprintf(`
+resource jenkins_credential_domain dom {
+  folder      = jenkins_folder.team.name
+  name        = %[2]q
+  description = %[3]q
+}
+
+resource jenkins_credential_certificate cert {
+  folder      = jenkins_folder.team.name
+  domain      = jenkins_credential_domain.dom.name
+  name        = "%[1]s-cert"
+  description = %[3]q
+  keystore    = %[4]q
+  password    = "changeit"
+}
+`, prefix, domain, description, testCertificateKeystoreB64)
+	}
+	inDomain := func(description string) resource.TestCheckFunc {
+		return resource.ComposeTestCheckFunc(
+			testAccCheckCredentialDomainPathDescription(prefix, domain, description),
+			testAccCheckCredentialDomainPathDescription(prefix, decoy, "decoy"),
+			testAccCheckCredentialPathDescription(prefix, domain, prefix+"-cert", description),
+		)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy: resource.ComposeTestCheckFunc(
+			testAccCheckCredentialPathDestroy,
+			testAccCheckJenkinsCredentialDomainDestroy,
+			testAccCheckJenkinsFolderDestroy,
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: config("one"),
+				Check:  inDomain("one"),
+			},
+			{
+				Config: config("two"),
+				Check: resource.ComposeTestCheckFunc(
+					inDomain("two"),
+					resource.TestCheckResourceAttr("jenkins_credential_domain.dom", "description", "two"),
+					resource.TestCheckResourceAttr("jenkins_credential_certificate.cert", "description", "two"),
+				),
+			},
+			{
+				ResourceName:            "jenkins_credential_certificate.cert",
+				ImportState:             true,
+				ImportStateId:           prefix + "/" + domain + "/" + prefix + "-cert",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"keystore", "password"},
+			},
+			{
+				ResourceName:      "jenkins_credential_domain.dom",
+				ImportState:       true,
+				ImportStateId:     prefix + "/" + domain,
+				ImportStateVerify: true,
+			},
+			{
+				Config: decoyConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCredentialDomainPathDescription(prefix, decoy, "decoy"),
+					testAccCheckCredentialPathGone(prefix, [2]string{domain, prefix + "-cert"}),
+					func(*terraform.State) error {
+						if _, err := testAccCredentialDomainPathDescription(prefix, domain); err == nil {
+							return fmt.Errorf("domain %s/%s still exists", prefix, domain)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestAccJenkinsCredentialPath_domainImportFolder: a jenkins_credential_domain
+// import ID skips plan validation, so its folder reaches the domain URLs as it
+// is. "job" and "/job" format to nothing, which for a credential selects the
+// system store: imported with them, a domain must not be read from the system
+// store, or destroying it would delete the system domain of that name. A "?"
+// or "#" in the folder cuts the URL short and must not import anything either.
+func TestAccJenkinsCredentialPath_domainImportFolder(t *testing.T) {
+	prefix := testAccCredentialPathPrefix()
+	config := fmt.Sprintf(`
+resource jenkins_folder team {
+  name = "%[1]s"
+}
+
+resource jenkins_credential_domain system {
+  name        = "%[1]s-dom"
+  description = "system"
+}
+
+resource jenkins_credential_domain dom {
+  folder      = jenkins_folder.team.name
+  name        = "%[1]s-dom"
+  description = "folder"
+}
+`, prefix)
+	notImported := regexp.MustCompile(`Cannot\s+import\s+non-existent\s+remote\s+object|Invalid\s+Folder|Unable\s+to\s+Refresh\s+Resource`)
+	domainsUnchanged := resource.ComposeTestCheckFunc(
+		testAccCheckCredentialDomainPathDescription("", prefix+"-dom", "system"),
+		testAccCheckCredentialDomainPathDescription(prefix, prefix+"-dom", "folder"),
+	)
+
+	steps := []resource.TestStep{
+		{
+			Config: config,
+			Check:  domainsUnchanged,
+		},
+		{
+			// Control: the folder domain imports by its plain ID.
+			ResourceName:      "jenkins_credential_domain.dom",
+			ImportState:       true,
+			ImportStateId:     prefix + "/" + prefix + "-dom",
+			ImportStateVerify: true,
+		},
+	}
+	for _, folder := range []string{"job", "/job", "job/job", prefix + "?", prefix + "#"} {
+		steps = append(steps, resource.TestStep{
+			ResourceName:  "jenkins_credential_domain.dom",
+			ImportState:   true,
+			ImportStateId: folder + "/" + prefix + "-dom",
+			ExpectError:   notImported,
+		})
+	}
+	steps = append(steps, resource.TestStep{
+		PreConfig: func() {
+			if err := domainsUnchanged(nil); err != nil {
+				t.Errorf("after the rejected imports: %v", err)
+			}
+		},
+		Config:   config,
+		PlanOnly: true,
+	})
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             resource.ComposeTestCheckFunc(testAccCheckJenkinsCredentialDomainDestroy, testAccCheckJenkinsFolderDestroy),
+		Steps:                    steps,
 	})
 }
