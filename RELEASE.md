@@ -77,10 +77,52 @@ One-time setup:
    Read & write** — these App-installation scopes (not the workflow's
    `permissions:` block, which only governs the unused `GITHUB_TOKEN`) gate
    release-please's branch push, Release PR, tag, and publish operations.
-2. Add the variable `APP_CLIENT_ID` (the App's client ID) and the secret
-   `APP_PRIVATE_KEY` (the App's private key) — either at repository level
-   under **Settings → Secrets and variables → Actions**, or org-level with
-   visibility extended to this repository.
+2. Add the variable `APP_CLIENT_ID` (the App's client ID) at repository or
+   organisation level. It is not secret.
+3. Put the App's private key, `APP_PRIVATE_KEY`, in the `release-please`
+   environment, which only `main` can use. The App creates the `vX.Y.Z`
+   tags (and is the one actor allowed past the `v*` tag ruleset planned in
+   #251), so a workflow on another branch that could read the key could mint
+   an App token and push a tag itself. `versioning.yml` runs its job in this
+   environment.
+
+   1. Settings → Environments → **New environment** `release-please`, with
+      no required reviewers (it runs after every CI run on `main`).
+      **Deployment branches and tags** → **Selected branches and tags** →
+      add a rule of type **Branch** with the pattern `main`.
+   2. **Environment secrets**: add `APP_PRIVATE_KEY`.
+   3. Once a `versioning.yml` run on `main` has passed, remove this
+      repository from the organisation secret `APP_PRIVATE_KEY`
+      (organisation Settings → Secrets and variables → Actions → Repository
+      access; if it is shared with all repositories, switch it to
+      **Selected repositories** and keep the others). The environment secret
+      only shadows the organisation copy inside the environment's jobs; any
+      other workflow here can read the organisation copy until this is done.
+
+   Steps 1–2 through the API:
+
+   ```bash
+   gh api -X PUT repos/namecheap/terraform-provider-jenkins/environments/release-please --input - <<'EOF'
+   {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+   EOF
+   gh api -X POST repos/namecheap/terraform-provider-jenkins/environments/release-please/deployment-branch-policies \
+     -f name=main -f type=branch
+   gh secret set APP_PRIVATE_KEY --env release-please --repo namecheap/terraform-provider-jenkins < app-private-key.pem
+   ```
+
+   To check it: `gh workflow run versioning.yml --ref main` passes the
+   "Generate GitHub App Token" step. The same command with `--ref` set to
+   any other branch fails before any step runs, with `Branch "<name>" is not
+   allowed to deploy to release-please due to environment protection rules`.
+   `gh api repos/namecheap/terraform-provider-jenkins/actions/organization-secrets --jq '.secrets[].name'`
+   no longer lists `APP_PRIVATE_KEY`.
+
+   This closes the path from this repository only. Any repository that can
+   read the App's key can mint a token for every repository the App is
+   installed on, this one included. Workflows in `go-namecheap-sdk`,
+   `mcp-server-namecheap` and `terraform-provider-namecheap` read
+   `APP_PRIVATE_KEY` today. Closing that path needs a release App installed
+   only on this repository, with its key only in `release-please`.
 
 ---
 

@@ -28,6 +28,13 @@ concurrency:
 jobs:
   release-please:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # APP_PRIVATE_KEY is kept in this environment, which only main may use. The
+    # App creates the release tags, so a workflow on another branch that could
+    # read its key could mint a token and push a tag itself. Both triggers run
+    # on main (workflow_run always uses the default branch); GitHub refuses a
+    # dispatch from any other branch before the job starts. See "Release
+    # automation credentials" in RELEASE.md.
+    environment: release-please
     runs-on: ubuntu-latest
     steps:
       # A dedicated GitHub App token instead of GITHUB_TOKEN: events authored
