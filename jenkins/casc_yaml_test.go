@@ -308,6 +308,93 @@ func TestCASCDriftView(t *testing.T) {
 			export:   "s:\n  a: 1\n",
 			want:     marker + "\n",
 		},
+		{
+			name:           "declared scalar replaced by a sequence is hidden",
+			declared:       "users: none\n",
+			export:         "s:\n  users:\n    - name: admin\n      password: resolved-pw\n",
+			want:           "users: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw", "admin"},
+		},
+		{
+			name:           "declared sequence replaced by a mapping is hidden",
+			declared:       "list: [a]\n",
+			export:         "s:\n  list:\n    password: resolved-pw\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw"},
+		},
+		{
+			name:     "declared sequence replaced by a scalar is hidden",
+			declared: "list: [a]\n",
+			export:   "s:\n  list: b\n",
+			want:     "list: " + marker + "\n",
+		},
+		{
+			name:           "extra sequence element is hidden",
+			declared:       "list: [a]\n",
+			export:         "s:\n  list:\n    - a\n    - [b, resolved-pw]\n",
+			want:           "list:\n  - a\n  - " + marker + "\n",
+			wantNotContain: []string{"resolved-pw"},
+		},
+		{
+			// yaml.v3 decodes a mapping with a non-string key as
+			// map[interface{}]interface{}, which takes the scalar path.
+			name:           "drifted mapping with non-string keys is hidden",
+			declared:       "ports:\n  8080: http\n",
+			export:         "s:\n  ports:\n    8080: https\n    9090: resolved-pw\n",
+			want:           "ports: " + marker + "\n",
+			wantNotContain: []string{"resolved-pw", "9090"},
+		},
+		{
+			name:           "placeholder under a non-string key is never copied",
+			declared:       "ports:\n  8080: ${PORT_TOKEN}\n",
+			export:         "s:\n  ports: resolved-port-token\n",
+			want:           "ports: " + marker + "\n",
+			wantNotContain: []string{"resolved-port-token"},
+		},
+		{
+			name:           "drifted sequence holding a placeholder under a non-string key is hidden whole",
+			declared:       "list:\n  - 8080: ${PORT_TOKEN}\n  - b\n",
+			export:         "s:\n  list: [resolved-port-token, c]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-port-token"},
+		},
+		{
+			name:           "embedded placeholder with a default is never copied",
+			declared:       "url: jdbc:postgresql://db/app?password=${DB_PASS:-changeme}\n",
+			export:         "s:\n  url: jdbc:postgresql://db/app?password=resolved-db-pass\n",
+			want:           "url: " + marker + "\n",
+			wantNotContain: []string{"resolved-db-pass"},
+		},
+		{
+			// ${A:-${B}} is not a whole placeholder to isSecretPlaceholder, so
+			// it always drifts; the resolved value must still stay hidden.
+			name:           "nested placeholder default is never copied",
+			declared:       "token: ${A:-${B}}\n",
+			export:         "s:\n  token: resolved-b\n",
+			want:           "token: " + marker + "\n",
+			wantNotContain: []string{"resolved-b"},
+		},
+		{
+			name:           "multi-line string with an embedded placeholder is never copied",
+			declared:       "script: |\n  echo start\n  curl -u admin:${API_TOKEN} http://x/\n",
+			export:         "s:\n  script: \"echo start\\ncurl -u admin:resolved-api-token http://x/\\n\"\n",
+			want:           "script: " + marker + "\n",
+			wantNotContain: []string{"resolved-api-token", "echo start"},
+		},
+		{
+			name:           "embedded placeholder deep in a mapping is never copied",
+			declared:       "a:\n  b:\n    c: pre-${S}\n  d: 1\n",
+			export:         "s:\n  a:\n    b:\n      c: pre-resolved-s\n      x: unmanaged\n    d: 1\n",
+			want:           "a:\n  b:\n    c: " + marker + "\n  d: 1\n",
+			wantNotContain: []string{"resolved-s", "unmanaged"},
+		},
+		{
+			name:           "padded placeholder kept while a sibling drifts",
+			declared:       "token: \"  ${TOKEN}  \"\nurl: http://a/\n",
+			export:         "s:\n  token: resolved-token\n  url: http://b/\n",
+			want:           "token: \"  ${TOKEN}  \"\nurl: http://b/\n",
+			wantNotContain: []string{"resolved-token"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

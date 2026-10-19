@@ -195,6 +195,108 @@ mailer:
 	}
 }
 
+// TestConfigurationAsCodeReadDriftViewStableAcrossRefreshes feeds the state a
+// drifted Read stored back into Read, as the next plan does. The second
+// refresh compares the view, not the configuration, against the export: a
+// value hidden by the first refresh must stay hidden, and the view must not
+// change.
+func TestConfigurationAsCodeReadDriftViewStableAcrossRefreshes(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name           string
+		declared       string
+		export         string
+		mustNotContain []string
+	}{
+		{
+			name:     "embedded placeholder",
+			declared: "location:\n  adminAddress: \"ops <${LAB_SECRET}@example.invalid>\"\n",
+			export: `unclassified:
+  location:
+    adminAddress: "ops <` + cascTestResolvedSecret + `@example.invalid>"
+    url: "http://jenkins:8080/"
+`,
+			mustNotContain: []string{cascTestResolvedSecret, "http://jenkins:8080/"},
+		},
+		{
+			name: "multi-line string with an embedded placeholder",
+			declared: `scriptApproval:
+  script: |
+    echo start
+    curl -u admin:${LAB_SECRET} http://x/
+`,
+			export: `unclassified:
+  scriptApproval:
+    script: "echo start\ncurl -u admin:` + cascTestResolvedSecret + ` http://x/\n"
+`,
+			mustNotContain: []string{cascTestResolvedSecret, "echo start"},
+		},
+		{
+			name: "reordered sequence holding a placeholder",
+			declared: `items:
+  - name: a
+    token: "${A_TOKEN}"
+  - name: b
+    token: not-secret
+`,
+			export: `unclassified:
+  items:
+    - name: b
+      token: not-secret
+    - name: a
+      token: resolved-a-token
+`,
+			mustNotContain: []string{"resolved-a-token"},
+		},
+		{
+			name:     "scalar replaced by a mapping holding ciphertext",
+			declared: "mailer:\n  authentication: none\n",
+			export: `unclassified:
+  mailer:
+    authentication:
+      username: mailer
+      password: "` + cascTestCiphertext + `"
+`,
+			mustNotContain: []string{cascTestCiphertext, "username"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, s := cascTestResource(tc.export)
+			st := tfsdk.State{Schema: s}
+			st.Set(ctx, configurationAsCodeResourceModel{
+				ID:      types.StringValue("unclassified"),
+				Section: types.StringValue("unclassified"),
+				YAML:    types.StringValue(tc.declared),
+			})
+
+			var views []string
+			for refresh := 1; refresh <= 2; refresh++ {
+				resp := resource.ReadResponse{State: st}
+				r.Read(ctx, resource.ReadRequest{State: st}, &resp)
+				if resp.Diagnostics.HasError() {
+					t.Fatalf("refresh %d: unexpected diags: %v", refresh, resp.Diagnostics)
+				}
+				if resp.State.Raw.IsNull() {
+					t.Fatalf("refresh %d removed the resource", refresh)
+				}
+				assertCASCStateOmits(t, resp.State, tc.mustNotContain...)
+				views = append(views, cascStateYAML(t, resp.State))
+				st = resp.State
+			}
+
+			if reflect.DeepEqual(mustParseYAML(t, views[0]), mustParseYAML(t, tc.declared)) {
+				t.Errorf("drift must leave yaml different from the declared document; got:\n%s", views[0])
+			}
+			if !reflect.DeepEqual(mustParseYAML(t, views[1]), mustParseYAML(t, views[0])) {
+				t.Errorf("second refresh changed the view:\n first: %s\nsecond: %s", views[0], views[1])
+			}
+		})
+	}
+}
+
 func TestConfigurationAsCodeImportStateOmitsExport(t *testing.T) {
 	ctx := context.Background()
 	r, s := cascTestResource(cascTestExport("http://jenkins:8080/"))
