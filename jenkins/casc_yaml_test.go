@@ -395,6 +395,51 @@ func TestCASCDriftView(t *testing.T) {
 			want:           "token: \"  ${TOKEN}  \"\nurl: http://b/\n",
 			wantNotContain: []string{"resolved-token"},
 		},
+		{
+			// JCasC exports a Secret-typed field as ciphertext, so a literal
+			// declared for it never matches and is copied as a drifted plain
+			// scalar. The literal is already in the configuration and state;
+			// ${...} keeps both out.
+			name:     "literal for a Secret field takes the exported ciphertext",
+			declared: "password: dummy-literal-password\nurl: http://a/\n",
+			export:   "s:\n  password: \"" + cascTestCiphertext + "\"\n  url: http://a/\n",
+			want:     "password: \"" + cascTestCiphertext + "\"\nurl: http://a/\n",
+		},
+		{
+			name:           "placeholder for a Secret field never takes the exported ciphertext",
+			declared:       "password: ${PASSWORD}\nurl: http://a/\n",
+			export:         "s:\n  password: \"" + cascTestCiphertext + "\"\n  url: http://b/\n",
+			want:           "password: ${PASSWORD}\nurl: http://b/\n",
+			wantNotContain: []string{cascTestCiphertext},
+		},
+		{
+			// Extra scalar elements are the controller's value for a list
+			// declared without ${...}, copied like a drifted plain scalar
+			// whatever they hold: ciphertext, or a value another JCasC
+			// source resolved.
+			name:     "extra scalar elements of a plain list are copied verbatim",
+			declared: "list: [a]\n",
+			export:   "s:\n  list: [a, \"" + cascTestCiphertext + "\", resolved-elsewhere]\n",
+			want:     "list: [a, \"" + cascTestCiphertext + "\", resolved-elsewhere]\n",
+		},
+		{
+			name:           "extra scalar elements of a list holding a placeholder are hidden",
+			declared:       "list: [\"${A}\"]\n",
+			export:         "s:\n  list: [resolved-a, \"" + cascTestCiphertext + "\", resolved-elsewhere]\n",
+			want:           "list: " + marker + "\n",
+			wantNotContain: []string{"resolved-a", cascTestCiphertext, "resolved-elsewhere"},
+		},
+		{
+			// Values are hidden by where this document declares a ${...},
+			// not by content: a key declared as a plain value takes the
+			// controller's value even when another resource or JCasC file
+			// resolved it from a ${...}.
+			name:           "plain key resolved by another source is copied",
+			declared:       "token: ${TOKEN}\nadminAddress: ops@example.invalid\n",
+			export:         "s:\n  token: resolved-token\n  adminAddress: resolved-elsewhere\n",
+			want:           "token: ${TOKEN}\nadminAddress: resolved-elsewhere\n",
+			wantNotContain: []string{"resolved-token"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
