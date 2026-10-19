@@ -288,6 +288,19 @@ func TestConfigurationAsCodeReadDriftViewStableAcrossRefreshes(t *testing.T) {
 `,
 			mustNotContain: []string{cascTestCiphertext, "username"},
 		},
+		{
+			// Elements beyond the declared ones are unmanaged and may hold
+			// a value another JCasC source resolved, or ciphertext.
+			name:     "grown scalar list",
+			declared: "items:\n  - plain\n",
+			export: `unclassified:
+  items:
+    - plain
+    - "` + cascTestResolvedSecret + `"
+    - "` + cascTestCiphertext + `"
+`,
+			mustNotContain: []string{cascTestResolvedSecret, cascTestCiphertext},
+		},
 	}
 
 	for _, tc := range cases {

@@ -273,7 +273,7 @@ func TestCASCDriftView(t *testing.T) {
 			name:     "scalar sequence grows",
 			declared: "list: [a]\n",
 			export:   "s:\n  list: [a, b]\n",
-			want:     "list: [a, b]\n",
+			want:     "list: [a, " + marker + "]\n",
 		},
 		{
 			name:     "scalar sequence shrinks",
@@ -413,14 +413,14 @@ func TestCASCDriftView(t *testing.T) {
 			wantNotContain: []string{cascTestCiphertext},
 		},
 		{
-			// Extra scalar elements are the controller's value for a list
-			// declared without ${...}, copied like a drifted plain scalar
-			// whatever they hold: ciphertext, or a value another JCasC
-			// source resolved.
-			name:     "extra scalar elements of a plain list are copied verbatim",
-			declared: "list: [a]\n",
-			export:   "s:\n  list: [a, \"" + cascTestCiphertext + "\", resolved-elsewhere]\n",
-			want:     "list: [a, \"" + cascTestCiphertext + "\", resolved-elsewhere]\n",
+			// An element beyond the declared ones is not managed by this
+			// document, so it may hold ciphertext or a value another JCasC
+			// source resolved; it is hidden like any other unmanaged value.
+			name:           "extra scalar elements of a plain list are hidden",
+			declared:       "list: [a]\n",
+			export:         "s:\n  list: [a, \"" + cascTestCiphertext + "\", " + cascTestResolvedSecret + "]\n",
+			want:           "list: [a, " + marker + ", " + marker + "]\n",
+			wantNotContain: []string{cascTestCiphertext, cascTestResolvedSecret},
 		},
 		{
 			name:           "extra scalar elements of a list holding a placeholder are hidden",
