@@ -90,6 +90,32 @@ newly added job can't silently escape its watch. It exists because:
   failing "CI OK" is the only thing that blocks such a PR from merging
   untested.
 
+## Jenkins version under test
+
+The acceptance and integration jobs, and local `make testacc`, run against the
+Jenkins image built from `integration/Dockerfile`. It is pinned to the **latest
+Jenkins LTS release**, the line listed in the
+[LTS changelog](https://www.jenkins.io/changelog-stable/), not to a weekly
+release:
+
+- Most controllers this provider manages run LTS, so CI tests what users run.
+  A weekly release can carry core changes that no LTS has yet, so a suite that
+  passes only on a weekly can hide a bug on the LTS line.
+- The `FROM` line names an exact LTS version in its `-lts-` tag form, for
+  example `jenkins/jenkins:2.580.1-lts-jdk21`. An exact version keeps runs
+  reproducible, and the CI image cache, keyed on the Dockerfile's hash,
+  refreshes when it changes. A floating tag such as `lts-jdk21` would leave the
+  cached image stale.
+- Dependabot's monthly `docker` update for `/integration` only offers tags with
+  the same suffix, so a `-lts-jdk21` tag moves to the next LTS (`2.580.2`,
+  `2.593.1`, ...) and never to a weekly `2.5xx-jdk21`. Weekly releases share the
+  plain `-jdk21` and `-alpine-jdk21` suffixes, and Jenkins publishes no Alpine
+  `-lts-` tag, so the image stays on the Debian-based `-lts-jdk21` form.
+- To bump by hand, take the newest version from the LTS changelog, check that
+  `jenkins/jenkins:<version>-lts-jdk21` exists on Docker Hub, update the `FROM`
+  line, and run `make testacc` and the integration test (`terraform test` in
+  `integration/`) before opening the PR.
+
 ## How docs reach the Terraform Registry
 
 `docs/` is **not** shipped inside the GoReleaser artifacts. When GoReleaser
@@ -132,6 +158,8 @@ repository's Actions consumption accordingly.
   drift.
 - **New "expensive" jobs should take the gate**: `needs: changes` +
   `if: needs.changes.outputs.code == 'true'`.
+- **Keep the test Jenkins on the LTS line**, in the `-lts-` tag form (see
+  [Jenkins version under test](#jenkins-version-under-test)).
 - **The gate's ignore list must stay a subset of "files that can't affect
   the binary, tests, or published docs"** — when in doubt, let the job run.
   In particular `docs/**` must never be added to it: registry-published

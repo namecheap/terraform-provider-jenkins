@@ -25,7 +25,9 @@ pushing — CI failures on formatting, lint or stale docs are avoidable.
 
 `make testacc` builds and starts the Jenkins container from `integration/`,
 waits for its healthcheck, runs the suite, and tears the container down. The
-full suite takes roughly 3–4 minutes.
+full suite takes roughly 3–4 minutes. The container runs the latest Jenkins
+LTS, as CI does; keep it on the LTS line (see "Jenkins version under test" in
+`CI.md`).
 
 To iterate without losing the container between runs, start it once and drive
 `go test` yourself:
