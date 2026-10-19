@@ -163,6 +163,14 @@ func TestCredentialPathEveryResource(t *testing.T) {
 		{name: "folder job", folder: "job", domain: "_", id: "x", errSummary: "Invalid Folder"},
 		{name: "folder dot-dot", folder: "team-a/..", domain: "_", id: "x", errSummary: "Invalid Folder"},
 	}
+	// These types have an optional secret the model leaves null, so Update
+	// first reads the stored credential to check Jenkins holds none. That read
+	// must stay in the same store as the update.
+	readsStoredOnUpdate := map[string]bool{
+		"jenkins_credential_username":      true,
+		"jenkins_credential_ssh":           true,
+		"jenkins_credential_vault_approle": true,
+	}
 
 	for typeName, newResource := range pathTestCredentialResources(t) {
 		for _, op := range []string{"create", "read", "update", "delete"} {
@@ -170,6 +178,9 @@ func TestCredentialPathEveryResource(t *testing.T) {
 				t.Run(typeName+"/"+op+"/"+tc.name, func(t *testing.T) {
 					client, requests := credentialPathRecorder(t, func(r *http.Request) (int, string) {
 						if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config.xml/") {
+							if op == "update" {
+								return http.StatusOK, "<credential><id>x</id></credential>"
+							}
 							return http.StatusNotFound, ""
 						}
 						return http.StatusOK, `{}`
@@ -196,9 +207,12 @@ func TestCredentialPathEveryResource(t *testing.T) {
 						t.Fatalf("%s: %v", op, diags)
 					}
 					want := pathTestOpRequest(op, tc.escDomain, tc.escID)
-					if op == "create" {
+					switch {
+					case op == "create":
 						assertRequests(t, got, folderLookup, want)
-					} else {
+					case op == "update" && readsStoredOnUpdate[typeName]:
+						assertRequests(t, got, pathTestOpRequest("read", tc.escDomain, tc.escID), want)
+					default:
 						assertRequests(t, got, want)
 					}
 				})
