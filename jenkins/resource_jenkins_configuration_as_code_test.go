@@ -205,6 +205,111 @@ resource jenkins_configuration_as_code test {
 	})
 }
 
+// TestAccJenkinsConfigurationAsCode_sequenceSecretNotInState covers a drifted
+// sequence carrying a ${...} expression (#249). The controller keeps global
+// environment variables sorted by key, so a list declared out of order comes
+// back reordered on every refresh; matched by index, the resolved value would
+// land under the other entry's declared plain value. The refreshed yaml must
+// hide the list whole on the first refresh, on a refresh of the stored view,
+// and after a re-apply, while the controller still resolves the expression.
+func TestAccJenkinsConfigurationAsCode_sequenceSecretNotInState(t *testing.T) {
+	prefix := "tfacc-sec253-" + acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+	resolved := "tfacc-sec253-" + acctest.RandStringFromCharSet(12, acctest.CharSetAlphaNum)
+	resourceName := "jenkins_configuration_as_code.test"
+	config := fmt.Sprintf(`
+resource jenkins_configuration_as_code test {
+  section = "jenkins"
+  yaml    = yamlencode({
+    globalNodeProperties = [{
+      envVars = {
+        env = [
+          { key = "%[1]s-b", value = "tfacc-sec253-plain" },
+          { key = "%[1]s-a", value = "$${decodeBase64:%[2]s}" },
+        ]
+      }
+    }]
+  })
+}`, prefix, base64.StdEncoding.EncodeToString([]byte(resolved)))
+	// Refresh stores only the declared key, with the whole list hidden.
+	view := "globalNodeProperties: '" + cascDriftMarker + "'\n"
+	omits := []plancheck.PlanCheck{expectPlanOmits(resolved)}
+	refreshed := resource.TestStep{
+		RefreshState:       true,
+		ExpectNonEmptyPlan: true,
+		RefreshPlanChecks:  resource.RefreshPlanChecks{PostRefresh: omits},
+		Check: resource.ComposeTestCheckFunc(
+			testAccCheckStateOmits(resolved),
+			testAccCheckCASCStateYAML(resourceName, view),
+		),
+	}
+
+	var original interface{}
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			original = testAccCASCJenkinsValue(t, "globalNodeProperties")
+		},
+		ProtoV6ProviderFactories: testAccProviders,
+		// Delete leaves the applied list on the controller; put the original
+		// global node properties back.
+		CheckDestroy: func(*terraform.State) error {
+			props := original
+			if props == nil {
+				props = []interface{}{}
+			}
+			doc, err := yaml.Marshal(map[string]interface{}{
+				"jenkins": map[string]interface{}{"globalNodeProperties": props},
+			})
+			if err != nil {
+				return err
+			}
+			return testAccClient.ApplyCASC(context.Background(), string(doc))
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				// The controller reorders the list, so the plan after apply
+				// is never empty.
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks:   resource.ConfigPlanChecks{PostApplyPostRefresh: omits},
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCASCSectionContains("jenkins", resolved),
+					testAccCheckStateOmits(resolved),
+				),
+			},
+			// The first refresh stores the view; the second reads it back as
+			// the declared document.
+			refreshed,
+			refreshed,
+			{
+				Config:             config,
+				ExpectNonEmptyPlan: true,
+				ConfigPlanChecks:   resource.ConfigPlanChecks{PreApply: omits, PostApplyPostRefresh: omits},
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCASCSectionContains("jenkins", resolved),
+					testAccCheckStateOmits(resolved),
+				),
+			},
+		},
+	})
+}
+
+// testAccCASCJenkinsValue returns the controller's value for key in the
+// exported jenkins section, or nil when it is not exported.
+func testAccCASCJenkinsValue(t *testing.T, key string) interface{} {
+	t.Helper()
+	exported, err := testAccClient.ExportCASC(context.Background())
+	if err != nil {
+		t.Fatalf("exporting JCasC config: %v", err)
+	}
+	sub, found, err := exportedSection(exported, "jenkins")
+	if err != nil || !found {
+		t.Fatalf("jenkins section: found=%v err=%v", found, err)
+	}
+	section, _ := sub.(map[string]interface{})
+	return section[key]
+}
+
 // testAccCASCAdminAddress returns the controller's
 // unclassified.location.adminAddress.
 func testAccCASCAdminAddress(t *testing.T) string {
