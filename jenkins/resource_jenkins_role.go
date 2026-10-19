@@ -2,6 +2,7 @@ package jenkins
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -109,9 +110,14 @@ Assignments are **authoritative**: the provider makes the role's entries exactly
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The unique name of the role.",
+				MarkdownDescription: "The unique name of the role. Must not contain a comma.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					// role-strategy's removeRoles splits role names on ",", so
+					// deleting "team,admin" would delete the role "admin".
+					stringvalidator.RegexMatches(regexp.MustCompile(`^[^,]*$`), "must not contain a comma"),
 				},
 			},
 			"pattern": schema.StringAttribute{
@@ -132,6 +138,8 @@ Assignments are **authoritative**: the provider makes the role's entries exactly
 				ElementType:         types.StringType,
 				MarkdownDescription: "The permission IDs granted by the role, e.g. `hudson.model.Item.Build`.",
 				Validators: []validator.Set{
+					// addRole receives the IDs joined with ",".
+					setvalidator.ValueStringsAre(stringvalidator.RegexMatches(regexp.MustCompile(`^[^,]*$`), "must not contain a comma")),
 					setvalidator.SizeAtLeast(1),
 				},
 			},

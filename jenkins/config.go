@@ -774,6 +774,9 @@ func (j *jenkinsAdapter) rolePostForm(ctx context.Context, action string, form u
 // (927 keeps them, older ones drop them), so callers re-read the entries
 // before reconciling them.
 func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {
+	if err := checkRoleName(name); err != nil {
+		return err
+	}
 	form := url.Values{}
 	form.Set("type", roleType)
 	form.Set("roleName", name)
@@ -823,10 +826,26 @@ func (j *jenkinsAdapter) roleEntryPost(ctx context.Context, roleType, name strin
 
 // RemoveRole deletes a role (and its assignments) of the given type.
 func (j *jenkinsAdapter) RemoveRole(ctx context.Context, roleType, name string) error {
+	if err := checkRoleName(name); err != nil {
+		return err
+	}
 	form := url.Values{}
 	form.Set("type", roleType)
 	form.Set("roleNames", name)
 	return j.rolePostForm(ctx, "removeRoles", form)
+}
+
+// checkRoleName refuses a role name containing a comma before any request is
+// sent. role-strategy's removeRoles splits roleNames on ",", while addRole and
+// getRole take the name whole: removing the role "team,admin" deletes the
+// roles "team" and "admin" instead and leaves "team,admin" in place.
+func checkRoleName(name string) error {
+	if strings.Contains(name, ",") {
+		return fmt.Errorf("role name %q contains a comma, which role-strategy's removeRoles reads as a list of role names, "+
+			"so deleting it would delete other roles; no request was sent. Use a name without a comma; "+
+			"to stop managing a role that already has one, run terraform state rm", name)
+	}
+	return nil
 }
 
 // GetRole fetches a role's definition and XML-decodes the JSON into out. It
