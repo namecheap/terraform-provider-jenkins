@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -370,6 +371,93 @@ func TestRoleAdapterRefusesCommaName(t *testing.T) {
 			}
 			if got := posts[0].form[tt.param]; len(got) != 1 || got[0] != tt.roleName {
 				t.Errorf("%s = %q, want exactly [%q]", tt.param, got, tt.roleName)
+			}
+		})
+	}
+}
+
+// addRole receives the permission IDs joined with ",", so role-strategy reads
+// the single ID "hudson.model.Hudson.Read,hudson.model.Hudson.Administer" as
+// Read plus Administer. Plan-time validation rejects such an ID; the adapter
+// refuses it as well, before sending anything, as it does a comma role name.
+func TestRoleAdapterRefusesCommaPermission(t *testing.T) {
+	const (
+		read  = "hudson.model.Hudson.Read"
+		admin = "hudson.model.Hudson.Administer"
+		build = "hudson.model.Item.Build"
+	)
+	tests := []struct {
+		name        string
+		roleType    string
+		pattern     string
+		overwrite   bool
+		permissions []string
+		refused     string // the permission ID the error must name; "" means addRole is sent
+	}{
+		{name: "global joined pair", roleType: "globalRoles", permissions: []string{read + "," + admin}, refused: read + "," + admin},
+		{name: "global joined pair overwrite", roleType: "globalRoles", overwrite: true, permissions: []string{read + "," + admin}, refused: read + "," + admin},
+		{name: "item joined pair", roleType: "projectRoles", pattern: "^zz-.*", permissions: []string{build + "," + admin}, refused: build + "," + admin},
+		{name: "item joined pair overwrite", roleType: "projectRoles", pattern: "^zz-.*", overwrite: true, permissions: []string{build + "," + admin}, refused: build + "," + admin},
+		{name: "agent joined pair", roleType: "slaveRoles", pattern: "zz-.*", permissions: []string{build + "," + admin}, refused: build + "," + admin},
+		{name: "agent joined pair overwrite", roleType: "slaveRoles", pattern: "zz-.*", overwrite: true, permissions: []string{build + "," + admin}, refused: build + "," + admin},
+		{name: "comma in a later ID", roleType: "globalRoles", permissions: []string{read, build + "," + admin}, refused: build + "," + admin},
+		{name: "trailing comma", roleType: "globalRoles", permissions: []string{read + ","}, refused: read + ","},
+		{name: "comma only", roleType: "globalRoles", permissions: []string{","}, refused: ","},
+		{name: "global clean", roleType: "globalRoles", permissions: []string{read, build}},
+		{name: "global clean overwrite", roleType: "globalRoles", overwrite: true, permissions: []string{read}},
+		{name: "item clean", roleType: "projectRoles", pattern: "^zz-.*", permissions: []string{read, build}},
+		{name: "agent clean overwrite", roleType: "slaveRoles", pattern: "zz-.*", overwrite: true, permissions: []string{build}},
+		// The form value is encoded, so role-strategy receives "%2C" as is.
+		{name: "percent-encoded comma", roleType: "globalRoles", permissions: []string{read + "%2C" + admin}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var log roleRequestLog
+			c, err := newJenkinsClient(&Config{ServerURL: log.server(t).URL})
+			if err != nil {
+				t.Fatalf("newJenkinsClient error = %v", err)
+			}
+
+			err = c.AddRole(context.Background(), tt.roleType, "zz-team", tt.permissions, tt.pattern, tt.overwrite)
+
+			if tt.refused != "" {
+				if err == nil {
+					t.Error("expected an error for a permission ID containing a comma")
+				} else {
+					for _, want := range []string{strconv.Quote(tt.refused), "comma", "no request was sent"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("error = %q, want it to contain %q", err, want)
+						}
+					}
+					if strings.Contains(err.Error(), "role name") {
+						t.Errorf("error = %q blames the role name", err)
+					}
+				}
+				if n := log.count(); n != 0 {
+					t.Errorf("sent %d request(s), want none", n)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			posts := log.posts()
+			if len(posts) != 1 {
+				t.Fatalf("sent %d POST(s), want exactly one", len(posts))
+			}
+			if want := roleStrategyBase + "/addRole"; posts[0].path != want {
+				t.Errorf("path = %q, want %q", posts[0].path, want)
+			}
+			for param, want := range map[string]string{
+				"type":          tt.roleType,
+				"permissionIds": strings.Join(tt.permissions, ","),
+				"overwrite":     strconv.FormatBool(tt.overwrite),
+			} {
+				if got := posts[0].form[param]; len(got) != 1 || got[0] != want {
+					t.Errorf("%s = %q, want exactly [%q]", param, got, want)
+				}
 			}
 		})
 	}

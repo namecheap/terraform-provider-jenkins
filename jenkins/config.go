@@ -778,6 +778,12 @@ func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, per
 		return fmt.Errorf("%w, so the role could not be deleted later without deleting other roles; "+
 			"no request was sent. Use a name without a comma", err)
 	}
+	for _, id := range permissionIDs {
+		if err := checkPermissionID(id); err != nil {
+			return fmt.Errorf("%w, so the role would be granted each part as a separate permission; "+
+				"no request was sent. Give each permission ID as its own element", err)
+		}
+	}
 	form := url.Values{}
 	form.Set("type", roleType)
 	form.Set("roleName", name)
@@ -847,6 +853,17 @@ func (j *jenkinsAdapter) RemoveRole(ctx context.Context, roleType, name string) 
 func checkRoleName(name string) error {
 	if strings.Contains(name, ",") {
 		return fmt.Errorf("role name %q contains a comma, which role-strategy's removeRoles reads as a list of role names", name)
+	}
+	return nil
+}
+
+// checkPermissionID refuses a permission ID containing a comma before any
+// request is sent. AddRole joins the IDs with "," into one permissionIds
+// value, which role-strategy splits again: the single ID
+// "hudson.model.Hudson.Read,hudson.model.Hudson.Administer" would grant both.
+func checkPermissionID(id string) error {
+	if strings.Contains(id, ",") {
+		return fmt.Errorf("permission ID %q contains a comma, which role-strategy's addRole reads as a list of permission IDs", id)
 	}
 	return nil
 }
