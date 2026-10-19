@@ -90,6 +90,32 @@ newly added job can't silently escape its watch. It exists because:
   failing "CI OK" is the only thing that blocks such a PR from merging
   untested.
 
+## Jenkins version under test
+
+The acceptance and integration jobs, and local `make testacc`, run against the
+Jenkins image built from `integration/Dockerfile`. It is pinned to the **latest
+Jenkins LTS release**, the line listed in the
+[LTS changelog](https://www.jenkins.io/changelog-stable/), not to a weekly
+release:
+
+- Most controllers this provider manages run LTS, so CI tests what users run.
+  A weekly release can carry core changes that no LTS has yet, so a suite that
+  passes only on a weekly can hide a bug on the LTS line.
+- The `FROM` line names an exact LTS version in its `-lts-` tag form, for
+  example `jenkins/jenkins:2.580.1-lts-jdk21`. An exact version keeps runs
+  reproducible, and the CI image cache, keyed on the Dockerfile's hash,
+  refreshes when it changes. A floating tag such as `lts-jdk21` would leave the
+  cached image stale.
+- Dependabot's monthly `docker` update for `/integration` only offers tags with
+  the same suffix, so a `-lts-jdk21` tag moves to the next LTS (`2.580.2`,
+  `2.593.1`, ...) and never to a weekly `2.5xx-jdk21`. Weekly releases share the
+  plain `-jdk21` and `-alpine-jdk21` suffixes, and Jenkins publishes no Alpine
+  `-lts-` tag, so the image stays on the Debian-based `-lts-jdk21` form.
+- To bump by hand, take the newest version from the LTS changelog, check that
+  `jenkins/jenkins:<version>-lts-jdk21` exists on Docker Hub, update the `FROM`
+  line, and run `make testacc` and the integration test (`terraform test` in
+  `integration/`) before opening the PR.
+
 ## How docs reach the Terraform Registry
 
 `docs/` is **not** shipped inside the GoReleaser artifacts. When GoReleaser
@@ -121,6 +147,28 @@ finish in seconds — cutting post-merge release latency roughly in half
 (the remaining time is GoReleaser's ~6-minute build) and dropping the
 repository's Actions consumption accordingly.
 
+## Go caches
+
+`actions/setup-go`'s built-in cache is keyed only on the runner, the Go
+version and `go.sum`, and a cache key can be saved only once, by whichever job
+finishes first. Lint, Unit Tests, Acceptance Tests, Integration Tests and
+CodeQL all shared that one key. The entry that won was saved by a job that
+only builds the provider binary, so it never held the test-only modules
+(`terraform-plugin-testing` and its dependencies) or their compiled packages.
+Every unit and acceptance run downloaded those modules again and recompiled
+them, and the unit job spent about 46 of its 48 seconds compiling `-race`
+builds.
+
+Lint, Unit Tests and Acceptance Tests therefore set `cache: false` on
+`setup-go` and restore their own `actions/cache` entry, keyed on
+`github.job`, the Go version and `go.sum`, holding `~/go/pkg/mod` and
+`~/.cache/go-build`. Each job's entry holds the modules and compiled packages
+that job needs. `restore-keys` falls back to the job's previous entry when
+`go.sum` changes, so a dependency bump only downloads and recompiles what
+changed. Integration Tests and CodeQL only build the binary and keep the
+shared `setup-go` cache. Docs keeps its own `setup-go` key, which also
+covers `tools/go.sum`.
+
 ## Editing the pipeline — invariants to keep
 
 - **Don't add `paths`/`paths-ignore` to `test.yml` or `codeql.yml` triggers**
@@ -132,7 +180,12 @@ repository's Actions consumption accordingly.
   drift.
 - **New "expensive" jobs should take the gate**: `needs: changes` +
   `if: needs.changes.outputs.code == 'true'`.
+- **Keep the test Jenkins on the LTS line**, in the `-lts-` tag form (see
+  [Jenkins version under test](#jenkins-version-under-test)).
 - **The gate's ignore list must stay a subset of "files that can't affect
   the binary, tests, or published docs"** — when in doubt, let the job run.
   In particular `docs/**` must never be added to it: registry-published
   documentation is a user-visible deliverable.
+- **A new job that compiles test packages gets its own Go cache** (see
+  [Go caches](#go-caches)). On the shared `setup-go` key it would depend on
+  which job saved that key first.

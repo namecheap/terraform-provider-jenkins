@@ -1,4 +1,7 @@
-FROM jenkins/jenkins:2.583-alpine-jdk21
+# Tests run against the latest Jenkins LTS, not a weekly release; see "Jenkins
+# version under test" in CI.md. Keep the "-lts-" tag form: Dependabot only
+# offers tags with the same suffix, so it bumps within the LTS line.
+FROM jenkins/jenkins:2.580.1-lts-jdk21
 
 RUN jenkins-plugin-cli --plugins \
     azure-credentials hashicorp-vault-plugin cloudbees-folder pipeline-model-definition git matrix-auth aws-credentials github-branch-source \
