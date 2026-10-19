@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.3.0...v1.4.0) (2026-10-19)
+
+
+### Features
+
+* **node:** add jenkins_node_secret ephemeral resource ([#244](https://github.com/namecheap/terraform-provider-jenkins/issues/244)) ([2aa85f2](https://github.com/namecheap/terraform-provider-jenkins/commit/2aa85f28db0ee81a3ec3f68ad6bc0148b3f9b84c))
+* **node:** update in place, add job_restriction and web_socket ([#243](https://github.com/namecheap/terraform-provider-jenkins/issues/243)) ([ef4af5f](https://github.com/namecheap/terraform-provider-jenkins/commit/ef4af5fc1886eeb3fadd0dc53900677e4bd9ce5b))
+* **role:** add typed users and groups assignments ([#245](https://github.com/namecheap/terraform-provider-jenkins/issues/245)) ([5c971ff](https://github.com/namecheap/terraform-provider-jenkins/commit/5c971ff10ccf2410981c89c2b2919adce75f59d2))
+
 ## [1.3.0](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.2.10...v1.3.0) (2026-10-14)
 
 
