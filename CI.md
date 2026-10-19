@@ -16,6 +16,7 @@ the CI mechanics.
 | Release | `.github/workflows/release.yml` | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries |
 | Stale | `.github/workflows/stale.yml` | Daily cron | Labels inactive issues/PRs |
 | OSS Scanner image | `.github/workflows/oss-scanner.yml` | PR and push touching the image's inputs, weekly cron, manual | Builds the OSS Scanner image and runs its self-test offline (not a required check; see [OSS Scanner image](#oss-scanner-image)) |
+| Security Review | `.github/workflows/security-review.yml` | PR from this repository's branches, `security-review` label | Claude reviews the PR's changes for security issues and comments findings (advisory, not a required check; see [Claude security review](#claude-security-review)) |
 
 ## Life of a change
 
@@ -232,6 +233,40 @@ Enrolling the project is a separate, manual step that only a core maintainer
 can take: a PR to [anthropics/oss-scanner](https://github.com/anthropics/oss-scanner)
 adding `projects/<name>/project.yaml` that points at this Dockerfile and
 threat model.
+
+## Claude security review
+
+The OSS Scanner runs on Anthropic's side, on its own schedule. For a review of
+every pull request inside CI, the **Security Review** workflow
+(`.github/workflows/security-review.yml`) runs
+[anthropics/claude-code-security-review](https://github.com/anthropics/claude-code-security-review):
+
+- **What it checks:** Claude reviews the PR's changed files for security issues
+  and comments findings on the PR. The threat model is appended to the audit
+  prompt (`custom-security-scan-instructions: .oss-scanner/threat_model.md`), so
+  the review knows which inputs are adversarial, which properties the provider
+  claims and how to rate severity. The directories the threat model puts out of
+  scope (`docs`, `templates`, `examples`, `demo`, `integration`, `tools`) are
+  excluded.
+- **Model:** `claude-opus-5-5`, set in the workflow. The action's own default
+  is an older model.
+- **When it runs:** once per PR, on the first run after the PR is opened or
+  marked ready; drafts wait. The action records the review and skips later
+  pushes. To review the current changes again, add the `security-review` label
+  (remove and re-add it for another run). Runs for the same PR queue rather than
+  cancel, because a cancelled run would leave the PR recorded as reviewed.
+- **Trusted PRs only:** the action is not hardened against prompt injection, so
+  the job runs only for branches pushed to this repository. It skips fork PRs,
+  which get no secrets anyway, and Dependabot PRs, whose runs cannot read
+  Actions secrets.
+- **Secret:** an Anthropic API key in the `CLAUDE_API_KEY` Actions secret,
+  enabled for both the Claude API and Claude Code. Usage is billed to that key.
+  Without the secret, the job logs a notice and does nothing, so it never
+  fails a PR.
+- **Advisory:** it is not a required check, and findings are review comments
+  to weigh like any other.
+- **Pinning:** the action publishes no releases, so the workflow pins a commit
+  on its `main` branch. Bump the SHA by hand to pick up changes.
 
 ## Editing the pipeline — invariants to keep
 

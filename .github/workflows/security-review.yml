@@ -1,0 +1,64 @@
+name: Security Review
+
+# Claude reviews each pull request's changes for security issues with
+# anthropics/claude-code-security-review and comments its findings on the PR.
+# The project's threat model (.oss-scanner/threat_model.md) is appended to the
+# audit prompt as custom scan instructions. Advisory only: not a required
+# check. See "Claude security review" in CI.md.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+
+permissions:
+  contents: read
+
+# Queue, don't cancel: the action records that a PR was reviewed before it
+# starts, so a cancelled run would leave the PR marked as reviewed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  security-review:
+    name: Claude security review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write  # comments findings on the PR
+    # The action is not hardened against prompt injection, so it reviews only
+    # branches pushed to this repository: never forks (which get no secrets
+    # anyway) or Dependabot (whose runs cannot read Actions secrets). Drafts
+    # wait until they are ready. It reviews a PR once; adding the
+    # security-review label asks for a fresh review of the current changes.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      !github.event.pull_request.draft &&
+      (github.event.action != 'labeled' || github.event.label.name == 'security-review')
+    env:
+      HAS_KEY: ${{ secrets.CLAUDE_API_KEY != '' }}
+    steps:
+      - name: Skip without an API key
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::The CLAUDE_API_KEY secret is not set, so the security review is skipped."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_KEY == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Pinned to a main commit: the action publishes no releases or tags.
+      - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda # main, 2026-02-11
+        if: env.HAS_KEY == 'true'
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          claude-model: claude-opus-5-5
+          comment-pr: true
+          custom-security-scan-instructions: .oss-scanner/threat_model.md
+          # Out of scope in the threat model; templates/ is the docs source.
+          exclude-directories: docs,templates,examples,demo,integration,tools
+          run-every-commit: ${{ github.event.action == 'labeled' }}
