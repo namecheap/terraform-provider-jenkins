@@ -12,7 +12,10 @@ import (
 
 	jenkins "github.com/bndr/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -23,8 +26,9 @@ import (
 
 // Fake hudson.util.Secret / SecretBytes ciphertexts in the formats Jenkins
 // serializes: {AQAA...} (payload version 1, 16-byte IV) and SecretBytes'
-// prefix-less braced base64. redactCipherReencrypted is the same secret after
-// Jenkins re-saved it with a fresh IV.
+// prefix-less braced base64. redactCipherReencrypted is the same secret
+// encrypted again with a fresh IV, as Jenkins does each time a secret is set
+// from plain text (a credential update, a JCasC reload), even to the same value.
 const (
 	redactCipherToken       = "{AQAAABAAAAAQBwgJCgsMDQ4PEBESExQVFg0QExYZHB8iJSgrLjE0Nzo=}"
 	redactCipherReencrypted = "{AQAAABAAAAAQDg8QERITFBUWFxgZGhscHRodICMmKSwvMjU4Oz5BREc=}"
@@ -111,6 +115,14 @@ func redactFolderWithCredentials(token string) string {
 // redactFolderNoCredentials is the same folder without a credentials store.
 const redactFolderNoCredentials = redactFolderHead + redactFolderTail
 
+// redactFolderWithOtherSecret is redactFolderWithCredentials plus an encrypted
+// value outside the credentials store (a folder-level SCM token), which full
+// redaction must replace in place.
+func redactFolderWithOtherSecret() string {
+	return strings.Replace(redactFolderWithCredentials(redactCipherToken), "<healthMetrics/>",
+		"<healthMetrics/>\n  <scmToken>"+redactCipherReencrypted+"</scmToken>", 1)
+}
+
 // redactJobXML is a freestyle job whose password parameter default Jenkins
 // stores encrypted, next to a shell step using ${VAR} placeholders.
 const redactJobXML = `<?xml version='1.1' encoding='UTF-8'?>
@@ -179,18 +191,25 @@ func (s *redactFolderServer) job(t *testing.T, base string) *jenkins.Job {
 	if err != nil {
 		t.Fatalf("newJenkinsClient: %v", err)
 	}
-	return &jenkins.Job{Jenkins: client.Jenkins, Base: base}
+	return &jenkins.Job{Jenkins: client.Jenkins, Raw: new(jenkins.JobResponse), Base: base}
 }
 
 func TestFolderResourceReadRedactsTemplate(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name   string
-		config string
+		name        string
+		config      string
+		wantContain []string
 	}{
 		{name: "folder credentials store", config: redactFolderWithCredentials(redactCipherToken)},
 		{name: "same credentials re-encrypted", config: redactFolderWithCredentials(redactCipherReencrypted)},
+		{
+			// Full redaction: ciphertext outside the store is replaced too.
+			name:        "encrypted value outside the credentials store",
+			config:      redactFolderWithOtherSecret(),
+			wantContain: []string{"<scmToken>{redacted}</scmToken>"},
+		},
 	}
 
 	var templates []string
@@ -223,8 +242,10 @@ func TestFolderResourceReadRedactsTemplate(t *testing.T) {
 			}
 
 			assertNoFolderSecrets(t, got.Template.ValueString())
-			if !strings.Contains(got.Template.ValueString(), "AuthorizationMatrixProperty") {
-				t.Errorf("template lost the rest of config.xml:\n%s", got.Template.ValueString())
+			for _, want := range append([]string{"AuthorizationMatrixProperty"}, tt.wantContain...) {
+				if !strings.Contains(got.Template.ValueString(), want) {
+					t.Errorf("template is missing %q:\n%s", want, got.Template.ValueString())
+				}
 			}
 			if got.Description.ValueString() != "team folder" || got.DisplayName.ValueString() != "Team" {
 				t.Errorf("description/display_name = %q/%q, want team folder/Team", got.Description.ValueString(), got.DisplayName.ValueString())
@@ -233,10 +254,10 @@ func TestFolderResourceReadRedactsTemplate(t *testing.T) {
 		})
 	}
 
-	// Jenkins re-encrypts a Secret with a fresh IV whenever it saves the
-	// folder. The stored template must not change with it, or every refresh
-	// after an unrelated save would report the folder as changed.
-	if len(templates) == 2 && templates[0] != templates[1] {
+	// Setting a secret again from plain text, even to the same value, encrypts
+	// it with a fresh IV. The stored template must not change with it, or the
+	// folder would show as changed after every such credential update.
+	if len(templates) >= 2 && templates[0] != templates[1] {
 		t.Errorf("template differs between refreshes of the same credentials:\n%s\n---\n%s", templates[0], templates[1])
 	}
 }
@@ -294,11 +315,6 @@ const folderCredentialsPropertyElementName = "com.cloudbees.hudson.plugins.folde
 func TestTemplateDataSourcesRedact(t *testing.T) {
 	ctx := context.Background()
 
-	// A credential-bearing property other than the folder store: anything
-	// encrypted outside FolderCredentialsProperty is replaced in place.
-	folderWithOtherSecret := strings.Replace(redactFolderWithCredentials(redactCipherToken), "<healthMetrics/>",
-		"<healthMetrics/>\n  <scmToken>"+redactCipherReencrypted+"</scmToken>", 1)
-
 	tests := []struct {
 		name        string
 		ds          datasource.DataSource
@@ -311,7 +327,7 @@ func TestTemplateDataSourcesRedact(t *testing.T) {
 			name:   "jenkins_folder",
 			ds:     &folderDataSource{},
 			model:  &folderDataSourceModel{Name: types.StringValue("team"), Folder: types.StringNull(), ID: types.StringNull(), Description: types.StringNull(), DisplayName: types.StringNull(), Template: types.StringNull()},
-			config: folderWithOtherSecret,
+			config: redactFolderWithOtherSecret(),
 			template: func(resp datasource.ReadResponse) string {
 				var m folderDataSourceModel
 				resp.State.Get(ctx, &m)
@@ -381,21 +397,22 @@ func TestTemplateDataSourcesRedact(t *testing.T) {
 	}
 }
 
-// initPrivateState gives resp the private-state store the framework server
-// allocates before calling Create. Its type lives in an internal framework
-// package, so a test can only allocate it through reflection.
-func initPrivateState(t *testing.T, resp *resource.CreateResponse) {
+// initPrivateState gives v, a pointer to a framework request or response
+// struct, the empty private-state store the framework server allocates before
+// calling the resource. Its type lives in an internal framework package, so a
+// test can only allocate it through reflection.
+func initPrivateState(t *testing.T, v any) {
 	t.Helper()
-	f := reflect.ValueOf(resp).Elem().FieldByName("Private")
+	f := reflect.ValueOf(v).Elem().FieldByName("Private")
 	f.Set(reflect.New(f.Type().Elem()))
 }
 
 // TestJobResourceReadFolderCredentials covers the jenkins_job resource, whose
 // template is the practitioner's own and is compared with the refreshed value
 // by templatePlanModifier: the folder credentials store is dropped on refresh
-// unless the applied template contains it, and the refreshed value must stay
-// semantically equal to the configured one either way, or every plan would
-// show a diff.
+// unless the applied template contains it, ciphertext elsewhere is kept, and
+// the refreshed value must stay semantically equal to the configured one, or
+// every plan would show a diff.
 func TestJobResourceReadFolderCredentials(t *testing.T) {
 	ctx := context.Background()
 
@@ -403,7 +420,7 @@ func TestJobResourceReadFolderCredentials(t *testing.T) {
 		name       string
 		configured string // template applied by Create; "" for an imported job
 		server     string // config.xml Jenkins serves afterwards
-		wantStored bool   // whether the credentials store stays in state
+		want       string // template the refresh stores
 	}{
 		{
 			// Credentials added to the folder by jenkins_credential_* (or by
@@ -411,10 +428,12 @@ func TestJobResourceReadFolderCredentials(t *testing.T) {
 			name:       "template without credentials store",
 			configured: redactFolderNoCredentials,
 			server:     redactFolderWithCredentials(redactCipherToken),
+			want:       redactFolderNoCredentials,
 		},
 		{
 			name:   "imported folder",
 			server: redactFolderWithCredentials(redactCipherToken),
+			want:   redactFolderNoCredentials,
 		},
 		{
 			// The practitioner manages the store through this template: it is
@@ -422,7 +441,16 @@ func TestJobResourceReadFolderCredentials(t *testing.T) {
 			name:       "template with credentials store",
 			configured: redactFolderWithCredentials(redactCipherToken),
 			server:     redactFolderWithCredentials(redactCipherToken),
-			wantStored: true,
+			want:       redactFolderWithCredentials(redactCipherToken),
+		},
+		{
+			// An encrypted parameter default pasted from config.xml is part of
+			// the configuration: redacting it would make state differ from it
+			// on every refresh.
+			name:       "template with an encrypted parameter default",
+			configured: redactJobXML,
+			server:     redactJobXML,
+			want:       redactJobXML,
 		},
 	}
 
@@ -474,18 +502,256 @@ func TestJobResourceReadFolderCredentials(t *testing.T) {
 			}
 			stored := got.Template.ValueString()
 
-			if tt.wantStored {
-				if stored != tt.server {
-					t.Errorf("template = %q, want config.xml unchanged", stored)
-				}
-			} else {
+			if stored != tt.want {
+				t.Errorf("refreshed template =\n%s\nwant\n%s", stored, tt.want)
+			}
+			if !strings.Contains(tt.want, "{AQAA") {
 				assertNoFolderSecrets(t, stored)
-				if !strings.Contains(stored, "AuthorizationMatrixProperty") {
-					t.Errorf("template lost the rest of config.xml:\n%s", stored)
-				}
 			}
 			if tt.configured != "" && !templatesEqual(stored, tt.configured) {
 				t.Errorf("refreshed template is not equal to the configured one, so every plan would show a diff:\nstate:\n%s\nconfig:\n%s", stored, tt.configured)
+			}
+		})
+	}
+}
+
+// TestJobResourceUpdateFolderCredentials covers what jenkins_job Update posts
+// for a folder, and the private-state record it leaves for the next refresh. A
+// credentials store the template does not contain is not managed by it, so
+// Update must keep the store Jenkins has rather than post a document without
+// it: refreshes hide such a store, so a plan would otherwise never show that
+// applying it deletes every folder credential.
+func TestJobResourceUpdateFolderCredentials(t *testing.T) {
+	ctx := context.Background()
+
+	renamed := strings.Replace(redactFolderNoCredentials,
+		"<description>team folder</description>", "<description>renamed</description>", 1)
+
+	tests := []struct {
+		name string
+		// created is the template Create applied. "" stands for state written
+		// by an earlier provider version: the raw server config.xml as the
+		// template and no private state (an import is the same after its
+		// first refresh).
+		created string
+		// server is the config.xml Jenkins serves when the plan is made, after
+		// any out-of-band change.
+		server string
+		// planned returns the template Update applies, given the refreshed one.
+		planned  func(refreshed string) string
+		disabled types.Bool
+		// wantPostedStore is the ciphertext the config.xml Update posts must
+		// carry inside a credentials store; "" when it must carry no store.
+		wantPostedStore    string
+		wantPostedContains []string
+		// later, when set, is what Jenkins serves at the next refresh instead
+		// of the posted config.xml.
+		later string
+		// wantRefreshedStore is whether that refresh keeps the store in state.
+		wantRefreshedStore bool
+	}{
+		{
+			// jenkins_credential_* with folder = jenkins_job.team.id (or the UI,
+			// or JCasC) added credentials to a folder created from a plain
+			// template. Editing the template must not delete them.
+			name:               "template edit keeps an unmanaged store",
+			created:            redactFolderNoCredentials,
+			server:             redactFolderWithCredentials(redactCipherToken),
+			planned:            func(string) string { return renamed },
+			wantPostedStore:    redactCipherToken,
+			wantPostedContains: []string{"<description>renamed</description>"},
+		},
+		{
+			// lifecycle { ignore_changes = [template] }: Terraform plans the
+			// refreshed state as the template, and toggling disabled posts it.
+			// Before #255 that value held the raw store, so it was posted back.
+			name:            "ignore_changes posts the refreshed template",
+			server:          redactFolderWithCredentials(redactCipherToken),
+			planned:         func(refreshed string) string { return refreshed },
+			disabled:        types.BoolValue(false),
+			wantPostedStore: redactCipherToken,
+		},
+		{
+			name:               "template takes over the store",
+			created:            redactFolderNoCredentials,
+			server:             redactFolderNoCredentials,
+			planned:            func(string) string { return redactFolderWithCredentials(redactCipherReencrypted) },
+			wantPostedStore:    redactCipherReencrypted,
+			wantRefreshedStore: true,
+		},
+		{
+			// Removing the store from a template that managed it is a change the
+			// plan shows (state holds the store), and applying it deletes it.
+			// Credentials added again out of band afterwards are not managed,
+			// so they must stay out of state.
+			name:    "template drops the store it managed",
+			created: redactFolderWithCredentials(redactCipherToken),
+			server:  redactFolderWithCredentials(redactCipherToken),
+			planned: func(string) string { return redactFolderNoCredentials },
+			later:   redactFolderWithCredentials(redactCipherReencrypted),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &redactFolderServer{config: tt.server}
+			job := srv.job(t, "/job/team")
+			r := &jobResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
+				mockCreateJobInFolder: func(context.Context, string, string, ...string) (*jenkins.Job, error) { return job, nil },
+				mockGetJob:            func(context.Context, string, ...string) (*jenkins.Job, error) { return job, nil },
+			}}}
+			var sr resource.SchemaResponse
+			r.Schema(ctx, resource.SchemaRequest{}, &sr)
+
+			// Prior state and private state, then the refresh of the plan.
+			readReq := resource.ReadRequest{State: tfsdk.State{Schema: sr.Schema}}
+			if tt.created != "" {
+				plan := tfsdk.Plan{Schema: sr.Schema}
+				if d := plan.Set(ctx, &jobResourceModel{
+					ID: types.StringUnknown(), Name: types.StringValue("team"), Folder: types.StringNull(),
+					Template: types.StringValue(tt.created), Disabled: types.BoolNull(),
+				}); d.HasError() {
+					t.Fatalf("plan.Set: %v", d)
+				}
+				cResp := resource.CreateResponse{State: tfsdk.State{Schema: sr.Schema}}
+				initPrivateState(t, &cResp)
+				r.Create(ctx, resource.CreateRequest{Plan: plan}, &cResp)
+				if cResp.Diagnostics.HasError() {
+					t.Fatalf("Create: %v", cResp.Diagnostics)
+				}
+				readReq.State = cResp.State
+				readReq.Private = cResp.Private
+			} else {
+				if d := readReq.State.Set(ctx, &jobResourceModel{
+					ID: types.StringValue("/job/team"), Name: types.StringValue("team"), Folder: types.StringNull(),
+					Template: types.StringValue(tt.server), Disabled: types.BoolNull(),
+				}); d.HasError() {
+					t.Fatalf("state.Set: %v", d)
+				}
+				initPrivateState(t, &readReq)
+			}
+			rResp := resource.ReadResponse{State: readReq.State}
+			r.Read(ctx, readReq, &rResp)
+			if rResp.Diagnostics.HasError() {
+				t.Fatalf("Read: %v", rResp.Diagnostics)
+			}
+			var refreshed jobResourceModel
+			if d := rResp.State.Get(ctx, &refreshed); d.HasError() {
+				t.Fatalf("state.Get: %v", d)
+			}
+
+			// Update. The framework hands the same private-state data to the
+			// request and the response.
+			planned := tt.planned(refreshed.Template.ValueString())
+			plan := tfsdk.Plan{Schema: sr.Schema}
+			if d := plan.Set(ctx, &jobResourceModel{
+				ID: types.StringValue("/job/team"), Name: types.StringValue("team"), Folder: types.StringNull(),
+				Template: types.StringValue(planned), Disabled: tt.disabled,
+			}); d.HasError() {
+				t.Fatalf("plan.Set: %v", d)
+			}
+			uResp := resource.UpdateResponse{State: tfsdk.State{Schema: sr.Schema}, Private: readReq.Private}
+			r.Update(ctx, resource.UpdateRequest{Plan: plan, State: rResp.State, Private: readReq.Private}, &uResp)
+			if uResp.Diagnostics.HasError() {
+				t.Fatalf("Update: %v", uResp.Diagnostics)
+			}
+
+			if len(srv.posted) != 1 {
+				t.Fatalf("Update posted config.xml %d times, want 1", len(srv.posted))
+			}
+			posted := srv.posted[0]
+			switch {
+			case tt.wantPostedStore != "" && !strings.Contains(posted, folderCredentialsPropertyElementName):
+				t.Errorf("Update posted config.xml WITHOUT the folder credentials store, so every folder credential is deleted:\n%s", posted)
+			case tt.wantPostedStore != "" && !strings.Contains(posted, tt.wantPostedStore):
+				t.Errorf("posted credentials store does not carry %q:\n%s", tt.wantPostedStore, posted)
+			case tt.wantPostedStore == "" && strings.Contains(posted, folderCredentialsPropertyElementName):
+				t.Errorf("Update posted a credentials store the template removed:\n%s", posted)
+			}
+			for _, want := range tt.wantPostedContains {
+				if !strings.Contains(posted, want) {
+					t.Errorf("posted config.xml is missing %q:\n%s", want, posted)
+				}
+			}
+
+			// The next refresh.
+			if tt.later != "" {
+				srv.mu.Lock()
+				srv.config = tt.later
+				srv.mu.Unlock()
+			}
+			rResp2 := resource.ReadResponse{State: uResp.State}
+			r.Read(ctx, resource.ReadRequest{State: uResp.State, Private: uResp.Private}, &rResp2)
+			if rResp2.Diagnostics.HasError() {
+				t.Fatalf("Read after Update: %v", rResp2.Diagnostics)
+			}
+			var got jobResourceModel
+			if d := rResp2.State.Get(ctx, &got); d.HasError() {
+				t.Fatalf("state.Get: %v", d)
+			}
+			stored := got.Template.ValueString()
+			if tt.wantRefreshedStore {
+				if !strings.Contains(stored, folderCredentialsPropertyElementName) {
+					t.Errorf("refresh after Update dropped the credentials store the template manages:\n%s", stored)
+				}
+			} else {
+				assertNoFolderSecrets(t, stored)
+			}
+			if !templatesEqual(stored, planned) {
+				t.Errorf("refreshed template is not equal to the applied one, so every plan would show a diff:\nstate:\n%s\nconfig:\n%s", stored, planned)
+			}
+		})
+	}
+}
+
+// TestJobTemplateRejectsRedactedSecrets pins that a template copied from a
+// data source, whose encrypted values read {redacted}, is rejected at plan
+// time. Jenkins cannot decrypt the marker, so it would silently store the
+// literal string as the secret.
+func TestJobTemplateRejectsRedactedSecrets(t *testing.T) {
+	ctx := context.Background()
+
+	var sr resource.SchemaResponse
+	(&jobResource{}).Schema(ctx, resource.SchemaRequest{}, &sr)
+	attr, ok := sr.Schema.Attributes["template"].(schema.StringAttribute)
+	if !ok {
+		t.Fatalf("template attribute is %T, want schema.StringAttribute", sr.Schema.Attributes["template"])
+	}
+
+	tests := []struct {
+		name     string
+		template string
+		wantErr  bool
+	}{
+		{
+			name:     "password parameter default from the jenkins_job data source",
+			template: strings.Replace(redactJobXML, redactCipherToken, "{redacted}", 1),
+			wantErr:  true,
+		},
+		{
+			name:     "folder secret from the jenkins_folder data source, indented",
+			template: "<com.cloudbees.hudson.plugins.folder.Folder>\n  <scmToken>\n    {redacted}\n  </scmToken>\n</com.cloudbees.hudson.plugins.folder.Folder>",
+			wantErr:  true,
+		},
+		{
+			name:     "original ciphertext",
+			template: redactJobXML,
+		},
+		{
+			name:     "marker inside other text",
+			template: `<project><description>secrets read {redacted} in the data source</description></project>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := validator.StringRequest{Path: path.Root("template"), ConfigValue: types.StringValue(tt.template)}
+			var resp validator.StringResponse
+			for _, v := range attr.Validators {
+				v.ValidateString(ctx, req, &resp)
+			}
+			if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+				t.Errorf("template validation error = %v, want %v (diagnostics: %v)", got, tt.wantErr, resp.Diagnostics)
 			}
 		})
 	}

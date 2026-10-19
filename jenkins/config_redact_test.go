@@ -18,9 +18,12 @@ func TestRedactJenkinsConfig(t *testing.T) {
 			want: redactFolderNoCredentials,
 		},
 		{
+			// A ">" inside a quoted attribute value must not end the start tag:
+			// read as the end of a non-empty start tag, the match would run on
+			// to the next property's closing tag and take <keep/> with it.
 			name: "property with double- and single-quoted attributes",
-			in:   `<properties><` + prop + ` plugin="credentials@1514.v6e8e6c2a_8a_2b_" other='a/'><secret>` + redactCipherToken + `</secret></` + prop + `><x/></properties>`,
-			want: `<properties><x/></properties>`,
+			in:   `<properties><` + prop + ` plugin="credentials@1514.v6e8e6c2a_8a_2b_" note="a/>b"/><keep/><` + prop + ` other='c>d'><secret>` + redactCipherToken + `</secret></` + prop + `><x/></properties>`,
+			want: `<properties><keep/><x/></properties>`,
 		},
 		{
 			name: "self-closing property",
@@ -87,9 +90,9 @@ func TestRedactJenkinsConfig(t *testing.T) {
 	}
 }
 
-// TestRedactJenkinsConfigDeterministic pins that a re-encryption, which
-// Jenkins does with a fresh IV whenever it saves a Secret, does not change the
-// redacted value.
+// TestRedactJenkinsConfigDeterministic pins that encrypting the same secret
+// again, which Jenkins does with a fresh IV each time a secret is set from
+// plain text, does not change the redacted value.
 func TestRedactJenkinsConfigDeterministic(t *testing.T) {
 	tests := []struct {
 		name string
@@ -134,6 +137,13 @@ func TestStripFolderCredentials(t *testing.T) {
 			name: "ciphertext outside the store is kept",
 			in:   redactJobXML,
 			want: redactJobXML,
+		},
+		{
+			// A self-closing property whose attribute value contains "/>": a
+			// start tag cut short there would leave `y"/>` behind.
+			name: `attribute value containing "/>"`,
+			in:   `<properties><` + folderCredentialsPropertyElement + ` plugin="x/>y"/><x/></properties>`,
+			want: `<properties><x/></properties>`,
 		},
 	}
 
@@ -206,6 +216,93 @@ func TestFolderCredentialsFlag(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := string(folderCredentialsFlag(tt.template)); got != tt.want {
 				t.Errorf("folderCredentialsFlag() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithFolderCredentials(t *testing.T) {
+	const (
+		prop   = folderCredentialsPropertyElement
+		folder = "com.cloudbees.hudson.plugins.folder.Folder"
+		decl   = "<?xml version='1.1' encoding='UTF-8'?>\n"
+	)
+	store := `<` + prop + ` plugin="credentials@1514"><secret>` + redactCipherToken + `</secret></` + prop + `>`
+	live := decl + `<` + folder + `><properties>` + store + `</properties></` + folder + `>`
+
+	tests := []struct {
+		name     string
+		template string
+		live     string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:     "folder config.xml without a store",
+			template: redactFolderNoCredentials,
+			live:     redactFolderWithCredentials(redactCipherToken),
+			want:     redactFolderWithCredentials(redactCipherToken),
+		},
+		{
+			name:     "nothing to keep",
+			template: redactFolderNoCredentials,
+			live:     redactFolderNoCredentials,
+			want:     redactFolderNoCredentials,
+		},
+		{
+			name:     "nothing to keep, template not parsed",
+			template: "<project><unclosed></project>",
+			live:     redactJobXML,
+			want:     "<project><unclosed></project>",
+		},
+		{
+			name:     "empty properties element",
+			template: decl + `<` + folder + `><properties/><x/></` + folder + `>`,
+			live:     live,
+			want:     decl + `<` + folder + `><properties>` + store + `</properties><x/></` + folder + `>`,
+		},
+		{
+			// Only the root's own <properties> holds folder properties; a view's
+			// nested one must not be used.
+			name:     "no top-level properties element",
+			template: decl + `<` + folder + `><views><v><properties class="hudson.model.View$PropertyList"/></v></views></` + folder + `>`,
+			live:     live,
+			want:     decl + `<` + folder + `><properties>` + store + `</properties><views><v><properties class="hudson.model.View$PropertyList"/></v></views></` + folder + `>`,
+		},
+		{
+			name:     "top-level properties after a nested one",
+			template: `<` + folder + `><views><v><properties/></v></views><properties><x/></properties></` + folder + `>`,
+			live:     live,
+			want:     `<` + folder + `><views><v><properties/></v></views><properties>` + store + `<x/></properties></` + folder + `>`,
+		},
+		{
+			name:     "empty root element",
+			template: decl + `<` + folder + ` plugin="cloudbees-folder@6.1106"/>`,
+			live:     live,
+			want:     decl + `<` + folder + ` plugin="cloudbees-folder@6.1106"><properties>` + store + `</properties></` + folder + `>`,
+		},
+		{
+			name:     "malformed template",
+			template: `<` + folder + `><properties></` + folder + `>`,
+			live:     live,
+			wantErr:  true,
+		},
+		{
+			name:     "no root element",
+			template: "  ",
+			live:     live,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := withFolderCredentials(tt.template, tt.live)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("withFolderCredentials() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("withFolderCredentials() =\n%s\nwant\n%s", got, tt.want)
 			}
 		})
 	}
