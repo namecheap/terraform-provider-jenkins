@@ -187,9 +187,6 @@ func TestCovM_Role(t *testing.T) {
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "global/reader"}, &isResp)
 }
 
-// TestCovM_RoleUpdateOverwrite checks that Update only overwrites the role when
-// its permissions or pattern change: role-strategy releases before 927 drop
-// every entry of an overwritten role.
 func TestCovM_RoleCreateRollback(t *testing.T) {
 	ctx := context.Background()
 	model := &roleResourceModel{
@@ -288,6 +285,9 @@ func TestCovM_RoleCreateRollback(t *testing.T) {
 	}
 }
 
+// TestCovM_RoleUpdateOverwrite checks that Update only overwrites the role when
+// its permissions or pattern change: role-strategy releases before 918 drop
+// every entry of an overwritten role.
 func TestCovM_RoleUpdateOverwrite(t *testing.T) {
 	ctx := context.Background()
 	strs := func(v ...string) types.Set {
