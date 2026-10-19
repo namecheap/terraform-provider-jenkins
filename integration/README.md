@@ -2,6 +2,8 @@
 
 This folder contains an example Dockerized instance of Jenkins for performing manual and automated testing against. It can be used during development to validate against a real Jenkins installation.
 
+The image is built from [Dockerfile](./Dockerfile) and pinned to the latest Jenkins LTS release, which is what CI tests against. See [Jenkins version under test](../CI.md#jenkins-version-under-test).
+
 ## Automated Tests
 
 Use the [terraform test](https://developer.hashicorp.com/terraform/language/tests) framework to automatically spin a copy of Jenkins up, apply the resources defined in [main.tftest.hcl](./main.tftest.hcl) against it, then tear the installation down.

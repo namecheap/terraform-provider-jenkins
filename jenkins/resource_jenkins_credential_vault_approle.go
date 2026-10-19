@@ -63,11 +63,14 @@ func vaultAppRoleCredentialSpec() credentialSpec[credentialVaultAppRoleResourceM
 		setID: func(m *credentialVaultAppRoleResourceModel, id string) {
 			m.ID = types.StringValue(id)
 		},
+		// The secret_id is optional. Create sends an unset secret_id as an empty
+		// element, which Jenkins then reports as a stored value, so an update
+		// without a secret_id that Terraform has never managed fails.
 		secretFields: []credentialSecretField[credentialVaultAppRoleResourceModel]{{
 			name:         "secret_id",
 			hasWriteOnly: true,
+			element:      "secretId",
 			plainValue:   func(m *credentialVaultAppRoleResourceModel) types.String { return m.SecretID },
-			woVersion:    func(m *credentialVaultAppRoleResourceModel) types.String { return m.SecretIDWoVersion },
 		}},
 		build: func(m *credentialVaultAppRoleResourceModel, secrets map[string]string) interface{} {
 			cred := &VaultAppRoleCredentials{
@@ -129,7 +132,7 @@ Manages a Vault AppRole credential within Jenkins. This credential may then be r
 				Required:            true,
 			},
 			"secret_id": schema.StringAttribute{
-				MarkdownDescription: "The secret_id to be associated with the credentials. If empty then the secret_id property will become unmanaged and expected to be set manually within Jenkins. If set then the secret_id will be updated only upon changes -- if the secret_id is set manually within Jenkins then it will not reconcile this drift until the next time the secret_id property is changed.",
+				MarkdownDescription: "The secret_id to be associated with the credentials. Jenkins cannot keep a stored secret_id across an update, so every update re-sends the configured secret_id, replacing one set within Jenkins, and removing `secret_id` or `secret_id_wo` from a configuration that set it clears the secret_id. If neither is ever set, the credential is created with an empty secret_id and **any later in-place update fails** (instead of erasing a secret_id that may since have been set within Jenkins), because Jenkins reports a stored secret_id even when it is empty. Set `secret_id = \"\"` to manage an empty secret_id.",
 				Optional:            true,
 				Sensitive:           true,
 			},

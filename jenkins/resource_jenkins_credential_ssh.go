@@ -51,18 +51,19 @@ func sshCredentialSpec() credentialSpec[credentialSSHResourceModel] {
 		secretFields: []credentialSecretField[credentialSSHResourceModel]{
 			{
 				// The private-key source is structural and must be present in every
-				// create/update payload, so it is always sent (its value may come
-				// from the write-only companion).
+				// create/update payload; its value may come from the write-only
+				// companion.
 				name:         "privatekey",
 				hasWriteOnly: true,
-				alwaysSend:   true,
 				plainValue:   func(m *credentialSSHResourceModel) types.String { return m.PrivateKey },
-				woVersion:    func(m *credentialSSHResourceModel) types.String { return m.PrivateKeyWoVersion },
 			},
 			{
-				// The passphrase has no write-only companion; it is sent on create
-				// and, on update, only when it changed.
+				// The passphrase is optional and has no write-only companion. Create
+				// leaves an empty passphrase out, so Jenkins holds none; an update
+				// without one that Terraform has never managed proceeds only when
+				// Jenkins still holds none.
 				name:       "passphrase",
+				element:    "passphrase",
 				plainValue: func(m *credentialSSHResourceModel) types.String { return m.Passphrase },
 			},
 		},
@@ -117,7 +118,7 @@ Manages a SSH credential within Jenkins. This SSH credential may then be referen
 				Sensitive:           true,
 			},
 			"passphrase": schema.StringAttribute{
-				MarkdownDescription: "Passphrase for privatekey. This has to be skipped if private key was created without passphrase.",
+				MarkdownDescription: "Passphrase for privatekey. This has to be skipped if private key was created without passphrase. Every update re-sends it, and removing it from a configuration that set it clears it. If it is never set, an update fails instead of erasing a passphrase that Jenkins holds for the credential (for example one set within Jenkins, or before an import).",
 				Optional:            true,
 				Sensitive:           true,
 			},

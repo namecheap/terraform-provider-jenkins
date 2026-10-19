@@ -47,11 +47,14 @@ func usernameCredentialSpec() credentialSpec[credentialUsernameResourceModel] {
 		setID: func(m *credentialUsernameResourceModel, id string) {
 			m.ID = types.StringValue(id)
 		},
+		// The password is optional. Create sends an unset password as an empty
+		// element, which Jenkins then reports as a stored value, so an update
+		// without a password that Terraform has never managed fails.
 		secretFields: []credentialSecretField[credentialUsernameResourceModel]{{
 			name:         "password",
 			hasWriteOnly: true,
+			element:      "password",
 			plainValue:   func(m *credentialUsernameResourceModel) types.String { return m.Password },
-			woVersion:    func(m *credentialUsernameResourceModel) types.String { return m.PasswordWoVersion },
 		}},
 		build: func(m *credentialUsernameResourceModel, secrets map[string]string) interface{} {
 			cred := &jenkins.UsernameCredentials{
@@ -95,7 +98,7 @@ Manages a username credential within Jenkins. This username may then be referenc
 				Required:            true,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "The password to be associated with the credentials. If empty then the password property will become unmanaged and expected to be set manually within Jenkins. If set then the password will be updated only upon changes -- if the password is set manually within Jenkins then it will not reconcile this drift until the next time the password property is changed.",
+				MarkdownDescription: "The password to be associated with the credentials. Jenkins cannot keep a stored password across an update, so every update re-sends the configured password, replacing one set within Jenkins, and removing `password` or `password_wo` from a configuration that set it clears the password. If neither is ever set, the credential is created with an empty password and **any later in-place update fails** (instead of erasing a password that may since have been set within Jenkins), because Jenkins reports a stored password even when it is empty. Set `password = \"\"` to manage an empty password.",
 				Optional:            true,
 				Sensitive:           true,
 			},

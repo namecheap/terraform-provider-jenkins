@@ -91,6 +91,32 @@ newly added job can't silently escape its watch. It exists because:
   failing "CI OK" is the only thing that blocks such a PR from merging
   untested.
 
+## Jenkins version under test
+
+The acceptance and integration jobs, and local `make testacc`, run against the
+Jenkins image built from `integration/Dockerfile`. It is pinned to the **latest
+Jenkins LTS release**, the line listed in the
+[LTS changelog](https://www.jenkins.io/changelog-stable/), not to a weekly
+release:
+
+- Most controllers this provider manages run LTS, so CI tests what users run.
+  A weekly release can carry core changes that no LTS has yet, so a suite that
+  passes only on a weekly can hide a bug on the LTS line.
+- The `FROM` line names an exact LTS version in its `-lts-` tag form, for
+  example `jenkins/jenkins:2.580.1-lts-jdk21`. An exact version keeps runs
+  reproducible, and the CI image cache, keyed on the Dockerfile's hash,
+  refreshes when it changes. A floating tag such as `lts-jdk21` would leave the
+  cached image stale.
+- Dependabot's monthly `docker` update for `/integration` only offers tags with
+  the same suffix, so a `-lts-jdk21` tag moves to the next LTS (`2.580.2`,
+  `2.593.1`, ...) and never to a weekly `2.5xx-jdk21`. Weekly releases share the
+  plain `-jdk21` and `-alpine-jdk21` suffixes, and Jenkins publishes no Alpine
+  `-lts-` tag, so the image stays on the Debian-based `-lts-jdk21` form.
+- To bump by hand, take the newest version from the LTS changelog, check that
+  `jenkins/jenkins:<version>-lts-jdk21` exists on Docker Hub, update the `FROM`
+  line, and run `make testacc` and the integration test (`terraform test` in
+  `integration/`) before opening the PR.
+
 ## How docs reach the Terraform Registry
 
 `docs/` is **not** shipped inside the GoReleaser artifacts. When GoReleaser
@@ -121,6 +147,30 @@ removes two full runs per release — the Release PR and its merge commit both
 finish in seconds — cutting post-merge release latency roughly in half
 (the remaining time is GoReleaser's ~6-minute build) and dropping the
 repository's Actions consumption accordingly.
+
+### Acceptance test shards
+
+The acceptance tests used to run one after another against a single Jenkins:
+107 tests took 287 seconds in October 2026, with a median of 2.3 seconds and
+none longer than 8. The Acceptance Tests job now splits them into shards with
+`.github/scripts/acceptance-shards.sh`, each against its own Jenkins container
+started from the cached image:
+
+- `start` runs one container per shard (port 8080 for shard 0, 8081 for shard 1,
+  and so on) before Go is set up, so the boots overlap the compile.
+- `run` lists the `TestAcc` tests, deals them round-robin across the shards,
+  runs one `go test` per shard side by side, prints each shard's log in its own
+  group, and merges the coverage profiles into `coverage.txt` for Codecov.
+
+Each shard has its own Jenkins, so tests that change global state (CasC,
+global roles, users) cannot affect each other, and the tests need no
+`t.Parallel`. The shards run with `-count=1`: the job restores its Go build
+cache (see [Go caches](#go-caches)), which also holds test results, and
+without it a test binary that hasn't changed would report an earlier run's
+results instead of testing this run's Jenkins. `ACC_SHARDS` sets the number of shards (default 3, which fits
+the 4-vCPU runner). The job keeps its name, so the required "Acceptance
+Tests" check is unchanged. Locally, `make testacc` still runs the suite
+against one container.
 
 ## Go caches
 
@@ -194,6 +244,8 @@ threat model.
   drift.
 - **New "expensive" jobs should take the gate**: `needs: changes` +
   `if: needs.changes.outputs.code == 'true'`.
+- **Keep the test Jenkins on the LTS line**, in the `-lts-` tag form (see
+  [Jenkins version under test](#jenkins-version-under-test)).
 - **The gate's ignore list must stay a subset of "files that can't affect
   the binary, tests, or published docs"** — when in doubt, let the job run.
   In particular `docs/**` must never be added to it: registry-published

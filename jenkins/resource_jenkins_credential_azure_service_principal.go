@@ -76,9 +76,11 @@ func newCredentialAzureServicePrincipalResource() resource.Resource {
 // shared credential CRUD flow (see credential_crud.go). Two mutually-exclusive
 // authentication secrets are possible (enforced by ConfigValidators):
 //
-//   - client_secret — a true secret with a write-only companion; sent on create
-//     and, on update, only when it changed (plain) or its version trigger bumped
-//     (write-only). Modeled as the single secretField.
+//   - client_secret — a true secret with a write-only companion, sent on every
+//     create and update (Jenkins cannot keep a stored secret across an update).
+//     Modeled as the single secretField. It has no element: when
+//     certificate_id is set instead, client_secret is unset by design and is
+//     sent empty, clearing any secret left from a switch of authentication.
 //   - certificate_id — a reference to a Jenkins certificate credential. It is not
 //     write-only and is always set from the model. Setting it unconditionally in
 //     build reproduces the fixed behavior of re-sending it whenever the
@@ -100,7 +102,6 @@ func azureServicePrincipalCredentialSpec() credentialSpec[credentialAzureService
 			name:         "client_secret",
 			hasWriteOnly: true,
 			plainValue:   func(m *credentialAzureServicePrincipalResourceModel) types.String { return m.ClientSecret },
-			woVersion:    func(m *credentialAzureServicePrincipalResourceModel) types.String { return m.ClientSecretWoVersion },
 		}},
 		build: func(m *credentialAzureServicePrincipalResourceModel, secrets map[string]string) interface{} {
 			cred := &AzureServicePrincipalCredentials{
@@ -224,19 +225,4 @@ func (r *credentialAzureServicePrincipalResource) ConfigValidators(_ context.Con
 			path.MatchRoot("client_secret_wo_version"),
 		),
 	}
-}
-
-// buildAzureServicePrincipalUpdate constructs the plain-secret update payload the
-// same way the shared CRUD flow does (resolveSecretsUpdate's plain case, then
-// build): client_secret is included only when it changed, and certificate_id is
-// always taken from the model (an empty value means not certificate-based) and
-// written to CertificateId — never ClientId (the #95 bug). It delegates to the
-// spec's build so the #95 regression test (TestBuildAzureServicePrincipalUpdate)
-// exercises the real production mapping.
-func buildAzureServicePrincipalUpdate(data, state credentialAzureServicePrincipalResourceModel) AzureServicePrincipalCredentials {
-	secrets := map[string]string{}
-	if !data.ClientSecret.Equal(state.ClientSecret) {
-		secrets["client_secret"] = data.ClientSecret.ValueString()
-	}
-	return *azureServicePrincipalCredentialSpec().build(&data, secrets).(*AzureServicePrincipalCredentials)
 }

@@ -201,13 +201,12 @@ jobs:
           fi
 
       - name: Start Jenkins
-        env:
-          COMPOSE_FILE: ./integration/docker-compose.yml
-        # Start the container detached and DON'T block here. Jenkins boots
-        # (~10-13s) in the background while the next steps install Go and
-        # compile the tests, so the boot is hidden under work that has to
-        # happen anyway instead of being a serial wait.
-        run: docker compose up -d --force-recreate jenkins
+        # Start one Jenkins container per acceptance shard (see "Acceptance
+        # test shards" in CI.md), detached, and DON'T block here. Jenkins boots
+        # in the background while the next steps install Go and compile the
+        # tests, so the boot is hidden under work that has to happen anyway
+        # instead of being a serial wait.
+        run: .github/scripts/acceptance-shards.sh start
 
       # Install Go and restore module/build caches AFTER Jenkins has started,
       # so its boot overlaps this step and the warm compile below.
@@ -229,11 +228,11 @@ jobs:
       - name: Run acceptance tests
         env:
           TF_ACC: "1"
-          JENKINS_URL: "http://localhost:8080"
           JENKINS_USERNAME: "admin"
           # The acceptance Jenkins now runs a local security realm (see
           # integration/jenkins.yaml) with a fixed admin/admin account, matching
-          # the integration test and local `make testacc`.
+          # the integration test and local `make testacc`. Each shard gets its
+          # own JENKINS_URL from the script.
           JENKINS_PASSWORD: "admin"
         run: |
           # Warm the build cache (compile only, run no tests) while Jenkins
@@ -241,9 +240,9 @@ jobs:
           # compilation instead of waiting for it serially. -covermode=atomic
           # matches the real run's build flags so its compile is a cache hit.
           go test -covermode=atomic -run='^$' ./... >/dev/null
-          # By now Jenkins is almost certainly healthy; confirm before running.
-          timeout 120 bash -c 'until [ "$(docker inspect jenkins-provider-acc --format "{{ .State.Health.Status }}")" = "healthy" ]; do sleep 2; done'
-          go test -v -covermode=atomic -coverprofile=coverage.txt -run "^TestAcc" ./...
+          # Waits for each shard's Jenkins, runs the shards side by side and
+          # merges their coverage into coverage.txt.
+          .github/scripts/acceptance-shards.sh run
 
       - name: Trust Codecov GPG key
         run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
