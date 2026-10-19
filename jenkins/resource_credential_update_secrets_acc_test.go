@@ -2,8 +2,11 @@ package jenkins
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -20,7 +23,7 @@ import (
 // update of a credential keeps the secrets Jenkins stores for it. Jenkins'
 // config.xml update replaces the whole credential, so a secret the provider
 // does not re-send is erased. Jenkins never returns a secret, so the tests read
-// what it holds in two ways that do not reveal the value:
+// what it holds in ways that do not reveal the value:
 //
 //   - config.xml has an element for each secret Jenkins holds. An SSH
 //     passphrase sent empty or left out is stored as none, so its element shows
@@ -29,6 +32,9 @@ import (
 //   - A certificate credential's display name is the subject of the
 //     certificate in its keystore, which Jenkins can read only with both the
 //     keystore and its password intact.
+//   - The script console compares the SHA-256 digest of a stored secret with
+//     the digest of the value it must hold (testAccCheckStoredSecret), which
+//     tells an emptied or replaced secret from the applied one.
 //
 // Where an update must fail instead, the tests check that it posted nothing:
 // the description stored in Jenkins is unchanged.
@@ -53,12 +59,21 @@ func testAccSecretUpdateName(kind string) string {
 // Terraform already has.
 func testAccCreateCredentialInJenkins(t *testing.T, name string, cred interface{}) {
 	t.Helper()
+	testAccCreateCredentialInFolder(t, "", name, cred)
+}
+
+// testAccCreateCredentialInFolder is testAccCreateCredentialInJenkins for the
+// store of folder ("" for the system store).
+func testAccCreateCredentialInFolder(t *testing.T, folder, name string, cred interface{}) {
+	t.Helper()
 	ctx := context.Background()
-	if err := testAccClient.Credentials().Add(ctx, defaultCredentialDomain, cred); err != nil {
+	manager := testAccClient.Credentials()
+	manager.Folder = formatFolderName(folder)
+	if err := manager.Add(ctx, defaultCredentialDomain, cred); err != nil {
 		t.Fatalf("creating credential %s in Jenkins: %v", name, err)
 	}
 	t.Cleanup(func() {
-		_ = testAccClient.Credentials().Delete(ctx, defaultCredentialDomain, name)
+		_ = manager.Delete(ctx, defaultCredentialDomain, name)
 	})
 }
 
@@ -128,6 +143,52 @@ func testAccCheckCertificateDisplayName(resourceName, want string) resource.Test
 		}
 		if got.DisplayName != want {
 			return fmt.Errorf("display name in Jenkins = %q, want %q: the keystore or its password was erased", got.DisplayName, want)
+		}
+		return nil
+	}
+}
+
+// storedSecretScript is a script console script that prints, as JSON, whether
+// the credential with ID %[1]s in the global domain of the system store exists,
+// whether it holds the secret at the property path %[2]s, and the secret's
+// SHA-256 digest. It reads the secret without changing anything and without
+// printing it.
+const storedSecretScript = `
+def c = com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance().getCredentials().find { it.id == '%[1]s' }
+def v = c
+'%[2]s'.tokenize('.').each { v = v?."$it" }
+if (v instanceof hudson.util.Secret) { v = v.plainText }
+def digest = v == null ? '' : java.security.MessageDigest.getInstance('SHA-256').digest(v.toString().getBytes('UTF-8')).encodeHex().toString()
+println(groovy.json.JsonOutput.toJson([found: c != null, held: v != null, sha256: digest]))
+`
+
+// testAccCheckStoredSecret checks that the credential resourceName manages, in
+// the system store, holds want at the property path property of its Jenkins
+// object (for example "password", or "privateKeySource.privateKey"). Jenkins
+// never returns a secret through its API, so the check compares digests
+// through the script console.
+func testAccCheckStoredSecret(resourceName, property, want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("%s not found", resourceName)
+		}
+		var got struct {
+			Found  bool   `json:"found"`
+			Held   bool   `json:"held"`
+			SHA256 string `json:"sha256"`
+		}
+		script := fmt.Sprintf(storedSecretScript, rs.Primary.Attributes["name"], property)
+		form := url.Values{"script": {script}}.Encode()
+		if _, err := testAccClient.Requester.Post(context.Background(), "/scriptText", strings.NewReader(form), &got, nil); err != nil {
+			return fmt.Errorf("reading %s of %s from Jenkins: %w", property, resourceName, err)
+		}
+		if !got.Found {
+			return fmt.Errorf("Jenkins has no credential for %s", resourceName)
+		}
+		sum := sha256.Sum256([]byte(want))
+		if !got.Held || got.SHA256 != hex.EncodeToString(sum[:]) {
+			return fmt.Errorf("Jenkins holds a different %s for %s than %q (held: %t): the secret was erased or replaced", property, resourceName, want, got.Held)
 		}
 		return nil
 	}
@@ -453,5 +514,261 @@ func TestAccJenkinsCredentialCertificate_updateKeepsIgnoredPassword(t *testing.T
 			resource.TestCheckNoResourceAttr(resourceName, "password"),
 			testAccCheckStateLacks("tfacc-placeholder"),
 		),
+	})
+}
+
+func TestAccJenkinsCredentialSSH_updateKeepsIgnoredPassphrase(t *testing.T) {
+	name := testAccSecretUpdateName("ssh-ign")
+	const resourceName = "jenkins_credential_ssh.foo"
+	config := func(description, passphrase, lifecycle string) string {
+		return fmt.Sprintf(`
+		resource jenkins_credential_ssh foo {
+		  name        = %q
+		  description = %q
+		  username    = "tfacc-user"
+		  privatekey  = "Some fake private key"
+		  passphrase  = %q
+		  %s
+		}`, name, description, passphrase, lifecycle)
+	}
+	const ignorePassphrase = "lifecycle {\n ignore_changes = [passphrase]\n }"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialSSHDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config("old", "tfacc-applied", ""),
+				Check:  testAccCheckStoredSecret(resourceName, "passphrase", "tfacc-applied"),
+			},
+			{
+				// ignore_changes keeps the applied passphrase in the plan: the
+				// update re-sends it, not the configured one.
+				Config: config("new", "tfacc-configured", ignorePassphrase),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckStoredCredential(resourceName, "new", []string{"passphrase"}, nil),
+					testAccCheckStoredSecret(resourceName, "passphrase", "tfacc-applied"),
+					resource.TestCheckResourceAttr(resourceName, "passphrase", "tfacc-applied"),
+				),
+			},
+			{
+				// A configured "" under ignore_changes does not clear it either.
+				Config: config("newer", "", ignorePassphrase),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckStoredCredential(resourceName, "newer", []string{"passphrase"}, nil),
+					testAccCheckStoredSecret(resourceName, "passphrase", "tfacc-applied"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccJenkinsCredential_updateKeepsWriteOnlySecrets(t *testing.T) {
+	sshName := testAccSecretUpdateName("ssh-wo-keep")
+	userName := testAccSecretUpdateName("user-wo-keep")
+	vaultName := testAccSecretUpdateName("vault-wo-keep")
+	config := func(description string) string {
+		return fmt.Sprintf(`
+		resource jenkins_credential_ssh foo {
+		  name                  = %[1]q
+		  description           = %[4]q
+		  username              = "tfacc-user"
+		  privatekey_wo         = "tfacc-wo-private-key"
+		  privatekey_wo_version = "1"
+		}
+
+		resource jenkins_credential_username foo {
+		  name                = %[2]q
+		  description         = %[4]q
+		  username            = "tfacc-user"
+		  password_wo         = "tfacc-wo-password"
+		  password_wo_version = "1"
+		}
+
+		resource jenkins_credential_vault_approle foo {
+		  name                 = %[3]q
+		  description          = %[4]q
+		  role_id              = "tfacc-role"
+		  secret_id_wo         = "tfacc-wo-secret-id"
+		  secret_id_wo_version = "1"
+		}`, sshName, userName, vaultName, description)
+	}
+	// Jenkins keeps these secret elements in config.xml even when they are
+	// emptied, so the checks compare the stored values.
+	checks := func(description string) resource.TestCheckFunc {
+		return resource.ComposeAggregateTestCheckFunc(
+			testAccCheckStoredCredential("jenkins_credential_ssh.foo", description, nil, nil),
+			testAccCheckStoredSecret("jenkins_credential_ssh.foo", "privateKeySource.privateKey", "tfacc-wo-private-key"),
+			testAccCheckStoredCredential("jenkins_credential_username.foo", description, nil, nil),
+			testAccCheckStoredSecret("jenkins_credential_username.foo", "password", "tfacc-wo-password"),
+			testAccCheckStoredCredential("jenkins_credential_vault_approle.foo", description, nil, nil),
+			testAccCheckStoredSecret("jenkins_credential_vault_approle.foo", "secretId", "tfacc-wo-secret-id"),
+			testAccCheckStateLacks("tfacc-wo-"),
+		)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		TerraformVersionChecks:   []tfversion.TerraformVersionCheck{tfversion.SkipBelow(tfversion.Version1_11_0)},
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy: resource.ComposeTestCheckFunc(
+			testAccCheckJenkinsCredentialSSHDestroy,
+			testAccCheckJenkinsCredentialUsernameDestroy,
+			testAccCheckJenkinsCredentialVaultAppRoleDestroy,
+		),
+		Steps: []resource.TestStep{
+			{
+				Config: config("old"),
+				Check:  checks("old"),
+			},
+			{
+				// A description-only update re-sends every write-only secret
+				// although its version is unchanged.
+				Config: config("new"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("jenkins_credential_ssh.foo", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("jenkins_credential_username.foo", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("jenkins_credential_vault_approle.foo", plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: checks("new"),
+			},
+		},
+	})
+}
+
+func TestAccJenkinsCredentialUsername_updateKeepsPasswordSetInJenkinsInFolder(t *testing.T) {
+	name := testAccSecretUpdateName("user-imp-folder")
+	folder := testAccSecretUpdateName("folder")
+	const resourceName = "jenkins_credential_username.foo"
+	// The folder's config.xml holds its credential store, so its template
+	// changes when the credential is created. The credential refers to the
+	// folder by name, as import stores it, so that it is destroyed first.
+	folderConfig := fmt.Sprintf(`
+		resource jenkins_folder foo {
+		  name = %q
+
+		  lifecycle {
+		    ignore_changes = [template]
+		  }
+		}`, folder)
+	config := func(description string) string {
+		return folderConfig + fmt.Sprintf(`
+		resource jenkins_credential_username foo {
+		  name        = %q
+		  folder      = jenkins_folder.foo.name
+		  description = %q
+		  username    = "tfacc-user"
+		}`, name, description)
+	}
+	create := func() {
+		testAccCreateCredentialInFolder(t, folder, name, &jenkins.UsernameCredentials{
+			ID: name, Scope: "GLOBAL", Description: "old", Username: "tfacc-user", Password: "set-in-jenkins",
+		})
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy: resource.ComposeTestCheckFunc(
+			testAccCheckJenkinsCredentialUsernameDestroy,
+			testAccCheckJenkinsFolderDestroy,
+		),
+		Steps: append([]resource.TestStep{{Config: folderConfig}},
+			testAccImportedCredentialSteps(resourceName, folder+"/_/"+name, create, config("old"), config("new"), errUpdateWouldErase,
+				testAccCheckStoredCredential(resourceName, "old", []string{"password"}, nil),
+				resource.TestCheckResourceAttr(resourceName, "folder", folder),
+				resource.TestCheckNoResourceAttr(resourceName, "password"),
+			)...),
+	})
+}
+
+func TestAccJenkinsCredentialSSH_droppingWriteOnlyPrivateKeyFails(t *testing.T) {
+	name := testAccSecretUpdateName("ssh-wo-drop")
+	const resourceName = "jenkins_credential_ssh.foo"
+	const writeOnlyKey = "privatekey_wo = \"tfacc-wo-private-key\"\n privatekey_wo_version = \"1\""
+	config := func(description, key string) string {
+		return fmt.Sprintf(`
+		resource jenkins_credential_ssh foo {
+		  name        = %q
+		  description = %q
+		  username    = "tfacc-user"
+		  %s
+		}`, name, description, key)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		TerraformVersionChecks:   []tfversion.TerraformVersionCheck{tfversion.SkipBelow(tfversion.Version1_11_0)},
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialSSHDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config("old", writeOnlyKey),
+				Check:  testAccCheckStoredSecret(resourceName, "privateKeySource.privateKey", "tfacc-wo-private-key"),
+			},
+			{
+				// Terraform has no value to send for a dropped write-only key:
+				// the configuration is rejected instead of erasing it.
+				Config:      config("new", ""),
+				ExpectError: errDroppedRequiredSecret,
+			},
+			{
+				Config: config("old", writeOnlyKey),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckStoredCredential(resourceName, "old", nil, nil),
+					testAccCheckStoredSecret(resourceName, "privateKeySource.privateKey", "tfacc-wo-private-key"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccJenkinsCredentialCertificate_droppingWriteOnlyKeystoreFails(t *testing.T) {
+	name := testAccSecretUpdateName("cert-wo-drop")
+	const resourceName = "jenkins_credential_certificate.foo"
+	config := func(description, keystore string) string {
+		return fmt.Sprintf(`
+		resource jenkins_credential_certificate foo {
+		  name        = %q
+		  description = %q
+		  password    = "changeit"
+		  %s
+		}`, name, description, keystore)
+	}
+	writeOnlyKeystore := fmt.Sprintf("keystore_wo = %q\n keystore_wo_version = \"1\"", testCertificateKeystoreB64)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		TerraformVersionChecks:   []tfversion.TerraformVersionCheck{tfversion.SkipBelow(tfversion.Version1_11_0)},
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsCredentialCertificateDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config("old", writeOnlyKeystore),
+				Check:  testAccCheckCertificateDisplayName(resourceName, testCertificateSubject+" (old)"),
+			},
+			{
+				// Terraform has no value to send for a dropped write-only
+				// keystore: the configuration is rejected instead of erasing it.
+				Config:      config("new", ""),
+				ExpectError: errDroppedRequiredSecret,
+			},
+			{
+				Config: config("old", writeOnlyKeystore),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: testAccCheckCertificateDisplayName(resourceName, testCertificateSubject+" (old)"),
+			},
+		},
 	})
 }
