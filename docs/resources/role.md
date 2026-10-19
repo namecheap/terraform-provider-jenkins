@@ -67,7 +67,7 @@ resource "jenkins_role" "admin" {
 
 ### Required
 
-- `name` (String) The unique name of the role.
+- `name` (String) The unique name of the role. Must not contain a comma.
 - `permissions` (Set of String) The permission IDs granted by the role, e.g. `hudson.model.Item.Build`.
 - `type` (String) The role type: `global`, `item`, or `agent`.
 
