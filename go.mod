@@ -2,7 +2,7 @@ module github.com/namecheap/terraform-provider-jenkins
 
 go 1.26.6
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/bndr/gojenkins v1.2.1-0.20261007145457-742374c74483
