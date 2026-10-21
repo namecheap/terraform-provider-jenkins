@@ -17,11 +17,11 @@ the same key and secrets are reused here.
 **Key owner:** the SQUID / Namecheap Cloud Platform team (`squid@namecheap.com`).
 Contact them for rotation or access requests.
 
-### 2. Add the signing secrets to the `release` environment
+### 2. Signing secrets
 
-`release.yml` reads `GPG_PRIVATE_KEY` and `PASSPHRASE` as secrets of the
-`release` environment it runs in. GitHub secrets are write-only, so get the
-values from the key owner above.
+`GPG_PRIVATE_KEY` and `PASSPHRASE` are organisation secrets shared with this
+repository. GitHub secrets are write-only, so the organisation secret is the
+only copy; contact the key owner above for rotation.
 
 ### 3. Connect to Terraform Registry
 
@@ -85,11 +85,9 @@ PR", and a binary is published only when a maintainer merges that PR.
    Merging commits the version bump, creates the `vX.Y.Z` tag, and publishes
    the GitHub Release notes.
 4. **GoReleaser publishes binaries** — `.github/workflows/release.yml` runs on
-   the pushed tag in the `release` environment, checks that the tag is a
-   release of `main`, builds all platforms, signs `SHA256SUMS` with the GPG
-   key, and attaches artifacts + `terraform-registry-manifest.json` to the
-   release. The Terraform Registry webhook then indexes the new version
-   (~2–5 min).
+   the pushed tag: builds all platforms, signs `SHA256SUMS` with the GPG key,
+   and attaches artifacts + `terraform-registry-manifest.json` to the release.
+   The Terraform Registry webhook then indexes the new version (~2–5 min).
 
 ### Dependency bumps and releases
 
@@ -119,10 +117,6 @@ Known cases:
   the always-run `CI OK` job completes the run successfully, so versioning
   fires as usual (see [CI.md](CI.md)). If versioning didn't run, look for an
   actual CI failure rather than a missing trigger.
-- **"Release refused" at "Verify tag is a release of main"**: the tagged
-  commit is not on `main`, or the tag name is not `v` plus the version in
-  `.release-please-manifest.json` at that commit. Nothing was signed or
-  published. Remove the tag and tag the commit that bumped the manifest.
 - **GoReleaser failed after the tag was created** (bad GPG key, upload
   error): the GitHub Release exists without binaries. The Terraform Registry
   will not ingest an artifact-less version, so nothing broken is served —
@@ -146,9 +140,9 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-`release.yml` refuses the tag unless its commit is on `main` and the manifest
-there names the tag's version. The next release-please run reconciles its
-state with the updated manifest.
+Only a repository admin can push the tag (see [Release tags](#release-tags)).
+`release.yml` runs on the pushed tag as usual, and the next release-please run
+reconciles its state with the updated manifest.
 
 One caveat: in the manual path GoReleaser is the release *creator*, and its
 changelog is disabled (release-please owns release notes in the normal flow),
@@ -173,6 +167,14 @@ terraform {
 ```bash
 terraform init   # should download from registry.terraform.io
 ```
+
+---
+
+## Release tags
+
+A `release-tags` tag ruleset restricts creating, updating and deleting `v*`
+tags. Only the release App (`namecheap-i-app`) and repository admins can bypass
+it.
 
 ---
 

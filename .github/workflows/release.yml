@@ -13,7 +13,6 @@ permissions:
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
-    environment: release
     steps:
       # fetch-depth: 0 pulls full history and all tags — required by goreleaser
       # to identify the previous tag (changelog is owned by release-please).
@@ -27,31 +26,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Verify tag is a release of main
-        run: |
-          set -euo pipefail
-          if ! commit=$(git rev-parse --verify --quiet "${GITHUB_SHA}^{commit}"); then
-            echo "::error title=Release refused::The pushed tag does not point at a commit."
-            exit 1
-          fi
-          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
-            echo "::error title=Release refused::The tagged commit is not on main."
-            printf 'tag=%s commit=%s\n' "$GITHUB_REF_NAME" "$commit" >&2
-            exit 1
-          fi
-          if ! version=$(git show "${commit}:.release-please-manifest.json" \
-              | jq -er '."." | strings | select(length > 0)'); then
-            echo "::error title=Release refused::No version under \".\" in .release-please-manifest.json at the tagged commit."
-            exit 1
-          fi
-          if [ "$GITHUB_REF_NAME" != "v${version}" ]; then
-            echo "::error title=Release refused::The tag name is not v<version> from .release-please-manifest.json at the tagged commit."
-            printf 'tag=%s manifest=%s commit=%s\n' "$GITHUB_REF_NAME" "$version" "$commit" >&2
-            exit 1
-          fi
-          printf 'Releasing %s: commit %s is on main and matches the manifest.\n' "$GITHUB_REF_NAME" "$commit"
 
       - name: Import GPG key
         id: import_gpg
