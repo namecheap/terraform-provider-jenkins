@@ -13,12 +13,6 @@ permissions:
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
-    # Gate for the signing secrets (#251). Until an admin configures it, GitHub
-    # creates `release` unprotected on the first run and the job behaves as
-    # before (organisation secrets are still visible to it). Moving
-    # GPG_PRIVATE_KEY and PASSPHRASE into this environment, with required
-    # reviewers and a deployment rule allowing `v*` tags, then needs no change
-    # here. See "Release hardening" in RELEASE.md.
     environment: release
     steps:
       # fetch-depth: 0 pulls full history and all tags — required by goreleaser
@@ -34,19 +28,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Refuse to sign or publish a tag that is not a release of main (#251).
-      # Release tags are made by release-please on the Release PR merge commit,
-      # or by hand on main after a merged manifest bump (RELEASE.md), so the
-      # tagged commit is on main and its manifest names the tag's version. A tag
-      # on an unreviewed branch commit, or an older main commit tagged as a newer
-      # version, fails here before the GPG key is imported.
-      #
-      # GitHub runs the copy of this file at the tagged commit, so this stops
-      # mistaken tags but not a writer who also edits it out on that commit;
-      # the tag ruleset and protected `release` environment in RELEASE.md do.
-      #
-      # The tag name is chosen by whoever pushes it: it is read only from the
-      # environment, only compared, and never put into a workflow command.
       - name: Verify tag is a release of main
         run: |
           set -euo pipefail

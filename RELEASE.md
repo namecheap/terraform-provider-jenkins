@@ -17,32 +17,11 @@ the same key and secrets are reused here.
 **Key owner:** the SQUID / Namecheap Cloud Platform team (`squid@namecheap.com`).
 Contact them for rotation or access requests.
 
-**Canonical storage:** the private key and passphrase live in **HashiCorp
-Vault** at the KV v2 path below (the authoritative source of truth — GitHub
-repository secrets are only mirrors of these values):
-
-| Vault path                                          | Field         | Maps to GitHub secret |
-|-----------------------------------------------------|---------------|-----------------------|
-| `kv/squid/terraform-registry/gpg-signing-key`       | `private_key` | `GPG_PRIVATE_KEY`     |
-| `kv/squid/terraform-registry/gpg-signing-key`       | `passphrase`  | `PASSPHRASE`          |
-
-Read them with the Vault CLI (requires SQUID-team Vault access):
-
-```bash
-vault kv get kv/squid/terraform-registry/gpg-signing-key
-```
-
 ### 2. Add the signing secrets to the `release` environment
 
-`GPG_PRIVATE_KEY` and `PASSPHRASE` belong in the protected `release`
-environment, not in the repository's or organisation's secrets, so only an
-approved release run can read them. See
-[Protected `release` environment](#protected-release-environment).
-
-> **Note:** GitHub secrets are write-only and cannot be read back through the
-> UI or API. Retrieve the canonical values from HashiCorp Vault
-> (`kv/squid/terraform-registry/gpg-signing-key`, see step 1) rather than from
-> the Spaceship repository's secrets — Vault is the source of truth.
+`release.yml` reads `GPG_PRIVATE_KEY` and `PASSPHRASE` as secrets of the
+`release` environment it runs in. GitHub secrets are write-only, so get the
+values from the key owner above.
 
 ### 3. Connect to Terraform Registry
 
@@ -106,14 +85,11 @@ PR", and a binary is published only when a maintainer merges that PR.
    Merging commits the version bump, creates the `vX.Y.Z` tag, and publishes
    the GitHub Release notes.
 4. **GoReleaser publishes binaries** — `.github/workflows/release.yml` runs on
-   the pushed tag and checks that the tag is a release of `main`. Once the
-   `release` environment is protected (see
-   [Release hardening](#release-hardening)), it waits for a maintainer to
-   approve the deployment (**Review deployments** on the run). It then builds
-   all platforms, signs
-   `SHA256SUMS` with the GPG key, and attaches artifacts +
-   `terraform-registry-manifest.json` to the release. The Terraform Registry
-   webhook then indexes the new version (~2–5 min).
+   the pushed tag in the `release` environment, checks that the tag is a
+   release of `main`, builds all platforms, signs `SHA256SUMS` with the GPG
+   key, and attaches artifacts + `terraform-registry-manifest.json` to the
+   release. The Terraform Registry webhook then indexes the new version
+   (~2–5 min).
 
 ### Dependency bumps and releases
 
@@ -146,8 +122,7 @@ Known cases:
 - **"Release refused" at "Verify tag is a release of main"**: the tagged
   commit is not on `main`, or the tag name is not `v` plus the version in
   `.release-please-manifest.json` at that commit. Nothing was signed or
-  published. Remove the tag (see the manual release section for the ruleset
-  bypass) and tag the commit that bumped the manifest.
+  published. Remove the tag and tag the commit that bumped the manifest.
 - **GoReleaser failed after the tag was created** (bad GPG key, upload
   error): the GitHub Release exists without binaries. The Terraform Registry
   will not ingest an artifact-less version, so nothing broken is served —
@@ -171,13 +146,9 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The `release-tags` ruleset (see [Release hardening](#release-hardening))
-rejects this push. An admin adds the **Repository admin** role to the
-ruleset's bypass list for the push and removes it straight after.
-`release.yml` still refuses the tag unless its commit is on `main` and the
-manifest there names the tag's version, and the run still waits for an
-approval. The next release-please run reconciles its state with the updated
-manifest.
+`release.yml` refuses the tag unless its commit is on `main` and the manifest
+there names the tag's version. The next release-please run reconciles its
+state with the updated manifest.
 
 One caveat: in the manual path GoReleaser is the release *creator*, and its
 changelog is disabled (release-please owns release notes in the normal flow),
@@ -202,103 +173,6 @@ terraform {
 ```bash
 terraform init   # should download from registry.terraform.io
 ```
-
----
-
-## Release hardening
-
-A `v*` tag is enough to build, sign and publish a version that every Registry
-user can install. Three controls limit that tag and the signing key to
-reviewed releases of `main` (#251). The first is in this repository. An admin
-applies the other two once.
-
-| Control | Where | Stops |
-|---|---|---|
-| "Verify tag is a release of main" step | `release.yml` | A tag on a commit outside `main`, or one whose name is not `v` + the manifest version at that commit. Runs before the GPG key is imported. |
-| `release-tags` tag ruleset | Settings → Rules | Anyone but the release App creating, moving or deleting a `v*` tag. |
-| Protected `release` environment | Settings → Environments | Any job but an approved `release.yml` run for a `v*` tag reading `GPG_PRIVATE_KEY` or `PASSPHRASE`. |
-
-The workflow step catches mistaken tags, but not a writer who deletes the
-step on the tagged commit: GitHub runs the copy of `release.yml` at that
-commit. The ruleset and the environment do not depend on the tagged commit's
-contents.
-
-### Tag ruleset
-
-Settings → Rules → Rulesets → New ruleset → New tag ruleset:
-
-- Name `release-tags`, enforcement **Active**.
-- Target tags: include by pattern `v*`.
-- Rules: **Restrict creations**, **Restrict updates**, **Restrict deletions**.
-- Bypass list: only the release GitHub App (`namecheap-i-app`, the App behind
-  `APP_CLIENT_ID`), which creates the tag when the Release PR merges.
-
-Or through the API (`3872856` is the App's ID, from
-`gh api apps/namecheap-i-app --jq .id`):
-
-```bash
-gh api -X POST repos/namecheap/terraform-provider-jenkins/rulesets --input - <<'EOF'
-{
-  "name": "release-tags",
-  "target": "tag",
-  "enforcement": "active",
-  "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
-  "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
-  "bypass_actors": [{"actor_type": "Integration", "actor_id": 3872856, "bypass_mode": "always"}]
-}
-EOF
-```
-
-### Protected `release` environment
-
-`release.yml` runs its job in the `release` environment. If the environment
-does not exist, GitHub creates it, unprotected, on the first run, and the job
-behaves as it did before.
-
-1. Settings → Environments → `release` (**New environment** if it is absent).
-2. **Required reviewers**: the release maintainers. Enable **Prevent
-   self-review** and clear **Allow administrators to bypass configured
-   protection rules**.
-3. **Deployment branches and tags** → **Selected branches and tags** → add a
-   rule of type **Tag** with the pattern `v*`.
-4. **Environment secrets**: add `GPG_PRIVATE_KEY` and `PASSPHRASE` from Vault
-   (Prerequisites, step 1):
-
-   ```bash
-   gh secret set GPG_PRIVATE_KEY --env release --repo namecheap/terraform-provider-jenkins < private-key.asc
-   gh secret set PASSPHRASE --env release --repo namecheap/terraform-provider-jenkins
-   ```
-
-5. Remove this repository from the organisation secrets `GPG_PRIVATE_KEY`
-   and `PASSPHRASE` (organisation Settings → Secrets and variables → Actions
-   → each secret → Repository access). An environment secret only shadows an
-   organisation secret of the same name inside that environment's jobs.
-   Every other workflow in the repository can still read the organisation
-   copy.
-
-From then on, every release run waits at **Review deployments**. Approve only
-a run whose tag release-please created for the merged Release PR.
-
-### Checking the setup
-
-- `gh api repos/namecheap/terraform-provider-jenkins/rulesets` lists
-  `release-tags` as `active`.
-- Pushing a `v*` tag from a maintainer account is rejected with `GH013:
-  Repository rule violations found`. Use a name that cannot pass for a
-  release, such as `v0.0.0-ruleset-check`. If the push is accepted, the
-  ruleset is not active: delete the tag and reject the pending `release`
-  deployment.
-- `gh api repos/namecheap/terraform-provider-jenkins/actions/organization-secrets --jq '.secrets[].name'`
-  no longer lists `GPG_PRIVATE_KEY` or `PASSPHRASE`.
-
-### Remaining exposure
-
-The ruleset trusts the release App. The App's key, `APP_PRIVATE_KEY`, is an
-organisation secret that any workflow in this repository can read, so a
-writer could still mint an App token in a branch workflow and push a tag. The
-`release` environment's reviewers still stop that tag. Moving
-`APP_PRIVATE_KEY` into an environment limited to `main`, which
-`versioning.yml` would then name, removes this path.
 
 ---
 

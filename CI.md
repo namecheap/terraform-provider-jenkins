@@ -13,7 +13,7 @@ the CI mechanics.
 | CodeQL (advanced) | `.github/workflows/codeql.yml` | PR, push to `main`, weekly cron, manual | Static security analysis, provides the "CodeQL (go)" check (note: branch protection currently requires the org default-setup "Analyze (go)" check, not this one) |
 | PR Title Check | `.github/workflows/pr-title.yml` | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads) |
 | Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
-| Release | `.github/workflows/release.yml` | Push of a `v*` tag | Checks the tag is a release of `main`, then GoReleaser builds, signs and publishes binaries in the `release` environment (see "Release hardening" in [RELEASE.md](RELEASE.md)) |
+| Release | `.github/workflows/release.yml` | Push of a `v*` tag | Checks the tag is a release of `main`, then GoReleaser builds, signs and publishes binaries in the `release` environment |
 | Stale | `.github/workflows/stale.yml` | Daily cron | Labels inactive issues/PRs |
 
 ## Life of a change
