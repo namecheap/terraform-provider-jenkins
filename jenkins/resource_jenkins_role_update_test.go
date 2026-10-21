@@ -56,9 +56,19 @@ func TestRoleUpdateReconcilesEntries(t *testing.T) {
 			plan:  roleFakeModel("agent", "builders", "linux-.*", []string{"hudson.model.Computer.Build"}, []string{"dev"}, nil, nil),
 		},
 		{
+			name:  "move a SID from users to groups",
+			prior: roleFakeModel("item", "ops-repo", "ops-.*", read, []string{"dev"}, nil, nil),
+			plan:  roleFakeModel("item", "ops-repo", "ops-.*", read, nil, []string{"dev"}, nil),
+		},
+		{
+			name:  "keep a SID in two typed sets while removing another",
+			prior: roleFakeModel("global", "readers", "", adminRead, []string{"alice", "bob"}, nil, []string{"alice"}),
+			plan:  roleFakeModel("global", "readers", "", adminRead, []string{"alice"}, nil, []string{"alice"}),
+		},
+		{
 			// Assignments are authoritative: an entry Terraform does not
 			// manage is removed too.
-			name:      "remove an entry added outside Terraform",
+			name:      "remove an entry added outside Terraform after the refresh, with no planned change",
 			prior:     roleFakeModel("global", "readers", "", adminRead, []string{"alice"}, nil, nil),
 			plan:      roleFakeModel("global", "readers", "", adminRead, []string{"alice"}, nil, nil),
 			unmanaged: []roleEntry{{Type: roleEntryGroup, Sid: "intruders"}},
