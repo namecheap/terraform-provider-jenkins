@@ -54,7 +54,14 @@ func TestRoleCreateExistingRole(t *testing.T) {
 					roleEntry{Type: roleEntryEither, Sid: "carol"},
 				)
 			},
-			model: roleFakeModel("item", "ops", "ops-.*", []string{"hudson.model.Item.Read"}, []string{"alice"}, nil, nil),
+			model: roleFakeModel("item", "ops", "dev-.*", []string{"hudson.model.Item.Read"}, []string{"alice"}, nil, nil),
+		},
+		{
+			name: "agent role identical to the plan",
+			seed: func(f *roleStrategyFake) {
+				f.put("slaveRoles", "builders", "linux-.*", []string{"hudson.model.Computer.Build"}, roleEntry{Type: roleEntryUser, Sid: "dev"})
+			},
+			model: roleFakeModel("agent", "builders", "linux-.*", []string{"hudson.model.Computer.Build"}, []string{"dev"}, nil, nil),
 		},
 	}
 	for _, tt := range tests {
@@ -82,6 +89,9 @@ func TestRoleCreateExistingRole(t *testing.T) {
 			}
 			if !resp.State.Raw.IsNull() {
 				t.Error("state saved for a role Create refused, want none")
+			}
+			if f.writes != 0 {
+				t.Errorf("%d writes to role-strategy, want none", f.writes)
 			}
 			if after := f.role(t, apiType, name); !reflect.DeepEqual(after, before) {
 				t.Errorf("existing role changed:\n got %+v\nwant %+v", after, before)
