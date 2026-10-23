@@ -105,11 +105,50 @@ every default value. Comparing it verbatim would report constant drift.
 - **State.** The provider stores the YAML **with the `${...}` placeholders
   intact**. The resolved secret value is never read back into or stored in
   Terraform state.
-- **Drift for secret-valued keys.** For any declared key whose value is a
-  `${...}` expression, drift comparison compares the **placeholder form**, not a
+- **Drift for secret-valued keys.** For any declared key whose value is one
+  whole `${...}` expression, nested ones such as `${decodeBase64:${X}}`
+  included, drift comparison compares the **placeholder form**, not a
   resolved value — the export re-emits such keys as their interpolated form or a
   redacted marker, so we compare structurally and never resolve. This prevents
   both false drift and secret leakage.
+- **Write-only secrets.** `${name}` naming a key of the write-only
+  `secrets_wo` map is replaced by the provider, on the parsed document just
+  before the POST, so the secret needs no secret source on the controller and
+  its value cannot change the YAML structure. Plan and state keep `${name}`,
+  which drift detection compares as a placeholder like any other when it is
+  the whole value; embedded in a longer string it never equals the export,
+  so the section plans a change on every run. JCasC resolves `${...}` in what
+  it receives and replaces an unknown variable with an empty string, so a
+  `${` inside a value is sent as `^${` only when a closing `}` follows in
+  the assembled scalar. An unclosed `${` stays literal. JCasC stores the
+  escaped form as a literal `${`
+  (and exports re-escaped); a `$` and a `{` that only meet across the edge of
+  a value are escaped the same way. Only exactly `${name}` is replaced;
+  `${name:-default}`, `^${name}` (JCasC's escape for a literal) and other
+  names stay for JCasC. A `${name}` nested in another expression
+  (`${decodeBase64:${name}}`) is replaced too. Expressions are found the way
+  JCasC's commons-text substitutor finds them, so what the provider replaces
+  is what JCasC would have resolved. Two values have no escape and fail the
+  apply before anything is sent: one ending in `^` right before an
+  expression, which JCasC would take as the escape of that expression, and a
+  nested one holding `$`, `{`, `}`, `^` or `:-`, which JCasC interprets as
+  expression boundaries, escaping or a default delimiter. A key that no
+  expression references is rejected at plan, or at apply when `yaml` is not
+  known until then, since its value would silently not apply. Null map elements
+  are rejected during validation. Every section apply sends the current values;
+  `secrets_wo_version` triggers an apply when only the secret values change.
+  Removing the pair while interpolation remains warns that JCasC may resolve
+  missing references to empty strings.
+- **Transforming lookups.** JCasC resolves interpolation again in lookup output.
+  A value decoded through `${decodeBase64:${name}}` can therefore resolve
+  `${sysProp:...}`, environment variables, `readFile:` or `file:` expressions
+  inside the decoded secret. Prefer `secrets_wo = { x = base64decode(var.b64) }`
+  with a top-level `${x}` in YAML, so the provider can escape the decoded value.
+- **Apply errors.** When write-only values are sent, controller response text is
+  omitted entirely and only a typed HTTP status is retained when available.
+  Responses can quote JSON/HTML-escaped or transformed values that cannot be
+  reliably found by string replacement. Fixed diagnostics also avoid revealing
+  short secrets through which parts of a message were masked.
 - **Drift view.** When a declared key drifts, Read does not store the exported
   section, which holds the resolved values and every unmanaged key (#249). It
   stores a view limited to the declared keys: in-sync subtrees and `${...}`
