@@ -783,8 +783,8 @@ func (j *jenkinsAdapter) rolePostForm(ctx context.Context, action string, form u
 
 // AddRole creates (or, when overwrite is true, replaces) a role. Whether
 // replacing keeps the role's assignments depends on the plugin release
-// (927 keeps them, older ones drop them), so callers re-read the entries
-// before reconciling them.
+// (918.v91e5468d8db_2 and later keep them, older ones drop them), so callers
+// re-read the entries before reconciling them.
 func (j *jenkinsAdapter) AddRole(ctx context.Context, roleType, name string, permissionIDs []string, pattern string, overwrite bool) error {
 	if err := checkRoleName(name); err != nil {
 		return fmt.Errorf("%w, so the role could not be deleted later without deleting other roles; "+
