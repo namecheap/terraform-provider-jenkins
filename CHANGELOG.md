@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.1](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.4.0...v1.4.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **casc:** keep resolved secrets and unmanaged keys out of state on drift ([#253](https://github.com/namecheap/terraform-provider-jenkins/issues/253)) ([55799f0](https://github.com/namecheap/terraform-provider-jenkins/commit/55799f0d4fefb5320cc56a3c67b268e027cc3b74))
+* **credential:** keep credential domain and ID inside their store's URL ([#252](https://github.com/namecheap/terraform-provider-jenkins/issues/252)) ([373175e](https://github.com/namecheap/terraform-provider-jenkins/commit/373175e24322f1ac026448d3500a0219a0aef56c))
+* **credential:** re-send known secrets on update instead of erasing them ([#258](https://github.com/namecheap/terraform-provider-jenkins/issues/258)) ([cb257d4](https://github.com/namecheap/terraform-provider-jenkins/commit/cb257d4b88f94dba77f93de4c8f869a1ea35d752))
+* **deps:** bump Go toolchain to 1.26.10 ([#277](https://github.com/namecheap/terraform-provider-jenkins/issues/277)) ([e1338d9](https://github.com/namecheap/terraform-provider-jenkins/commit/e1338d901a505a160d6e3118272061b33d0f4c02))
+* **folder:** keep folder credentials and encrypted secrets out of template state ([#257](https://github.com/namecheap/terraform-provider-jenkins/issues/257)) ([479a739](https://github.com/namecheap/terraform-provider-jenkins/commit/479a739e9e27ebc043e8874785e483596abfc412))
+* **role:** reject a comma in a role name or permission ID ([#256](https://github.com/namecheap/terraform-provider-jenkins/issues/256)) ([ec47f33](https://github.com/namecheap/terraform-provider-jenkins/commit/ec47f33ff443d16aea83124f38ca0d9e5b0f4f0c))
+
 ## [1.4.0](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.3.0...v1.4.0) (2026-10-19)
 
 
