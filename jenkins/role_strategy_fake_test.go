@@ -29,6 +29,7 @@ import (
 type roleStrategyFake struct {
 	roles                  map[string]*roleStrategyFakeRole
 	dropEntriesOnOverwrite bool
+	writes                 int
 }
 
 type roleStrategyFakeRole struct {
@@ -71,6 +72,7 @@ func sortRoleEntries(entries []roleEntry) {
 }
 
 func (f *roleStrategyFake) addRole(_ context.Context, apiType, name string, permissionIDs []string, pattern string, overwrite bool) error {
+	f.writes++
 	r, exists := f.roles[roleStrategyFakeKey(apiType, name)]
 	if exists && !overwrite {
 		return nil
@@ -87,6 +89,7 @@ func (f *roleStrategyFake) addRole(_ context.Context, apiType, name string, perm
 }
 
 func (f *roleStrategyFake) assignRole(_ context.Context, apiType, name string, entry roleEntry) error {
+	f.writes++
 	r, ok := f.roles[roleStrategyFakeKey(apiType, name)]
 	if !ok {
 		return fmt.Errorf("role %s does not exist", name)
@@ -98,6 +101,7 @@ func (f *roleStrategyFake) assignRole(_ context.Context, apiType, name string, e
 }
 
 func (f *roleStrategyFake) unassignRole(_ context.Context, apiType, name string, entry roleEntry) error {
+	f.writes++
 	r, ok := f.roles[roleStrategyFakeKey(apiType, name)]
 	if !ok {
 		return fmt.Errorf("role %s does not exist", name)
@@ -128,6 +132,7 @@ func (f *roleStrategyFake) getRole(_ context.Context, apiType, name string, out 
 }
 
 func (f *roleStrategyFake) removeRole(_ context.Context, apiType, name string) error {
+	f.writes++
 	delete(f.roles, roleStrategyFakeKey(apiType, name))
 	return nil
 }
@@ -146,7 +151,8 @@ func (f *roleStrategyFake) resource(ctx context.Context) (*roleResource, rschema
 	return r, sr.Schema
 }
 
-// roleFakeModel builds a jenkins_role model; an empty pattern is left null.
+// roleFakeModel builds a jenkins_role model; an empty pattern is planned as
+// rolePatternPlanModifier plans it.
 func roleFakeModel(roleType, name, pattern string, permissions, users, groups, assignments []string) *roleResourceModel {
 	set := func(v []string) types.Set {
 		s, _ := types.SetValueFrom(context.Background(), types.StringType, append([]string{}, v...))
@@ -160,6 +166,9 @@ func roleFakeModel(roleType, name, pattern string, permissions, users, groups, a
 		Users:       set(users),
 		Groups:      set(groups),
 		Assignments: set(assignments),
+	}
+	if pattern == "" && roleType != "global" {
+		pattern = ".*"
 	}
 	if pattern != "" {
 		m.Pattern = types.StringValue(pattern)
