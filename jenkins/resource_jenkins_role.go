@@ -293,7 +293,7 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	// An overwrite drops every entry of the role on role-strategy releases
-	// before 927, so a change to the entries alone leaves the role in place.
+	// before 918, so a change to the entries alone leaves the role in place.
 	if !data.Permissions.Equal(prior.Permissions) || pattern != prior.Pattern.ValueString() {
 		if err := r.client.AddRole(ctx, apiType, data.Name.ValueString(), permissions, pattern, true); err != nil {
 			resp.Diagnostics.AddError("Unable to Update Resource", "An unexpected error occurred while updating the role.\n\nError: "+err.Error())
@@ -410,8 +410,8 @@ func roleEntries(ctx context.Context, data *roleResourceModel, diags *diag.Diagn
 // Assigning first means swapping an entry's type (an ambiguous entry for a
 // User entry of the same SID) never leaves the SID without the role. It reads
 // rather than assuming an empty role because addRole with overwrite keeps the
-// existing entries on role-strategy 927 and drops them on older releases. It
-// returns false (with a diagnostic) on error.
+// existing entries on role-strategy 918.v91e5468d8db_2 and later, and drops
+// them on older releases. It returns false (with a diagnostic) on error.
 func (r *roleResource) reconcile(ctx context.Context, apiType, name string, want []roleEntry, diags *diag.Diagnostics) bool {
 	var role roleStrategyRoleResponse
 	if err := r.client.GetRole(ctx, apiType, name, &role); err != nil {

@@ -3,6 +3,7 @@ package jenkins
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -89,7 +90,11 @@ func (f *roleStrategyFake) addRole(_ context.Context, apiType, name string, perm
 
 func (f *roleStrategyFake) assignRole(_ context.Context, apiType, name string, entry roleEntry) error {
 	f.writes++
-	if r, ok := f.roles[roleStrategyFakeKey(apiType, name)]; ok && !slices.Contains(r.entries, entry) {
+	r, ok := f.roles[roleStrategyFakeKey(apiType, name)]
+	if !ok {
+		return fmt.Errorf("role %s does not exist", name)
+	}
+	if !slices.Contains(r.entries, entry) {
 		r.entries = append(r.entries, entry)
 	}
 	return nil
@@ -97,9 +102,11 @@ func (f *roleStrategyFake) assignRole(_ context.Context, apiType, name string, e
 
 func (f *roleStrategyFake) unassignRole(_ context.Context, apiType, name string, entry roleEntry) error {
 	f.writes++
-	if r, ok := f.roles[roleStrategyFakeKey(apiType, name)]; ok {
-		r.entries = slices.DeleteFunc(r.entries, func(e roleEntry) bool { return e == entry })
+	r, ok := f.roles[roleStrategyFakeKey(apiType, name)]
+	if !ok {
+		return fmt.Errorf("role %s does not exist", name)
 	}
+	r.entries = slices.DeleteFunc(r.entries, func(e roleEntry) bool { return e == entry })
 	return nil
 }
 
