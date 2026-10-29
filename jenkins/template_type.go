@@ -55,8 +55,11 @@ func (m templatePlanModifier) PlanModifyString(ctx context.Context, req planmodi
 	}
 	strip := !disabled.IsNull() && !disabled.IsUnknown() && disabled.ValueBool()
 
-	cfg := stripDisabledElement(req.ConfigValue.ValueString(), strip)
-	state := stripDisabledElement(req.StateValue.ValueString(), strip)
+	// State written before Read left out runtime elements, or right after
+	// Create, can still hold them, and so can a template copied from a live
+	// config.xml: strip both sides.
+	cfg := stripJobRuntimeElements(stripDisabledElement(req.ConfigValue.ValueString(), strip))
+	state := stripJobRuntimeElements(stripDisabledElement(req.StateValue.ValueString(), strip))
 	if templatesEqual(state, cfg) {
 		// Semantically equal: keep the prior state value so no diff is shown.
 		resp.PlanValue = req.StateValue
