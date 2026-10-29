@@ -56,8 +56,9 @@ resource jenkins_role foo {
 			},
 			{
 				// Add a permission and a user, drop the group; every set is
-				// authoritative. role-strategy 927 keeps the entries across the
-				// addRole overwrite, so the provider has to unassign the group.
+				// authoritative. role-strategy 918 and later keep the entries
+				// across the addRole overwrite, so the provider has to unassign
+				// the group.
 				Config: config(`["hudson.model.Hudson.Read", "hudson.model.Item.Read"]`, `["alice", "bob"]`, `[]`),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(resourceName, "permissions.#", "2"),
@@ -223,6 +224,54 @@ resource jenkins_role dev {
 	})
 }
 
+// TestAccJenkinsRole_revokeAssignment is the reproduction from #248: removing
+// the only member of an item role in place revokes it on the controller, and
+// re-applying the same configuration plans no change.
+func TestAccJenkinsRole_revokeAssignment(t *testing.T) {
+	name := "tf-acc-test-" + acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	resourceName := "jenkins_role.ops"
+	config := func(assignments string) string {
+		return fmt.Sprintf(`
+resource jenkins_role ops {
+	type        = "item"
+	name        = "%s"
+	pattern     = "ops-.*"
+	permissions = ["hudson.model.Item.Read", "hudson.model.Item.Configure"]
+	assignments = %s
+}`, name, assignments)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsRoleDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config(`["tf-acc-dev"]`),
+				Check:  testAccCheckJenkinsRoleEntries("projectRoles", name, roleEntry{Type: roleEntryEither, Sid: "tf-acc-dev"}),
+			},
+			{
+				// An in-place update: a replace would revoke the member even
+				// without the fix.
+				Config: config(`[]`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "assignments.#", "0"),
+					testAccCheckJenkinsRoleEntries("projectRoles", name),
+				),
+			},
+			{
+				Config: config(`[]`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+		},
+	})
+}
+
 func TestAccJenkinsRole_existing(t *testing.T) {
 	name := "tf-acc-test-" + acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
 	ctx := context.Background()
@@ -257,6 +306,55 @@ resource jenkins_role foo {
 				// role left by the failed create.
 				Config: ` `,
 				Check:  testAccCheckJenkinsRoleEntries("globalRoles", name, roleEntry{Type: roleEntryUser, Sid: "alice"}),
+			},
+		},
+	})
+}
+
+// TestAccJenkinsRole_existingCasc tries to create the admin role that
+// integration/jenkins.yaml defines, the reproduction from #247. Create fails
+// and the role keeps its permissions and entries, so the configured SID never
+// gains Overall/Administer and no later apply can replace, and so delete, it.
+func TestAccJenkinsRole_existingCasc(t *testing.T) {
+	ctx := context.Background()
+	var before roleStrategyRoleResponse
+
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			if err := testAccClient.GetRole(ctx, "globalRoles", "admin", &before); err != nil {
+				t.Fatal(err)
+			}
+			if !before.PermissionIDs["hudson.model.Hudson.Administer"] {
+				t.Fatalf("global role admin = %+v, want the Overall/Administer role from integration/jenkins.yaml", before)
+			}
+		},
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource jenkins_role admin {
+	type        = "global"
+	name        = "admin"
+	permissions = ["hudson.model.Hudson.Read"]
+	assignments = ["tf-acc-dev"]
+}`,
+				ExpectError: regexp.MustCompile(`already exists`),
+			},
+			{
+				// An empty config: the step only checks the role left by the
+				// failed create against the one read before it.
+				Config: ` `,
+				Check: func(s *terraform.State) error {
+					permissions := make([]string, 0, len(before.PermissionIDs))
+					for id := range before.PermissionIDs {
+						permissions = append(permissions, id)
+					}
+					return resource.ComposeTestCheckFunc(
+						testAccCheckJenkinsRolePermissions("globalRoles", "admin", permissions...),
+						testAccCheckJenkinsRoleEntries("globalRoles", "admin", before.Sids...),
+					)(s)
+				},
 			},
 		},
 	})

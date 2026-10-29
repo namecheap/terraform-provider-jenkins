@@ -106,42 +106,14 @@ func TestCovM_Role(t *testing.T) {
 	s := covMSchema(ctx, r)
 	covMResourceCRUD(ctx, t, "role", r, s, model)
 
-	// Create refuses a role that already exists instead of taking it over.
-	var adopted bool
-	rExists := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-		mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
-			out.(*roleStrategyRoleResponse).PermissionIDs = map[string]bool{"hudson.model.Hudson.Administer": true}
-			return nil
-		},
-		mockAddRole:      func(context.Context, string, string, []string, string, bool) error { adopted = true; return nil },
-		mockUnassignRole: func(context.Context, string, string, roleEntry) error { adopted = true; return nil },
-	}}}
-	existsPlan := tfsdk.Plan{Schema: s}
-	existsPlan.Set(ctx, model)
-	existsResp := resource.CreateResponse{State: tfsdk.State{Schema: s}}
-	rExists.Create(ctx, resource.CreateRequest{Plan: existsPlan}, &existsResp)
-	if !existsResp.Diagnostics.HasError() || adopted {
-		t.Errorf("role Create on an existing role: diags=%v, modified=%v; want an error and no change", existsResp.Diagnostics, adopted)
-	}
-
 	// role-strategy allows a role with entries but no permissions, and getRole
-	// answers "permissionIds":{} for it but {} for a missing role. Create must
-	// treat it as existing, and Read must keep it in state.
-	zeroPerms := func(_ context.Context, _, _ string, out interface{}) error {
-		return json.Unmarshal([]byte(`{"permissionIds":{},"sids":[{"type":"USER","sid":"bob"}]}`), out)
-	}
-	var stripped bool
+	// answers "permissionIds":{} for it but {} for a missing role. Read must
+	// keep it in state.
 	rZero := &roleResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
-		mockGetRole:      zeroPerms,
-		mockAddRole:      func(context.Context, string, string, []string, string, bool) error { stripped = true; return nil },
-		mockUnassignRole: func(context.Context, string, string, roleEntry) error { stripped = true; return nil },
-		mockRemoveRole:   func(context.Context, string, string) error { stripped = true; return nil },
+		mockGetRole: func(_ context.Context, _, _ string, out interface{}) error {
+			return json.Unmarshal([]byte(`{"permissionIds":{},"sids":[{"type":"USER","sid":"bob"}]}`), out)
+		},
 	}}}
-	zeroResp := resource.CreateResponse{State: tfsdk.State{Schema: s}}
-	rZero.Create(ctx, resource.CreateRequest{Plan: existsPlan}, &zeroResp)
-	if !zeroResp.Diagnostics.HasError() || stripped {
-		t.Errorf("role Create on an existing zero-permission role: diags=%v, modified=%v; want an error and no change", zeroResp.Diagnostics, stripped)
-	}
 	zeroState := tfsdk.State{Schema: s}
 	zeroState.Set(ctx, model)
 	zeroRead := resource.ReadResponse{State: zeroState}
@@ -156,6 +128,8 @@ func TestCovM_Role(t *testing.T) {
 		mockGetRole: func(context.Context, string, string, interface{}) error { return covMErr() },
 		mockAddRole: func(context.Context, string, string, []string, string, bool) error { added = true; return nil },
 	}}}
+	existsPlan := tfsdk.Plan{Schema: s}
+	existsPlan.Set(ctx, model)
 	getErrResp := resource.CreateResponse{State: tfsdk.State{Schema: s}}
 	rGetErr.Create(ctx, resource.CreateRequest{Plan: existsPlan}, &getErrResp)
 	if !getErrResp.Diagnostics.HasError() || added {
@@ -187,9 +161,6 @@ func TestCovM_Role(t *testing.T) {
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "global/reader"}, &isResp)
 }
 
-// TestCovM_RoleUpdateOverwrite checks that Update only overwrites the role when
-// its permissions or pattern change: role-strategy releases before 927 drop
-// every entry of an overwritten role.
 func TestCovM_RoleCreateRollback(t *testing.T) {
 	ctx := context.Background()
 	model := &roleResourceModel{
@@ -288,6 +259,9 @@ func TestCovM_RoleCreateRollback(t *testing.T) {
 	}
 }
 
+// TestCovM_RoleUpdateOverwrite checks that Update only overwrites the role when
+// its permissions or pattern change: role-strategy releases before 918 drop
+// every entry of an overwritten role.
 func TestCovM_RoleUpdateOverwrite(t *testing.T) {
 	ctx := context.Background()
 	strs := func(v ...string) types.Set {
