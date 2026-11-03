@@ -58,6 +58,17 @@ unclassified:
 `
 }
 
+// cascNullModel returns a model with section and yaml set and every optional
+// attribute null, as a configuration that sets neither would plan it.
+func cascNullModel(section, yaml string) configurationAsCodeResourceModel {
+	return configurationAsCodeResourceModel{
+		Section:          types.StringValue(section),
+		YAML:             types.StringValue(yaml),
+		SecretsWo:        types.MapNull(types.StringType),
+		SecretsWoVersion: types.StringNull(),
+	}
+}
+
 func cascTestResource(export string) (*configurationAsCodeResource, rschema.Schema) {
 	r := &configurationAsCodeResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
 		mockExportCASC: func(context.Context) (string, error) { return export, nil },
@@ -183,11 +194,11 @@ mailer:
 		t.Run(tc.name, func(t *testing.T) {
 			r, s := cascTestResource(tc.export)
 			st := tfsdk.State{Schema: s}
-			st.Set(ctx, configurationAsCodeResourceModel{
-				ID:      types.StringValue("unclassified"),
-				Section: types.StringValue("unclassified"),
-				YAML:    types.StringValue(tc.declared),
-			})
+			m := cascNullModel("unclassified", tc.declared)
+			m.ID = types.StringValue("unclassified")
+			if diags := st.Set(ctx, m); diags.HasError() {
+				t.Fatalf("setting state: %v", diags)
+			}
 			resp := resource.ReadResponse{State: st}
 			r.Read(ctx, resource.ReadRequest{State: st}, &resp)
 			if resp.Diagnostics.HasError() {
@@ -341,9 +352,10 @@ func TestConfigurationAsCodeReadDriftViewStableAcrossRefreshes(t *testing.T) {
 			r, s := cascTestResource(tc.export)
 			st := tfsdk.State{Schema: s}
 			st.Set(ctx, configurationAsCodeResourceModel{
-				ID:      types.StringValue("unclassified"),
-				Section: types.StringValue("unclassified"),
-				YAML:    types.StringValue(tc.declared),
+				SecretsWo: types.MapNull(types.StringType),
+				ID:        types.StringValue("unclassified"),
+				Section:   types.StringValue("unclassified"),
+				YAML:      types.StringValue(tc.declared),
 			})
 
 			var views []string
@@ -455,9 +467,10 @@ func TestConfigurationAsCodeExportParseErrorOmitsExport(t *testing.T) {
 
 			st := tfsdk.State{Schema: s}
 			st.Set(ctx, configurationAsCodeResourceModel{
-				ID:      types.StringValue("unclassified"),
-				Section: types.StringValue("unclassified"),
-				YAML:    types.StringValue(cascTestDeclared),
+				SecretsWo: types.MapNull(types.StringType),
+				ID:        types.StringValue("unclassified"),
+				Section:   types.StringValue("unclassified"),
+				YAML:      types.StringValue(cascTestDeclared),
 			})
 			read := resource.ReadResponse{State: st}
 			r.Read(ctx, resource.ReadRequest{State: st}, &read)
@@ -522,14 +535,15 @@ func TestConfigurationAsCodeLogsOmitResolvedValues(t *testing.T) {
 	s := sr.Schema
 
 	model := configurationAsCodeResourceModel{
-		Section: types.StringValue("unclassified"),
-		YAML:    types.StringValue(cascTestDeclared),
+		SecretsWo: types.MapNull(types.StringType),
+		Section:   types.StringValue("unclassified"),
+		YAML:      types.StringValue(cascTestDeclared),
 	}
 	plan := tfsdk.Plan{Schema: s}
 	plan.Set(ctx, model)
 
 	create := resource.CreateResponse{State: tfsdk.State{Schema: s}}
-	r.Create(ctx, resource.CreateRequest{Plan: plan}, &create)
+	r.Create(ctx, resource.CreateRequest{Plan: plan, Config: cascConfig(t, s, model)}, &create)
 	if create.Diagnostics.HasError() {
 		t.Fatalf("Create: %v", create.Diagnostics)
 	}
@@ -545,7 +559,7 @@ func TestConfigurationAsCodeLogsOmitResolvedValues(t *testing.T) {
 	}
 
 	update := resource.UpdateResponse{State: st}
-	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: st}, &update)
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: st, Config: cascConfig(t, s, model)}, &update)
 	if update.Diagnostics.HasError() {
 		t.Fatalf("Update: %v", update.Diagnostics)
 	}

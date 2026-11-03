@@ -994,6 +994,16 @@ func (j *jenkinsAdapter) DeleteUser(ctx context.Context, username string) error 
 // cascBase is the REST base path of the Configuration-as-Code plugin.
 const cascBase = "/configuration-as-code"
 
+// cascApplyError separates trusted HTTP status from an untrusted response body.
+type cascApplyError struct {
+	status int
+	body   string
+}
+
+func (e *cascApplyError) Error() string {
+	return fmt.Sprintf("JCasC apply failed (status %d): %s", e.status, e.body)
+}
+
 // ApplyCASC applies a raw YAML document to the controller via
 // POST /configuration-as-code/configure (requires ADMINISTER). JCasC returns
 // 200 with a plain-text confirmation on success, or 400 with a JSON error array
@@ -1020,7 +1030,7 @@ func (j *jenkinsAdapter) ApplyCASC(ctx context.Context, yamlDoc string) error {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("JCasC apply failed (status %d): %s", resp.StatusCode, strings.TrimSpace(body))
+		return &cascApplyError{status: resp.StatusCode, body: strings.TrimSpace(body)}
 	}
 	return nil
 }
