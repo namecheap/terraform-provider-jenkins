@@ -81,7 +81,7 @@ func TestYAMLSubset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := yamlSubset(mustParse(tc.declared), mustParse(tc.actual))
+			got := yamlSubset(mustParse(tc.declared), mustParse(tc.actual), nil, nil)
 			if got != tc.want {
 				t.Errorf("yamlSubset(%q, %q) = %v, want %v", tc.declared, tc.actual, got, tc.want)
 			}
@@ -161,7 +161,7 @@ security:
 
 	t.Run("declared subtree in sync", func(t *testing.T) {
 		declared := `systemMessage: "Managed by Terraform"`
-		ok, err := cascInSync(declared, exported, "jenkins")
+		ok, err := cascInSync(declared, exported, "jenkins", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -174,7 +174,7 @@ security:
 		// Declares only systemMessage; numExecutors/mode in the export must not
 		// register as drift.
 		declared := `systemMessage: "Managed by Terraform"`
-		ok, err := cascInSync(declared, exported, "jenkins")
+		ok, err := cascInSync(declared, exported, "jenkins", nil)
 		if err != nil || !ok {
 			t.Errorf("expected in-sync ignoring unmanaged keys, got ok=%v err=%v", ok, err)
 		}
@@ -182,7 +182,7 @@ security:
 
 	t.Run("changed managed value is drift", func(t *testing.T) {
 		declared := `systemMessage: "Different message"`
-		ok, err := cascInSync(declared, exported, "jenkins")
+		ok, err := cascInSync(declared, exported, "jenkins", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -194,7 +194,7 @@ security:
 	t.Run("secret placeholder never drifts", func(t *testing.T) {
 		exportedWithToken := "unclassified:\n  myPlugin:\n    token: \"resolved-secret-value\"\n"
 		declared := "myPlugin:\n  token: ${MY_TOKEN}\n"
-		ok, err := cascInSync(declared, exportedWithToken, "unclassified")
+		ok, err := cascInSync(declared, exportedWithToken, "unclassified", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -204,7 +204,7 @@ security:
 	})
 
 	t.Run("section absent with nothing declared is in sync", func(t *testing.T) {
-		ok, err := cascInSync("", exported, "tool")
+		ok, err := cascInSync("", exported, "tool", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -215,7 +215,7 @@ security:
 
 	t.Run("section absent with something declared is drift", func(t *testing.T) {
 		declared := `installations: []`
-		ok, err := cascInSync(declared, exported, "tool")
+		ok, err := cascInSync(declared, exported, "tool", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -225,13 +225,13 @@ security:
 	})
 
 	t.Run("invalid declared YAML errors", func(t *testing.T) {
-		if _, err := cascInSync("a: [bad\n", exported, "jenkins"); err == nil {
+		if _, err := cascInSync("a: [bad\n", exported, "jenkins", nil); err == nil {
 			t.Error("expected an error for malformed declared YAML")
 		}
 	})
 
 	t.Run("invalid exported YAML errors", func(t *testing.T) {
-		if _, err := cascInSync("a: 1", "b: [bad\n", "jenkins"); err == nil {
+		if _, err := cascInSync("a: 1", "b: [bad\n", "jenkins", nil); err == nil {
 			t.Error("expected an error for malformed exported YAML")
 		}
 	})
@@ -477,7 +477,7 @@ func TestCASCDriftView(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			view, found, err := cascDriftView(tc.declared, tc.export, "s")
+			view, found, err := cascDriftView(tc.declared, tc.export, "s", nil)
 			if err != nil || !found {
 				t.Fatalf("found=%v err=%v", found, err)
 			}
@@ -493,7 +493,7 @@ func TestCASCDriftView(t *testing.T) {
 
 			// A drift view must still report drift, or the plan would show no
 			// diff, and refreshing it again must not change it.
-			inSync, err := cascInSync(tc.declared, tc.export, "s")
+			inSync, err := cascInSync(tc.declared, tc.export, "s", nil)
 			if err != nil || inSync {
 				t.Fatalf("test case is not drifted: inSync=%v err=%v", inSync, err)
 			}
@@ -501,8 +501,8 @@ func TestCASCDriftView(t *testing.T) {
 				t.Errorf("view equals the declared document under drift:\n%s", view)
 			}
 			again := view
-			if ok, _ := cascInSync(view, tc.export, "s"); !ok {
-				again, _, _ = cascDriftView(view, tc.export, "s")
+			if ok, _ := cascInSync(view, tc.export, "s", nil); !ok {
+				again, _, _ = cascDriftView(view, tc.export, "s", nil)
 			}
 			if !reflect.DeepEqual(mustParseYAML(t, again), got) {
 				t.Errorf("refreshing the view changed it:\n first: %s\nsecond: %s", view, again)
@@ -516,21 +516,185 @@ func TestCASCDriftView(t *testing.T) {
 	}
 
 	t.Run("absent section", func(t *testing.T) {
-		_, found, err := cascDriftView("a: 1", "other:\n  a: 1\n", "s")
+		_, found, err := cascDriftView("a: 1", "other:\n  a: 1\n", "s", nil)
 		if err != nil || found {
 			t.Errorf("found=%v err=%v, want found=false", found, err)
 		}
 	})
 
 	t.Run("invalid declared YAML errors", func(t *testing.T) {
-		if _, _, err := cascDriftView("a: [bad\n", "s:\n  a: 1\n", "s"); err == nil {
+		if _, _, err := cascDriftView("a: [bad\n", "s:\n  a: 1\n", "s", nil); err == nil {
 			t.Error("expected an error for malformed declared YAML")
 		}
 	})
 
 	t.Run("invalid exported YAML errors", func(t *testing.T) {
-		if _, _, err := cascDriftView("a: 1", "s: [bad\n", "s"); err == nil {
+		if _, _, err := cascDriftView("a: 1", "s: [bad\n", "s", nil); err == nil {
 			t.Error("expected an error for malformed exported YAML")
 		}
 	})
+}
+
+func TestCASCPathsUnordered(t *testing.T) {
+	p := newCASCPaths([]string{"roles.*.*.permissions", "nodes"})
+	cases := []struct {
+		at   []string
+		want bool
+	}{
+		{[]string{"roles", "global", "*", "permissions"}, true},
+		{[]string{"roles", "items", "*", "permissions"}, true},
+		{[]string{"roles", "global", "*", "entries"}, false},
+		{[]string{"roles", "global", "*"}, false},
+		{[]string{"nodes"}, true},
+		{[]string{"other", "nodes"}, false},
+		{nil, false},
+	}
+	for _, tc := range cases {
+		if got := p.unordered(tc.at); got != tc.want {
+			t.Errorf("unordered(%v) = %v, want %v", tc.at, got, tc.want)
+		}
+	}
+	if (cascPaths)(nil).unordered([]string{"nodes"}) {
+		t.Error("nil paths must not match")
+	}
+
+	for path, valid := range map[string]bool{
+		"nodes":                 true,
+		"roles.*.*.permissions": true,
+		"*":                     true,
+		"roles*":                false,
+		"roles.**.permissions":  false,
+		"a..b":                  false,
+		"a b":                   false,
+	} {
+		if got := reCASCPath.MatchString(path); got != valid {
+			t.Errorf("reCASCPath.MatchString(%q) = %v, want %v", path, got, valid)
+		}
+	}
+}
+
+func TestYAMLSubsetUnordered(t *testing.T) {
+	mustParse := func(s string) interface{} {
+		v, err := parseYAML(s)
+		if err != nil {
+			t.Fatalf("parse %q: %v", s, err)
+		}
+		return v
+	}
+	unordered := newCASCPaths([]string{"roles.*.permissions", "list"})
+	cases := []struct {
+		name     string
+		declared string
+		actual   string
+		want     bool
+	}{
+		{"reordered scalars", "list: [a, b, c]", "list: [c, a, b]", true},
+		{"duplicates count", "list: [a, a, b]", "list: [a, b, b]", false},
+		{"length differs", "list: [a, b]", "list: [b, a, c]", false},
+		{"nested path", "roles:\n  - name: r\n    permissions: [x, y]\n", "roles:\n  - name: r\n    permissions: [y, x]\n", true},
+		{"outer list stays ordered", "roles:\n  - name: r1\n  - name: r2\n", "roles:\n  - name: r2\n  - name: r1\n", false},
+		{
+			// Greedy pairing gives {a: 1} the first actual element and leaves
+			// nothing for {a: 1, b: 2}; augmenting paths find the pairing.
+			"needs augmenting path",
+			"list:\n  - a: 1\n  - a: 1\n    b: 2\n",
+			"list:\n  - a: 1\n    b: 2\n  - a: 1\n    c: 3\n",
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := yamlSubset(mustParse(tc.declared), mustParse(tc.actual), nil, unordered); got != tc.want {
+				t.Errorf("unordered yamlSubset = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// Without the path, the same reorder is drift.
+	if yamlSubset(mustParse("list: [a, b]"), mustParse("list: [b, a]"), nil, nil) {
+		t.Error("a list outside unordered_paths must compare in order")
+	}
+}
+
+func TestCASCDriftViewUnordered(t *testing.T) {
+	unordered := newCASCPaths([]string{"list", "objs"})
+	cases := []struct {
+		name     string
+		declared string
+		export   string
+		want     string
+	}{
+		{
+			name:     "map to scalar hides unmanaged value",
+			declared: "list: [{a: 1}, x]\n",
+			export:   "s:\n  list: [unmanaged-cipher, x]\n",
+			want:     "list: [x, \"" + cascDriftMarker + "\"]\n",
+		},
+		{
+			name:     "stored marker stays hidden",
+			declared: "list: [a, \"" + cascDriftMarker + "\"]\n",
+			export:   "s:\n  list: [a, unmanaged-cipher]\n",
+			want:     "list: [a, \"" + cascDriftMarker + "\"]\n",
+		},
+		{
+			name:     "placeholder guard precedes unordered matching",
+			declared: "list: ['${A}', b]\n",
+			export:   "s:\n  list: [c, unmanaged-resolved-secret]\n",
+			want:     "list: \"" + cascDriftMarker + "\"\n",
+		},
+		{
+			name:     "reordered list in sync keeps the declared order",
+			declared: "list: [a, b]\nother: 1\n",
+			export:   "s:\n  list: [b, a]\n  other: 2\n",
+			want:     "list: [a, b]\nother: 2\n",
+		},
+		{
+			name:     "grown unordered list hides unmanaged scalars",
+			declared: "list: [a, b]\n",
+			export:   "s:\n  list: [unmanaged-secret, b, a]\n",
+			want:     "list: \"" + cascDriftMarker + "\"\n",
+		},
+		{
+			name:     "paired elements first, then hidden unpaired elements",
+			declared: "list: [a, b, c]\n",
+			export:   "s:\n  list: [c, x, a]\n",
+			want:     "list: [a, c, \"" + cascDriftMarker + "\"]\n",
+		},
+		{
+			name:     "unpaired controller mapping is hidden",
+			declared: "objs:\n  - name: a\n  - name: b\n",
+			export:   "s:\n  objs:\n    - name: b\n      extra: 1\n    - name: z\n      token: unmanaged\n",
+			want:     "objs:\n  - name: b\n  - \"" + cascDriftMarker + "\"\n",
+		},
+		{
+			// Neither an unmatched mapping nor an unmatched scalar has a
+			// declared counterpart that would make it safe to copy.
+			name:     "all unpaired controller elements are hidden",
+			declared: "list: [a, b, c]\n",
+			export:   "s:\n  list:\n    - a\n    - {token: unmanaged}\n    - x\n",
+			want:     "list: [a, \"" + cascDriftMarker + "\", \"" + cascDriftMarker + "\"]\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view, found, err := cascDriftView(tc.declared, tc.export, "s", unordered)
+			if err != nil || !found {
+				t.Fatalf("found=%v err=%v", found, err)
+			}
+			if got, want := mustParseYAML(t, view), mustParseYAML(t, tc.want); !reflect.DeepEqual(got, want) {
+				t.Errorf("view mismatch:\n got: %s\nwant: %s", view, tc.want)
+			}
+			if strings.Contains(view, "unmanaged") {
+				t.Errorf("view copied an unmanaged value:\n%s", view)
+			}
+			// A refresh compares the stored view: it must be stable.
+			again := view
+			if ok, _ := cascInSync(view, tc.export, "s", unordered); !ok {
+				again, _, _ = cascDriftView(view, tc.export, "s", unordered)
+			}
+			if !reflect.DeepEqual(mustParseYAML(t, again), mustParseYAML(t, view)) {
+				t.Errorf("refreshing the view changed it:\n first: %s\nsecond: %s", view, again)
+			}
+		})
+	}
 }

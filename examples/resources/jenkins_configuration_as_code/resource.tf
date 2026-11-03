@@ -1,9 +1,17 @@
-# Manage the controller's system message (a safe first step for JCasC adoption).
-resource "jenkins_configuration_as_code" "system_message" {
+# Manage settings in one resource per top-level section. This list disables
+# informational URL/setup monitors; it does not change authorization or roles.
+# JCasC replaces the entire list, so include any other monitors you want disabled.
+resource "jenkins_configuration_as_code" "jenkins" {
   section = "jenkins"
   yaml = yamlencode({
-    systemMessage = "Managed by Terraform — do not edit in the UI."
+    systemMessage = "Managed by Terraform: do not edit in the UI."
+    disabledAdministrativeMonitors = [
+      "hudson.diagnosis.ReverseProxySetupMonitor",
+      "jenkins.diagnostics.RootUrlNotSetMonitor",
+    ]
   })
+
+  unordered_paths = ["disabledAdministrativeMonitors"]
 }
 
 # A second instance can own a different top-level section. Secrets use JCasC

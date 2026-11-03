@@ -173,11 +173,11 @@ func TestCovE_NodeCascErrors(t *testing.T) {
 		Description: types.StringValue(""), RemoteFS: types.StringValue("/x"), Labels: types.StringValue(""),
 	})
 	// casc Update error (ApplyCASC fails) + Read export error
-	cascModel := &configurationAsCodeResourceModel{Section: types.StringValue("jenkins"), YAML: types.StringValue("systemMessage: hi")}
+	cascModel := cascNullModel("jenkins", "systemMessage: hi")
 	covEUpdateErr(ctx, t, &configurationAsCodeResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
 		mockApplyCASC: func(context.Context, string) error { return covEBoom() },
-	}}}, cascModel)
+	}}}, &cascModel)
 	covEReadErr(ctx, t, &configurationAsCodeResource{resourceHelper: &resourceHelper{client: &mockJenkinsClient{
 		mockExportCASC: func(context.Context) (string, error) { return "", covEBoom() },
-	}}}, cascModel)
+	}}}, &cascModel)
 }

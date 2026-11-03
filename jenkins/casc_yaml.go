@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,57 @@ const cascDriftMarker = "<drifted: controller value hidden>"
 // of letters, digits, underscores, or hyphens (e.g. "jenkins", "unclassified").
 var reCASCSection = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// reCASCPath matches an unordered_paths entry: mapping keys or '*' joined by
+// dots, e.g. "authorizationStrategy.roleBased.roles.*.*.permissions". '*' only
+// stands alone, since a segment such as "role*" would be matched literally.
+var reCASCPath = regexp.MustCompile(`^(\*|[^.\s*]+)(\.(\*|[^.\s*]+))*$`)
+
+// cascPaths holds the unordered_paths patterns, split into segments. A segment
+// matches a mapping key of the same name, and '*' matches any mapping key or
+// any sequence element.
+type cascPaths [][]string
+
+func newCASCPaths(patterns []string) cascPaths {
+	out := make(cascPaths, 0, len(patterns))
+	for _, p := range patterns {
+		out = append(out, strings.Split(p, "."))
+	}
+	return out
+}
+
+// unordered reports whether the sequence at path at is compared as a multiset.
+func (p cascPaths) unordered(at []string) bool {
+	for _, pattern := range p {
+		if len(pattern) != len(at) {
+			continue
+		}
+		match := true
+		for i, seg := range pattern {
+			if seg != "*" && seg != at[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// child returns at extended by seg without sharing at's backing array, so
+// sibling recursions cannot overwrite each other's path. Without patterns no
+// path can match, so none is built.
+func (p cascPaths) child(at []string, seg string) []string {
+	if len(p) == 0 {
+		return nil
+	}
+	out := make([]string, len(at)+1)
+	copy(out, at)
+	out[len(at)] = seg
+	return out
+}
+
 // isSecretPlaceholder reports whether v is a scalar JCasC ${...} secret
 // expression.
 func isSecretPlaceholder(v interface{}) bool {
@@ -62,12 +114,15 @@ func parseYAML(s string) (interface{}, error) {
 //     value; keys present only in actual (defaults, unmanaged settings) are
 //     ignored.
 //   - Sequences: must match element-for-element and length (order-significant),
-//     because JCasC list configurators are replace-semantics.
+//     because JCasC list configurators are replace-semantics. A sequence whose
+//     path matches unordered must have the same length and pair each declared
+//     element with a distinct actual element it is a subset of, in any order.
 //   - Scalars: must be equal.
 //
 // A declared scalar that is a ${...} secret placeholder matches any actual
-// value, so a resolved secret never registers as drift.
-func yamlSubset(declared, actual interface{}) bool {
+// value, so a resolved secret never registers as drift. at is the path of
+// declared within the section.
+func yamlSubset(declared, actual interface{}, at []string, unordered cascPaths) bool {
 	if isSecretPlaceholder(declared) {
 		return true
 	}
@@ -83,7 +138,7 @@ func yamlSubset(declared, actual interface{}) bool {
 			if !ok {
 				return false
 			}
-			if !yamlSubset(dv, av) {
+			if !yamlSubset(dv, av, unordered.child(at, k), unordered) {
 				return false
 			}
 		}
@@ -93,8 +148,12 @@ func yamlSubset(declared, actual interface{}) bool {
 		if !ok || len(a) != len(d) {
 			return false
 		}
+		if unordered.unordered(at) {
+			_, n := matchUnordered(d, a, at, unordered)
+			return n == len(d)
+		}
 		for i := range d {
-			if !yamlSubset(d[i], a[i]) {
+			if !yamlSubset(d[i], a[i], unordered.child(at, "*"), unordered) {
 				return false
 			}
 		}
@@ -102,6 +161,53 @@ func yamlSubset(declared, actual interface{}) bool {
 	default:
 		return reflect.DeepEqual(declared, actual)
 	}
+}
+
+// matchUnordered pairs the elements of declared with distinct elements of
+// actual they are a subset of, as a maximum bipartite matching (augmenting
+// paths), so a declared element that fits several actual ones cannot take the
+// only partner of another. pairs[i] is the actual index paired with declared
+// element i, or -1; n is the number of pairs.
+func matchUnordered(declared, actual []interface{}, at []string, unordered cascPaths) (pairs []int, n int) {
+	elem := unordered.child(at, "*")
+	fits := make([][]bool, len(declared))
+	for i, d := range declared {
+		fits[i] = make([]bool, len(actual))
+		for j, a := range actual {
+			fits[i][j] = yamlSubset(d, a, elem, unordered)
+		}
+	}
+
+	pairs = make([]int, len(declared))
+	owner := make([]int, len(actual))
+	for i := range pairs {
+		pairs[i] = -1
+	}
+	for j := range owner {
+		owner[j] = -1
+	}
+
+	var augment func(i int, seen []bool) bool
+	augment = func(i int, seen []bool) bool {
+		for j := range actual {
+			if !fits[i][j] || seen[j] {
+				continue
+			}
+			seen[j] = true
+			if owner[j] == -1 || augment(owner[j], seen) {
+				owner[j] = i
+				pairs[i] = j
+				return true
+			}
+		}
+		return false
+	}
+	for i := range declared {
+		if augment(i, make([]bool, len(actual))) {
+			n++
+		}
+	}
+	return pairs, n
 }
 
 // cascInSync reports whether the declared single-section YAML is a semantic
@@ -113,7 +219,7 @@ func yamlSubset(declared, actual interface{}) bool {
 // It returns true when the controller already satisfies everything declared
 // (no drift), false when a managed key differs or is missing, and an error only
 // when either document cannot be parsed.
-func cascInSync(declaredSectionYAML, exportedFullYAML, section string) (bool, error) {
+func cascInSync(declaredSectionYAML, exportedFullYAML, section string, unordered cascPaths) (bool, error) {
 	declared, err := parseYAML(declaredSectionYAML)
 	if err != nil {
 		return false, fmt.Errorf("parsing declared YAML: %w", err)
@@ -128,7 +234,7 @@ func cascInSync(declaredSectionYAML, exportedFullYAML, section string) (bool, er
 		return declared == nil, nil
 	}
 
-	return yamlSubset(declared, actual), nil
+	return yamlSubset(declared, actual, nil, unordered), nil
 }
 
 // cascDriftView renders the yaml Read stores when the controller no longer
@@ -144,13 +250,15 @@ func cascInSync(declaredSectionYAML, exportedFullYAML, section string) (bool, er
 //   - a drifted sequence the controller did not grow takes the controller's
 //     length, each element viewed against the declared element at the same
 //     index;
+//   - a drifted unordered sequence that did not grow keeps paired declared
+//     elements, then a marker for each unpaired controller element;
 //   - anything else, including a drifted sequence the controller grew, is
 //     replaced by cascDriftMarker.
 //
 // Under drift the view therefore always differs from the declared document,
 // so the plan shows which keys moved without showing what it cannot show
 // safely. found is false when the section is absent from the export.
-func cascDriftView(declaredSectionYAML, exportedFullYAML, section string) (view string, found bool, err error) {
+func cascDriftView(declaredSectionYAML, exportedFullYAML, section string, unordered cascPaths) (view string, found bool, err error) {
 	declared, err := parseYAML(declaredSectionYAML)
 	if err != nil {
 		return "", false, fmt.Errorf("parsing declared YAML: %w", err)
@@ -159,7 +267,7 @@ func cascDriftView(declaredSectionYAML, exportedFullYAML, section string) (view 
 	if err != nil || !found {
 		return "", found, err
 	}
-	out, err := yaml.Marshal(driftView(declared, actual))
+	out, err := yaml.Marshal(driftView(declared, actual, nil, unordered))
 	if err != nil {
 		return "", false, err
 	}
@@ -167,8 +275,8 @@ func cascDriftView(declaredSectionYAML, exportedFullYAML, section string) (view 
 }
 
 // driftView restricts actual to the keys of declared; see cascDriftView.
-func driftView(declared, actual interface{}) interface{} {
-	if yamlSubset(declared, actual) {
+func driftView(declared, actual interface{}, at []string, unordered cascPaths) interface{} {
+	if yamlSubset(declared, actual, at, unordered) {
 		return declared
 	}
 
@@ -181,7 +289,7 @@ func driftView(declared, actual interface{}) interface{} {
 		out := make(map[string]interface{}, len(d))
 		for k, dv := range d {
 			if av, ok := a[k]; ok {
-				out[k] = driftView(dv, av)
+				out[k] = driftView(dv, av, unordered.child(at, k), unordered)
 			}
 		}
 		return out
@@ -197,9 +305,12 @@ func driftView(declared, actual interface{}) interface{} {
 		if !ok || hasInterpolation(d) || len(a) > len(d) {
 			return cascDriftMarker
 		}
+		if unordered.unordered(at) {
+			return unorderedDriftView(d, a, at, unordered)
+		}
 		out := make([]interface{}, len(a))
 		for i, av := range a {
-			out[i] = driftView(d[i], av)
+			out[i] = driftView(d[i], av, unordered.child(at, "*"), unordered)
 		}
 		return out
 	default:
@@ -210,6 +321,24 @@ func driftView(declared, actual interface{}) interface{} {
 		}
 		return actual
 	}
+}
+
+// unorderedDriftView keeps paired declared elements, followed by one marker
+// per unpaired controller element. Without an index correspondence, an unpaired
+// scalar may be an unmanaged value, a type change, or a value hidden on a prior
+// refresh. Never copy it. The caller has already hidden lists holding ${...}.
+func unorderedDriftView(declared, actual []interface{}, at []string, unordered cascPaths) []interface{} {
+	pairs, n := matchUnordered(declared, actual, at, unordered)
+	out := make([]interface{}, 0, len(actual))
+	for i, j := range pairs {
+		if j >= 0 {
+			out = append(out, declared[i])
+		}
+	}
+	for hidden := len(actual) - n; hidden > 0; hidden-- {
+		out = append(out, cascDriftMarker)
+	}
+	return out
 }
 
 // hasInterpolation reports whether any string scalar in v contains a ${...}
