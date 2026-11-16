@@ -126,7 +126,7 @@ func stripIgnoredElements(config string, paths []string) string {
 // withLiveIgnoredElements returns template, a jenkins_job template about to be
 // posted, with live's copy of each element paths name: Jenkins' copy is what
 // the plugin that writes the element expects back, and the template's copy
-// is the configured one, or the refreshed state, which may predate a scan.
+// is the configured one, which state keeps too (withStateIgnoredElements).
 //
 // An element is placed by its parent, identified in both documents by the
 // names of its ancestors and, for each, its position among same-named
