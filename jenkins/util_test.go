@@ -376,3 +376,12 @@ func TestFolderExists(t *testing.T) {
 		}
 	})
 }
+
+// TestTemplatesEqual_DeclarationLine: only the declaration opening the
+// document is dropped, so a later ?> on its line does not take the elements
+// in between with it.
+func TestTemplatesEqual_DeclarationLine(t *testing.T) {
+	if templatesEqual("<?xml version='1.1'?><r><a>1</a><?pi x?></r>", "<?xml version='1.1'?><r><a>2</a><?pi x?></r>") {
+		t.Error("a change between the declaration and a later ?> compared equal")
+	}
+}

@@ -99,8 +99,9 @@ func hasFolderCredentials(config string) bool {
 }
 
 // blankLeadingXMLDecl returns s with the XML declaration opening it replaced
-// by as many spaces. encoding/xml rejects Jenkins' version='1.1' declaration;
-// blanking it rather than removing it keeps decoder offsets valid in s.
+// by as many spaces, line breaks kept. encoding/xml rejects Jenkins'
+// version='1.1' declaration; blanking it rather than removing it keeps decoder
+// offsets and line numbers valid in s.
 func blankLeadingXMLDecl(s string) string {
 	return reLeadingXMLDecl.ReplaceAllStringFunc(s, blankOut)
 }
@@ -114,7 +115,13 @@ func blankNumericCharRefs(s string) string {
 }
 
 func blankOut(m string) string {
-	return strings.Repeat(" ", len(m))
+	b := []byte(m)
+	for i := range b {
+		if b[i] != '\n' {
+			b[i] = ' '
+		}
+	}
+	return string(b)
 }
 
 // withFolderCredentials returns template, a jenkins_job template about to be
