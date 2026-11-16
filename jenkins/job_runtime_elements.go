@@ -36,11 +36,7 @@ func stripJobRuntimeElements(config string) string {
 		return config
 	}
 
-	// encoding/xml rejects Jenkins' version='1.1' declaration. Blank it out
-	// rather than remove it, so offsets into src are offsets into config.
-	src := reXMLDecl.ReplaceAllStringFunc(config, func(m string) string {
-		return strings.Repeat(" ", len(m))
-	})
+	src := blankLeadingXMLDecl(config)
 	dec := xml.NewDecoder(strings.NewReader(src))
 	var parents []string
 	var spans [][2]int

@@ -74,6 +74,10 @@ func TestStripJobRuntimeElements(t *testing.T) {
 			"<" + nav + "><navigatorProjects>",
 			"<" + nav + "><navigatorProjects>",
 		},
+		"later ?> on the declaration line": {
+			"<?xml version='1.1'?><" + nav + "><?pi x?><navigatorProjects/></" + nav + ">",
+			"<?xml version='1.1'?><" + nav + "><?pi x?></" + nav + ">",
+		},
 		"no runtime element": {covNJobXML, covNJobXML},
 	}
 	for name, tc := range cases {

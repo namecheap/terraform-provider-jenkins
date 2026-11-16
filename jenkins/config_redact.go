@@ -97,6 +97,17 @@ func hasFolderCredentials(config string) bool {
 	return reFolderCredentialsPropertyTag.MatchString(config)
 }
 
+// blankLeadingXMLDecl returns s with the XML declaration opening it replaced
+// by as many spaces. encoding/xml rejects Jenkins' version='1.1' declaration;
+// blanking it rather than removing it keeps decoder offsets valid in s.
+func blankLeadingXMLDecl(s string) string {
+	return reLeadingXMLDecl.ReplaceAllStringFunc(s, blankOut)
+}
+
+func blankOut(m string) string {
+	return strings.Repeat(" ", len(m))
+}
+
 // withFolderCredentials returns template, a jenkins_job template about to be
 // posted, with every folder credentials store in live, the item's current
 // config.xml, copied verbatim into it as the first children of the root's
@@ -110,11 +121,7 @@ func withFolderCredentials(template, live string) (string, error) {
 	}
 	store := strings.Join(stores, "")
 
-	// encoding/xml rejects Jenkins' version='1.1' declaration. Blank it out
-	// rather than remove it, so offsets into src are offsets into template.
-	src := reLeadingXMLDecl.ReplaceAllStringFunc(template, func(m string) string {
-		return strings.Repeat(" ", len(m))
-	})
+	src := blankLeadingXMLDecl(template)
 	dec := xml.NewDecoder(strings.NewReader(src))
 	// The store replaces template[from:to] with insert, at the first root's
 	// first <properties> child if there is one. The whole template is parsed
