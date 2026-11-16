@@ -68,7 +68,7 @@ And in `pipeline.xml`:
 ### Required
 
 - `name` (String) The unique name of the JenkinsCI job.
-- `template` (String) The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. Elements a plugin writes into config.xml on its own, such as the projects a GitLab organization folder scan records (`navigatorProjects`), are left out of the comparison and of state. When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is managed by this template only if the template contains that element. Otherwise updates keep the store the folder has in Jenkins (such as credentials added by `jenkins_credential_*` resources), and it is left out of the refreshed value so encrypted folder credentials are not copied into state; removing the element from a template that contained it deletes the store on the next apply. State written by an earlier provider version or by `terraform import` does not record whether the template contains the element, so a template that does shows one in-place update on the first plan, which re-applies it unchanged. An element whose value is `{redacted}`, the marker the `jenkins_job` and `jenkins_folder` data sources put in place of encrypted secrets, is rejected: Jenkins would store the marker itself as the secret.
+- `template` (String) The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. Elements a plugin writes into config.xml on its own, such as the projects a GitLab organization folder scan records (`navigatorProjects`), are left out of the comparison and of state. An element whose value is `{redacted}`, the marker the `jenkins_job` and `jenkins_folder` data sources put in place of encrypted secrets, is rejected: Jenkins would store the marker itself as the secret. See [Folder credentials store](#folder-credentials-store) for the store Jenkins keeps on update.
 
 ### Optional
 
@@ -78,6 +78,16 @@ And in `pipeline.xml`:
 ### Read-Only
 
 - `id` (String) The full canonical job path, e.g. `/job/job-name`.
+
+## Folder credentials store
+
+When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is managed by `template` only if the template contains that element.
+
+-> If the template does not contain the element, every update copies the store Jenkins has into the posted configuration, so credentials added by `jenkins_credential_*` resources, the UI or JCasC are kept. The store is also left out of the refreshed `template`, so encrypted folder credentials are not copied into state.
+
+~> Removing the element from a template that contained it deletes the store on the next apply.
+
+-> State written by an earlier provider version or by `terraform import` does not record whether the template contains the element. A template that does shows one in-place update on the first plan, which re-applies it unchanged.
 
 ## Import
 

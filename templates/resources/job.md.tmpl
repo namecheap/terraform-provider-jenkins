@@ -53,6 +53,16 @@ And in `pipeline.xml`:
 ```
 
 {{ .SchemaMarkdown | trimspace }}
+
+## Folder credentials store
+
+When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is managed by `template` only if the template contains that element.
+
+-> If the template does not contain the element, every update copies the store Jenkins has into the posted configuration, so credentials added by `jenkins_credential_*` resources, the UI or JCasC are kept. The store is also left out of the refreshed `template`, so encrypted folder credentials are not copied into state.
+
+~> Removing the element from a template that contained it deletes the store on the next apply.
+
+-> State written by an earlier provider version or by `terraform import` does not record whether the template contains the element. A template that does shows one in-place update on the first plan, which re-applies it unchanged.
 {{- if .HasImport }}
 
 ## Import
