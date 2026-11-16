@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -130,6 +132,96 @@ resource jenkins_job foo {
 			},
 		},
 	})
+}
+
+// TestAccJenkinsJob_ignoredElements stands a pipeline job's description in
+// for an element a plugin writes on its own (the integration image has no
+// gitlab-branch-source): changed out of band, it plans no change, and an
+// update keeps Jenkins' copy.
+func TestAccJenkinsJob_ignoredElements(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(testDir, "test.xml"), testXML, 0644)
+	randString := acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+	name := "tf-acc-test-" + randString
+
+	config := func(disabled bool) string {
+		return fmt.Sprintf(`
+resource jenkins_job foo {
+	name = "%s"
+	disabled = %t
+	ignored_elements = ["/flow-definition/description"]
+	template = templatefile("%s/test.xml", {
+		description = "managed"
+	})
+}`, name, disabled, testDir)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsJobDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config(false),
+			},
+			{
+				PreConfig: func() {
+					ctx := context.Background()
+					job, err := testAccClient.GetJob(ctx, name)
+					if err != nil {
+						t.Fatalf("GetJob: %v", err)
+					}
+					live, err := job.GetConfig(ctx)
+					if err != nil {
+						t.Fatalf("GetConfig: %v", err)
+					}
+					changed := strings.Replace(live, "<description>managed</description>", "<description>out-of-band</description>", 1)
+					if changed == live {
+						t.Fatalf("config.xml has no managed description:\n%s", live)
+					}
+					if err := job.UpdateConfig(ctx, changed); err != nil {
+						t.Fatalf("UpdateConfig: %v", err)
+					}
+				},
+				Config:   config(false),
+				PlanOnly: true,
+			},
+			{
+				Config: config(true),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsJobConfigContains("jenkins_job.foo", "<description>out-of-band</description>"),
+					// State keeps the template's copy, not the one Jenkins has.
+					resource.TestMatchResourceAttr("jenkins_job.foo", "template", regexp.MustCompile("<description>managed</description>")),
+				),
+			},
+		},
+	})
+}
+
+// testAccCheckJenkinsJobConfigContains asserts the live config.xml of a job
+// resource contains want.
+func testAccCheckJenkinsJobConfigContains(resourceName, want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", resourceName)
+		}
+
+		ctx := context.Background()
+		name, folders := parseCanonicalJobID(rs.Primary.ID)
+		job, err := testAccClient.GetJob(ctx, name, folders...)
+		if err != nil {
+			return err
+		}
+		config, err := job.GetConfig(ctx)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(config, want) {
+			return fmt.Errorf("job %s config.xml does not contain %q:\n%s", rs.Primary.ID, want, config)
+		}
+		return nil
+	}
 }
 
 // testAccCheckJenkinsJobEnabled asserts the live enabled state of a job resource.

@@ -68,8 +68,9 @@ var (
 	// redactedSecretMarker, which is how a redacted Secret field reads.
 	reRedactedSecretValue = regexp.MustCompile(`>\s*` + regexp.QuoteMeta(redactedSecretMarker) + `\s*<`)
 
-	// reLeadingXMLDecl matches the XML declaration opening a document.
-	reLeadingXMLDecl = regexp.MustCompile(`\A\s*<\?xml[^?]*\?>`)
+	// reLeadingXMLDecl matches the XML declaration opening a document, with
+	// the byte order mark a file saved by some editors starts with.
+	reLeadingXMLDecl = regexp.MustCompile(`\A\x{FEFF}?\s*<\?xml[^?]*\?>`)
 
 	// reNumericCharRef matches a numeric character reference such as &#x1b;.
 	reNumericCharRef = regexp.MustCompile(`&#(?:[0-9]+|x[0-9A-Fa-f]+);`)
@@ -104,6 +105,14 @@ func blankLeadingXMLDecl(s string) string {
 	return reLeadingXMLDecl.ReplaceAllStringFunc(s, blankOut)
 }
 
+// blankNumericCharRefs returns s with every numeric character reference
+// replaced by as many spaces. XML 1.1, which Jenkins serves, allows
+// references to control characters that encoding/xml rejects; as with
+// blankLeadingXMLDecl, decoder offsets stay valid in s.
+func blankNumericCharRefs(s string) string {
+	return reNumericCharRef.ReplaceAllStringFunc(s, blankOut)
+}
+
 func blankOut(m string) string {
 	return strings.Repeat(" ", len(m))
 }
@@ -121,7 +130,7 @@ func withFolderCredentials(template, live string) (string, error) {
 	}
 	store := strings.Join(stores, "")
 
-	src := blankLeadingXMLDecl(template)
+	src := blankNumericCharRefs(blankLeadingXMLDecl(template))
 	dec := xml.NewDecoder(strings.NewReader(src))
 	// The store replaces template[from:to] with insert, at the first root's
 	// first <properties> child if there is one. The whole template is parsed
