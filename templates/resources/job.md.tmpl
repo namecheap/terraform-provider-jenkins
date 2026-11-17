@@ -91,8 +91,8 @@ Each entry is a path of element names from the root element. `*` matches any nam
 
 Limits:
 
-- When a folder has several elements of the same name, such as two GitLab navigators, their ignored elements are matched to Jenkins' by order. Adding or removing one resets them to the template's copy; reordering or replacing one gives it another's copy.
-- A template with no copy of an ignored element shows it as removed in a plan that changes something else. The update keeps it.
+- When a folder has several elements of the same name, such as two GitLab navigators, their ignored elements are matched to Jenkins' by order. Adding or removing one resets them to the template's copy, and the update fails if the template has none; reordering or replacing one gives it another's copy.
+- A template with no copy of an ignored element shows it as removed in a plan that changes something else. The update keeps it, except in the case above.
 - `ignored_elements` must be known at plan time when the template differs from the job.
 {{- if .HasImport }}
 

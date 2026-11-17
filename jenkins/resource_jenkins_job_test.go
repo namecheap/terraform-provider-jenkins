@@ -198,6 +198,73 @@ resource jenkins_job foo {
 	})
 }
 
+// An update that changes how many same-named parents there are cannot pair
+// them with Jenkins', so it must not post one without an ignored element
+// Jenkins has in them.
+func TestAccJenkinsJob_ignoredElementsUnpairedParent(t *testing.T) {
+	name := "tf-acc-test-" + acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+
+	param := func(name, description string) string {
+		return "<hudson.model.StringParameterDefinition><name>" + name + "</name>" + description +
+			"<trim>false</trim></hudson.model.StringParameterDefinition>"
+	}
+	config := func(params string) string {
+		return fmt.Sprintf(`
+resource jenkins_job foo {
+	name = "%s"
+	ignored_elements = ["/project/properties/hudson.model.ParametersDefinitionProperty/parameterDefinitions/*/description"]
+	template = <<-EOT
+		<project>
+		  <actions/>
+		  <keepDependencies>false</keepDependencies>
+		  <properties>
+		    <hudson.model.ParametersDefinitionProperty>
+		      <parameterDefinitions>%s</parameterDefinitions>
+		    </hudson.model.ParametersDefinitionProperty>
+		  </properties>
+		  <scm class="hudson.scm.NullSCM"/>
+		  <canRoam>false</canRoam>
+		  <disabled>false</disabled>
+		  <blockBuildWhenDownstreamBuilding>false</blockBuildWhenDownstreamBuilding>
+		  <blockBuildWhenUpstreamBuilding>false</blockBuildWhenUpstreamBuilding>
+		  <triggers/>
+		  <concurrentBuild>false</concurrentBuild>
+		  <builders/>
+		  <publishers/>
+		  <buildWrappers/>
+		</project>
+	EOT
+}`, name, params)
+	}
+	one := param("first", "<description>set on create</description>")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		CheckDestroy:             testAccCheckJenkinsJobDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config(one),
+				Check:  testAccCheckJenkinsJobConfigContains("jenkins_job.foo", "<description>set on create</description>"),
+			},
+			{
+				Config:      config(param("first", "") + param("second", "")),
+				ExpectError: regexp.MustCompile(`the template has no <description> in a\s+/project/properties/hudson\.model\.ParametersDefinitionProperty/parameterDefinitions/hudson\.model\.StringParameterDefinition\s+element`),
+			},
+			{
+				Config: config(param("first", "<description/>") + param("second", "<description/>")),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckJenkinsJobConfigContains("jenkins_job.foo", "<name>second</name>"),
+				),
+			},
+			{
+				Config:   config(param("first", "<description/>") + param("second", "<description/>")),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // testAccCheckJenkinsJobConfigContains asserts the live config.xml of a job
 // resource contains want.
 func testAccCheckJenkinsJobConfigContains(resourceName, want string) resource.TestCheckFunc {

@@ -335,6 +335,16 @@ func TestIgnoredElementPathValidator(t *testing.T) {
 	}
 }
 
+// Read merges into Jenkins' own document, which is never posted: a parent
+// that cannot be paired is kept as Jenkins has it, without an error.
+func TestWithStateIgnoredElements_UnpairedParents(t *testing.T) {
+	config := "<r><ns><n><id>1</id><np><s>a</s></np></n><n><id>2</id></n></ns></r>"
+	state := "<r><ns><n><id>1</id><np/></n></ns></r>"
+	if got := withStateIgnoredElements(config, state, []string{"/r/ns/n/np"}); got != config {
+		t.Errorf("withStateIgnoredElements:\n got: %q\nwant: %q", got, config)
+	}
+}
+
 func TestWithLiveIgnoredElements(t *testing.T) {
 	const nav = "io.jenkins.plugins.gitlabbranchsource.GitLabSCMNavigator"
 	org := []string{navProjectsPath}
@@ -378,6 +388,35 @@ func TestWithLiveIgnoredElements(t *testing.T) {
 			"<r><ns><n><id>2</id><np/></n></ns></r>",
 			"<r><ns><n><id>1</id><np><s>a</s></np></n><n><id>2</id><np><s>b</s></np></n></ns></r>",
 			"<r><ns><n><id>2</id><np/></n></ns></r>",
+			[]string{"/r/ns/n/np"}, false,
+		},
+		// Kept as written, these navigators would be posted without the
+		// element Jenkins has in them.
+		"navigator of the same type added, template without the element": {
+			"<r><ns><n><id>1</id></n><n><id>2</id></n></ns></r>",
+			"<r><ns><n><id>1</id><np><s>a</s></np></n></ns></r>",
+			"", []string{"/r/ns/n/np"}, true,
+		},
+		"navigator of the same type added without the element": {
+			"<r><ns><n><id>1</id><np/></n><n><id>2</id></n></ns></r>",
+			"<r><ns><n><id>1</id><np><s>a</s></np></n></ns></r>",
+			"", []string{"/r/ns/n/np"}, true,
+		},
+		"navigator of the same type removed, template without the element": {
+			"<r><ns><n><id>2</id></n></ns></r>",
+			"<r><ns><n><id>1</id><np><s>a</s></np></n><n><id>2</id><np><s>b</s></np></n></ns></r>",
+			"", []string{"/r/ns/n/np"}, true,
+		},
+		"navigator added under a wildcard, template without the element": {
+			"<r><ns><n><id>1</id></n><n><id>2</id></n></ns></r>",
+			"<r><ns><n><id>1</id><np><s>a</s></np></n></ns></r>",
+			"", []string{"/r/*/n/np"}, true,
+		},
+		// Jenkins has no such element in any of them: nothing is lost.
+		"navigator of the same type added, no element in Jenkins": {
+			"<r><ns><n><id>1</id></n><n><id>2</id></n></ns></r>",
+			"<r><ns><n><id>1</id></n></ns></r>",
+			"<r><ns><n><id>1</id></n><n><id>2</id></n></ns></r>",
 			[]string{"/r/ns/n/np"}, false,
 		},
 		// Parents are paired by position alone: nothing in a document says

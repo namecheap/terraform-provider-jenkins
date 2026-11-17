@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -141,9 +142,18 @@ func stripIgnoredElements(config string, paths []string) string {
 // type the folder already has, every parent of that name and below is kept
 // as written, rather than given another one's copies.
 //
-// It fails if either document is not well-formed, rather than post a
-// template that may lack an element its plugin cannot load without.
+// It fails rather than post a template that may lack an element its plugin
+// cannot load without: if either document is not well-formed, and if a parent
+// kept as written for want of a pairing has no element of a name live has
+// under a parent of the same path.
 func withLiveIgnoredElements(template, live string, paths []string) (string, error) {
+	return mergeIgnoredElements(template, live, paths, true)
+}
+
+// mergeIgnoredElements is withLiveIgnoredElements. Without strict, a parent
+// kept as written may lack an element live has: withStateIgnoredElements
+// merges into Jenkins' own document, which is not posted.
+func mergeIgnoredElements(template, live string, paths []string, strict bool) (string, error) {
 	parsed := parseElementPaths(paths)
 	if len(parsed) == 0 {
 		return template, nil
@@ -155,6 +165,8 @@ func withLiveIgnoredElements(template, live string, paths []string) (string, err
 		text  map[string]string
 	}
 	copies := map[string]*parentCopies{}
+	// The names Jenkins has copies of, by the path of their parent.
+	liveNames := map[string][]string{}
 	liveCounts, err := walkIgnoredElements(live, parsed, ignoredElementVisitor{
 		match: func(parent, name string, from, to int) {
 			c := copies[parent]
@@ -164,6 +176,9 @@ func withLiveIgnoredElements(template, live string, paths []string) (string, err
 			}
 			if _, ok := c.text[name]; !ok {
 				c.names = append(c.names, name)
+				if path := keyPath(parent); !slices.Contains(liveNames[path], name) {
+					liveNames[path] = append(liveNames[path], name)
+				}
 			}
 			c.text[name] += live[from:to]
 		},
@@ -182,8 +197,13 @@ func withLiveIgnoredElements(template, live string, paths []string) (string, err
 	}
 	var edits []edit
 	placed := map[[2]string]bool{}
+	// The elements template has, and each parent and name it has none of
+	// while Jenkins has one under a parent of the same path.
+	has := map[[2]string]bool{}
+	var lacking [][2]string
 	counts, err := walkIgnoredElements(template, parsed, ignoredElementVisitor{
 		match: func(parent, name string, from, to int) {
+			has[[2]string{parent, name}] = true
 			c := copies[parent]
 			if c == nil {
 				return
@@ -199,6 +219,11 @@ func withLiveIgnoredElements(template, live string, paths []string) (string, err
 			edits = append(edits, edit{parent, from, to, text})
 		},
 		end: func(key, tag string, endTag int, selfClosing bool) {
+			for _, n := range liveNames[keyPath(key)] {
+				if !has[[2]string{key, n}] {
+					lacking = append(lacking, [2]string{key, n})
+				}
+			}
 			c := copies[key]
 			if c == nil {
 				return
@@ -222,6 +247,15 @@ func withLiveIgnoredElements(template, live string, paths []string) (string, err
 	})
 	if err != nil {
 		return "", fmt.Errorf("parsing the template: %w", err)
+	}
+	if strict {
+		for _, l := range lacking {
+			if !sameElementCounts(l[0], counts, liveCounts) {
+				return "", fmt.Errorf("the template has no <%[1]s> in a %[2]s element, and Jenkins has one in such an element; "+
+					"the template changes how many of these elements there are, so Jenkins' <%[1]s> cannot be matched to it. "+
+					"Add <%[1]s> to each of them in the template, empty where it has no initial value", l[1], keyPath(l[0]))
+			}
+		}
 	}
 
 	var out strings.Builder
@@ -248,7 +282,7 @@ func withLiveIgnoredElements(template, live string, paths []string) (string, err
 // them, with the same limits. config is returned unchanged when either
 // document is not well-formed.
 func withStateIgnoredElements(config, state string, paths []string) string {
-	merged, err := withLiveIgnoredElements(config, state, paths)
+	merged, err := mergeIgnoredElements(config, state, paths, false)
 	if err != nil {
 		return config
 	}
@@ -339,6 +373,16 @@ func startTagName(tag string) string {
 		return tag[:i]
 	}
 	return tag
+}
+
+// keyPath returns key without its positions: the names of an element and of
+// its ancestors, as an ignored_elements entry writes them.
+func keyPath(key string) string {
+	var b strings.Builder
+	for _, seg := range strings.Split(key, "/")[1:] {
+		b.WriteString("/" + seg[:strings.LastIndexByte(seg, '[')])
+	}
+	return b.String()
 }
 
 // sameElementCounts reports whether a and b, walkIgnoredElements counts of
