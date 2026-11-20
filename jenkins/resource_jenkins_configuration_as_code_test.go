@@ -531,3 +531,108 @@ func testAccCheckCASCSectionContains(section, want string) resource.TestCheckFun
 		return nil
 	}
 }
+
+// TestAccJenkinsConfigurationAsCode_secretsWo applies a section whose secret
+// comes from secrets_wo, then rotates it with secrets_wo_version. The value
+// holds a "${" that JCasC must keep literal rather than resolve to an empty
+// string, and it must never reach state.
+func TestAccJenkinsConfigurationAsCode_secretsWo(t *testing.T) {
+	first := "tf-acc-wo-" + acctest.RandStringFromCharSet(12, acctest.CharSetAlphaNum)
+	second := "tf-acc-wo-" + acctest.RandStringFromCharSet(12, acctest.CharSetAlphaNum)
+	config := func(value, version string) string {
+		return fmt.Sprintf(`
+resource jenkins_configuration_as_code test {
+  section            = "jenkins"
+  yaml               = yamlencode({ systemMessage = "$${message}" })
+  secrets_wo         = { message = "%s-$${literal}" }
+  secrets_wo_version = "%s"
+}`, value, version)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: config(first, "1"),
+				Check: resource.ComposeTestCheckFunc(
+					// The export escapes a literal "${" as "^${".
+					testAccCheckCASCSectionContains("jenkins", first+"-^${literal}"),
+					testAccCheckStateOmits(first),
+					resource.TestCheckResourceAttr("jenkins_configuration_as_code.test", "yaml", "\"systemMessage\": \"${message}\"\n"),
+				),
+			},
+			{
+				Config: config(second, "2"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCASCSectionContains("jenkins", second+"-^${literal}"),
+					testAccCheckStateOmits(second),
+				),
+			},
+			{
+				// The same configuration again: a refresh must agree with it.
+				Config: config(second, "2"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectEmptyPlan(),
+				}},
+			},
+		},
+	})
+}
+
+// TestAccJenkinsConfigurationAsCode_secretsWoCASCSyntax checks secrets_wo
+// against JCasC's own ${...} syntax on a real controller: a reference nested
+// in a JCasC expression is substituted, then compared as a placeholder; an
+// escaped ^${name} stays literal; and a value JCasC syntax cannot carry fails
+// before anything is sent.
+func TestAccJenkinsConfigurationAsCode_secretsWoCASCSyntax(t *testing.T) {
+	decoded := "tf-acc-nested-" + acctest.RandStringFromCharSet(12, acctest.CharSetAlphaNum)
+	encoded := base64.StdEncoding.EncodeToString([]byte(decoded))
+	config := func(message, value string) string {
+		return fmt.Sprintf(`
+resource jenkins_configuration_as_code test {
+  section            = "jenkins"
+  yaml               = yamlencode({ systemMessage = "%s" })
+  secrets_wo         = { value = %q }
+  secrets_wo_version = "1"
+}`, message, value)
+	}
+	nested := "$${decodeBase64:$${value}}"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: config(nested, encoded),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCASCSectionContains("jenkins", "systemMessage: "+decoded+"\n"),
+					testAccCheckStateOmits(decoded),
+					testAccCheckStateOmits(encoded),
+				),
+			},
+			{
+				// The nested expression is one placeholder: no drift.
+				Config: config(nested, encoded),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectEmptyPlan(),
+				}},
+			},
+			{
+				// The escaped expression reaches the controller as a literal,
+				// which the export escapes again. Embedded in a longer string,
+				// the reference never compares equal, hence the plan.
+				Config:             config("^$${value}-$${value}", decoded),
+				ExpectNonEmptyPlan: true,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCASCSectionContains("jenkins", "systemMessage: ^${value}-"+decoded+"\n"),
+					testAccCheckStateOmits(decoded),
+				),
+			},
+			{
+				Config:      config(nested, `{"k":"v"}`),
+				ExpectError: regexp.MustCompile(`Invalid Secret Value`),
+			},
+		},
+	})
+}

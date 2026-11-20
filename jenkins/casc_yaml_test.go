@@ -1,6 +1,7 @@
 package jenkins
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +17,12 @@ func TestIsSecretPlaceholder(t *testing.T) {
 		"padded placeholder":       {"  ${SECRET}  ", true},
 		"plain string":             {"hello", false},
 		"embedded not whole":       {"prefix-${SECRET}", false},
+		"nested":                   {"${decodeBase64:${SECRET}}", true},
+		"nested in default":        {"${A:-${B:-c}}", true},
+		"escaped":                  {"^${SECRET}", false},
+		"two expressions":          {"${A}${B}", false},
+		"never closed":             {"${decodeBase64:${SECRET}", false},
+		"empty":                    {"${}", false},
 		"non-string int":           {42, false},
 		"nil":                      {nil, false},
 	}
@@ -91,7 +98,7 @@ func TestYAMLSubset(t *testing.T) {
 
 func TestWrapSection(t *testing.T) {
 	t.Run("wraps a subtree under its section key", func(t *testing.T) {
-		doc, err := wrapSection("jenkins", "systemMessage: hi")
+		doc, err := wrapSection("jenkins", "systemMessage: hi", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -110,7 +117,7 @@ func TestWrapSection(t *testing.T) {
 	})
 
 	t.Run("invalid YAML errors", func(t *testing.T) {
-		if _, err := wrapSection("jenkins", "a: [bad\n"); err == nil {
+		if _, err := wrapSection("jenkins", "a: [bad\n", nil); err == nil {
 			t.Error("expected an error for malformed YAML")
 		}
 	})
@@ -366,12 +373,11 @@ func TestCASCDriftView(t *testing.T) {
 			wantNotContain: []string{"resolved-db-pass"},
 		},
 		{
-			// ${A:-${B}} is not a whole placeholder to isSecretPlaceholder, so
-			// it always drifts; the resolved value must still stay hidden.
+			// Nested placeholders stay declared even when another key drifts.
 			name:           "nested placeholder default is never copied",
-			declared:       "token: ${A:-${B}}\n",
-			export:         "s:\n  token: resolved-b\n",
-			want:           "token: " + marker + "\n",
+			declared:       "token: ${A:-${B}}\nother: 1\n",
+			export:         "s:\n  token: resolved-b\n  other: 2\n",
+			want:           "token: ${A:-${B}}\nother: 2\n",
 			wantNotContain: []string{"resolved-b"},
 		},
 		{
@@ -533,4 +539,131 @@ func TestCASCDriftView(t *testing.T) {
 			t.Error("expected an error for malformed exported YAML")
 		}
 	})
+}
+
+func TestSubstituteSecrets(t *testing.T) {
+	secrets := map[string]string{
+		"CLIENT_SECRET": "s3cr3t",
+		"MULTILINE":     "line1\nkey: injected\n- item",
+		"DOLLAR":        "pa${ss}",
+	}
+	declared := `realm:
+  clientSecret: "${CLIENT_SECRET}"
+  url: "https://user:${CLIENT_SECRET}@host/"
+  cert: "${MULTILINE}"
+  password: "${DOLLAR}"
+  other: "${NOT_A_KEY}"
+  withDefault: "${CLIENT_SECRET:-fallback}"
+  list: ["${CLIENT_SECRET}", plain]
+`
+	doc, err := wrapSection("jenkins", declared, secrets)
+	if err != nil {
+		t.Fatalf("wrapSection: %v", err)
+	}
+	got := mustParseYAML(t, doc)
+	want := mustParseYAML(t, `jenkins:
+  realm:
+    clientSecret: s3cr3t
+    url: "https://user:s3cr3t@host/"
+    cert: "line1\nkey: injected\n- item"
+    password: "pa^${ss}"
+    other: "${NOT_A_KEY}"
+    withDefault: "${CLIENT_SECRET:-fallback}"
+    list: [s3cr3t, plain]
+`)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("substitution mismatch:\n got: %s", doc)
+	}
+
+	out, err := wrapSection("jenkins", declared, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(mustParseYAML(t, out), map[string]interface{}{"jenkins": mustParseYAML(t, declared)}) {
+		t.Error("no secrets must leave the parsed document unchanged")
+	}
+
+	edges := map[string]struct {
+		in      string
+		secrets map[string]string
+		want    string
+	}{
+		"escaped expression stays literal": {"^${K}", map[string]string{"K": "v"}, "^${K}"},
+		"nested expression":                {"${decodeBase64:${K}}", map[string]string{"K": "Zm9v"}, "${decodeBase64:Zm9v}"},
+		"value ending in $ before {":       {"${K}{x}", map[string]string{"K": "q$"}, "q^${x}"},
+		"$ before value starting with {":   {"$${K}", map[string]string{"K": "{x}"}, "^${x}"},
+		"adjacent values":                  {"${A}${B}", map[string]string{"A": "a$", "B": "{b"}, "a${b"},
+		"unclosed secret":                  {"${K}", map[string]string{"K": "ab${cd"}, "ab${cd"},
+		"unclosed secret closed by suffix": {"${K}}", map[string]string{"K": "ab${cd"}, "ab^${cd}"},
+		"no reference":                     {"plain ${OTHER}", map[string]string{"K": "v"}, "plain ${OTHER}"},
+		"nested deeper":                    {"${A:-${decodeBase64:${K}}}", map[string]string{"K": "Zm9v"}, "${A:-${decodeBase64:Zm9v}}"},
+		"after an escaped expression":      {"^${x ${K}}", map[string]string{"K": "v"}, "^${x v}"},
+		"inside an escaped default":        {"${A:-^${K}}", map[string]string{"K": "v"}, "${A:-^${K}}"},
+		"after a never closed expression":  {"${A ${K}", map[string]string{"K": "v"}, "${A ${K}"},
+		"value ending in ^ before a value": {"${A}${B}", map[string]string{"A": "a^", "B": "${b}"}, "a^^${b}"},
+		"value ending in ^ before escape":  {"${A}^${B}", map[string]string{"A": "a^"}, "a^^${B}"},
+	}
+	for name, tc := range edges {
+		t.Run(name, func(t *testing.T) {
+			got, err := substituteString(tc.in, tc.secrets)
+			if err != nil || got != tc.want {
+				t.Errorf("substituteString(%q) = %q, %v, want %q", tc.in, got, err, tc.want)
+			}
+		})
+	}
+
+	// JCasC syntax cannot carry these values where the template puts them.
+	// The error must name the key, never the value.
+	rejected := map[string]struct {
+		in      string
+		secrets map[string]string
+	}{
+		"value ending in ^ before an expression": {"${K}${OTHER}", map[string]string{"K": "s3cr3t^"}},
+		"nested value holding }":                 {"${json:p:${K}}", map[string]string{"K": "{\"p\":\"s3cr3t\"}"}},
+		"nested value holding ${":                {"${decodeBase64:${K}}", map[string]string{"K": "s3cr3t${x}"}},
+		"nested default delimiter":               {"${base64:${K}}", map[string]string{"K": "s3cr3t:-b"}},
+		"nested value holding ^":                 {"${decodeBase64:${K}}", map[string]string{"K": "s3cr3t^"}},
+	}
+	for name, tc := range rejected {
+		t.Run(name, func(t *testing.T) {
+			got, err := substituteString(tc.in, tc.secrets)
+			if !errors.Is(err, errCASCSecretValue) {
+				t.Fatalf("substituteString(%q) = %q, %v, want errCASCSecretValue", tc.in, got, err)
+			}
+			if !strings.Contains(err.Error(), `"K"`) || strings.Contains(err.Error(), "s3cr3t") {
+				t.Errorf("error must name the key and hide the value: %v", err)
+			}
+		})
+	}
+
+	t.Run("error from wrapSection", func(t *testing.T) {
+		_, err := wrapSection("jenkins", "a: \"${decodeBase64:${K}}\"\n", map[string]string{"K": "}"})
+		if !errors.Is(err, errCASCSecretValue) {
+			t.Errorf("wrapSection error = %v, want errCASCSecretValue", err)
+		}
+	})
+
+	t.Run("mapping with a non-string key", func(t *testing.T) {
+		doc, err := wrapSection("jenkins", "ports:\n  8080: \"${K}\"\n", map[string]string{"K": "v"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(doc, "${K}") {
+			t.Errorf("expression under an integer key was not substituted:\n%s", doc)
+		}
+	})
+}
+
+func TestUnreferencedSecrets(t *testing.T) {
+	declared := "a: ${USED}\nb: [\"x-${ALSO_USED}\"]\nc: ${decodeBase64:Zm9v}\nd: ${decodeBase64:${NESTED}}\ne: ^${ESCAPED}\nf:\n  1: ${INT_KEY}\n"
+	got, err := unreferencedSecrets(declared, map[string]string{"USED": "", "ALSO_USED": "", "NESTED": "", "INT_KEY": "", "ESCAPED": "", "TYPO": "", "ANOTHER": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"ANOTHER", "ESCAPED", "TYPO"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unreferencedSecrets = %v, want %v", got, want)
+	}
+	if _, err := unreferencedSecrets("a: [bad\n", map[string]string{"X": ""}); err == nil {
+		t.Error("expected a parse error")
+	}
 }
