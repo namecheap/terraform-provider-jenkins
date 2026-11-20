@@ -172,12 +172,10 @@ func (jobXMLValidator) ValidateString(_ context.Context, req validator.StringReq
 		return
 	}
 
-	// Strip the XML declaration before parsing: Jenkins uses
-	// `<?xml version='1.1'?>`, which Go's encoding/xml rejects outright. Removing
-	// it (the declaration carries no configuration) leaves the newline in place,
-	// so reported line numbers stay accurate. This matches how templates are
-	// normalized elsewhere in the provider.
-	dec := xml.NewDecoder(strings.NewReader(reXMLDecl.ReplaceAllString(s, "")))
+	// Jenkins uses `<?xml version='1.1'?>`, which Go's encoding/xml rejects
+	// outright. Blanking the declaration keeps its line breaks, so reported
+	// line numbers stay accurate.
+	dec := xml.NewDecoder(strings.NewReader(blankLeadingXMLDecl(s)))
 	depth, rootSeen := 0, false
 	for {
 		tok, err := dec.Token()

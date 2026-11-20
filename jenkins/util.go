@@ -129,8 +129,6 @@ func folderExists(ctx context.Context, client jenkinsClient, name string) error 
 // Compiled once at package load: templateDiff is a DiffSuppressFunc invoked
 // per-attribute on every plan/apply, so these must not be recompiled per call.
 var (
-	// reXMLDecl matches an XML declaration, sanitized to prevent inadvertent inequalities.
-	reXMLDecl = regexp.MustCompile(`<\?xml.+\?>`)
 	// rePlugin matches plugin="..." version attributes, which Jenkins rewrites on every
 	// read; stripping them prevents a version bump from registering as configuration drift.
 	rePlugin = regexp.MustCompile(` plugin="[^"]*"`)
@@ -146,7 +144,7 @@ var (
 // version annotations, and spaces, and unescapes HTML entities. It is deliberately
 // conservative (no element parsing), so it can never mask a genuine change.
 func normalizeJobXML(s string) string {
-	s = reXMLDecl.ReplaceAllString(s, "")
+	s = reLeadingXMLDecl.ReplaceAllLiteralString(s, "")
 	s = rePlugin.ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, " ", "")
 	s = strings.TrimSpace(s)
@@ -165,7 +163,7 @@ func canonicalizeXML(s string) (string, bool) {
 	// `<?xml version='1.1'?>`, which Go's encoding/xml rejects ("unsupported
 	// version 1.1"). The declaration is semantically irrelevant to the
 	// comparison, so removing it lets the token stream parse.
-	dec := xml.NewDecoder(strings.NewReader(reXMLDecl.ReplaceAllString(s, "")))
+	dec := xml.NewDecoder(strings.NewReader(reLeadingXMLDecl.ReplaceAllLiteralString(s, "")))
 	var buf strings.Builder
 	enc := xml.NewEncoder(&buf)
 	for {

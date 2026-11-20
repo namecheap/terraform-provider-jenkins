@@ -27,6 +27,12 @@ import (
 // When the managed "disabled" attribute is true, the top-level <disabled>
 // element is ignored in the comparison, because the enable/disable API rewrites
 // it out of band — matching the SDKv2 d.GetOk("disabled") gate.
+//
+// The elements "ignored_elements" lists are left out of the comparison on both
+// sides (stripIgnoredElements). A list not fully known at plan time is an
+// error unless the template equals the state without it: the planned value
+// would otherwise change once the list is known, and Terraform rejects an
+// apply whose plan changed that way.
 type templatePlanModifier struct{}
 
 var _ planmodifier.String = templatePlanModifier{}
@@ -55,8 +61,47 @@ func (m templatePlanModifier) PlanModifyString(ctx context.Context, req planmodi
 	}
 	strip := !disabled.IsNull() && !disabled.IsUnknown() && disabled.ValueBool()
 
+	var ignoredSet types.Set
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("ignored_elements"), &ignoredSet)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	known := !ignoredSet.IsUnknown()
+	var ignored []string
+	if known && !ignoredSet.IsNull() {
+		var entries []types.String
+		resp.Diagnostics.Append(ignoredSet.ElementsAs(ctx, &entries, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for _, e := range entries {
+			if e.IsUnknown() {
+				known = false
+				break
+			}
+			ignored = append(ignored, e.ValueString())
+		}
+	}
+
 	cfg := stripDisabledElement(req.ConfigValue.ValueString(), strip)
 	state := stripDisabledElement(req.StateValue.ValueString(), strip)
+	if !known {
+		if templatesEqual(state, cfg) {
+			resp.PlanValue = req.StateValue
+			return
+		}
+		resp.Diagnostics.AddAttributeError(path.Root("ignored_elements"), "Ignored Elements Unknown at Plan Time",
+			"The template differs from the job's configuration, and ignored_elements depends on a value known only after apply, "+
+				"so the plan cannot tell whether the difference is in an ignored element. "+
+				"Set ignored_elements from values known at plan time, or first apply the resources it depends on with -target.")
+		return
+	}
+
+	// Both sides are stripped: state holds the copies of the template applied
+	// last (withStateIgnoredElements), or Jenkins' where that template had
+	// none, and the configured template may hold others.
+	cfg = stripIgnoredElements(cfg, ignored)
+	state = stripIgnoredElements(state, ignored)
 	if templatesEqual(state, cfg) {
 		// Semantically equal: keep the prior state value so no diff is shown.
 		resp.PlanValue = req.StateValue

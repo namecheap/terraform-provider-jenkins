@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	jenkins "github.com/bndr/gojenkins"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -31,6 +32,9 @@ type jobResourceModel struct {
 	Folder   types.String `tfsdk:"folder"`
 	Template types.String `tfsdk:"template"`
 	Disabled types.Bool   `tfsdk:"disabled"`
+	// IgnoredElements is a slice rather than a types.Set: null and empty both
+	// mean nothing is ignored, and the value is always known by apply time.
+	IgnoredElements []string `tfsdk:"ignored_elements"`
 }
 
 type jobResource struct {
@@ -87,7 +91,7 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"template": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is managed by this template only if the template contains that element. Otherwise updates keep the store the folder has in Jenkins (such as credentials added by `jenkins_credential_*` resources), and it is left out of the refreshed value so encrypted folder credentials are not copied into state; removing the element from a template that contained it deletes the store on the next apply. State written by an earlier provider version or by `terraform import` does not record whether the template contains the element, so a template that does shows one in-place update on the first plan, which re-applies it unchanged. An element whose value is `{redacted}`, the marker the `jenkins_job` and `jenkins_folder` data sources put in place of encrypted secrets, is rejected: Jenkins would store the marker itself as the secret.",
+				MarkdownDescription: "The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. An element whose value is `{redacted}`, the marker the `jenkins_job` and `jenkins_folder` data sources put in place of encrypted secrets, is rejected: Jenkins would store the marker itself as the secret. See [Folder credentials store](#folder-credentials-store) and [Ignored elements](#ignored-elements) for the elements Jenkins keeps on update.",
 				Validators: []validator.String{
 					jobXMLValidator{},
 					redactedSecretValidator{},
@@ -99,6 +103,14 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"disabled": schema.BoolAttribute{
 				Optional:            true,
 				MarkdownDescription: "Whether the job is disabled. When set, the provider enforces this state through the Jenkins enable/disable API and it takes precedence over any `<disabled>` element in the template; an out-of-band toggle is detected as drift. When omitted, the provider does not manage the job's enabled state and the template's own `<disabled>` value, if any, applies.",
+			},
+			"ignored_elements": schema.SetAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				MarkdownDescription: "Paths of elements, from the root element, that Jenkins or a plugin rewrites on its own, such as `/jenkins.branch.OrganizationFolder/navigators/*/navigatorProjects`. They are left out of the comparison between the template and the job, and an update posts Jenkins' copy of each in place of the template's, except in the cases [Ignored elements](#ignored-elements) lists.",
+				Validators: []validator.Set{
+					setvalidator.ValueStringsAre(ignoredElementPathValidator{}),
+				},
 			},
 		},
 	}
@@ -182,7 +194,11 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	}
 	keep, d := req.Private.GetKey(ctx, jobTemplateFolderCredentialsKey)
 	resp.Diagnostics.Append(d...)
-	data.Template = types.StringValue(jobTemplateFromServer(config, string(keep) == "true"))
+	template := jobTemplateFromServer(config, string(keep) == "true")
+	if !data.Template.IsNull() {
+		template = withStateIgnoredElements(template, data.Template.ValueString(), data.IgnoredElements)
+	}
+	data.Template = types.StringValue(template)
 
 	if !r.refreshMeta(ctx, job, &data, &resp.Diagnostics) {
 		return
@@ -214,9 +230,9 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	template, err := jobTemplateForUpdate(ctx, job, data.Template.ValueString(), string(managed) == "true")
+	template, err := jobTemplateForUpdate(ctx, job, data.Template.ValueString(), string(managed) == "true", data.IgnoredElements)
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to Update Resource", "Could not keep the folder credentials store of job "+data.Name.ValueString()+".\n\nError: "+err.Error())
+		resp.Diagnostics.AddError("Unable to Update Resource", "Could not carry over the elements Jenkins keeps (ignored elements, an unmanaged folder credentials store) for job "+data.Name.ValueString()+".\n\nError: "+err.Error())
 		return
 	}
 
@@ -319,22 +335,33 @@ func jobTemplateFromServer(config string, keepFolderCredentials bool) string {
 }
 
 // jobTemplateForUpdate returns the config.xml Update posts for the planned
-// template. When the template has no folder credentials store and did not
-// manage one before (managed false), the store the job has in Jenkins is
-// copied into it, so applying a template that never contained the store, or a
-// refreshed value it was left out of (ignore_changes, generated
-// configuration), cannot delete the folder's credentials. A template that
-// managed the store and no longer contains it is posted as is: that removal
-// is shown by the plan, since state still holds the store.
-func jobTemplateForUpdate(ctx context.Context, job *jenkins.Job, template string, managed bool) (string, error) {
-	if managed || hasFolderCredentials(template) {
+// template. Each element ignored lists is taken from the job's current
+// config.xml (withLiveIgnoredElements). Then, when the template has no folder
+// credentials store and did not manage one before (managed false), the store
+// the job has in Jenkins is copied into it, so applying a template that never
+// contained the store, or a refreshed value it was left out of
+// (ignore_changes, generated configuration), cannot delete the folder's
+// credentials. A template that managed the store and no longer contains it is
+// posted as is: that removal is shown by the plan, since state still holds the
+// store. The store check runs on the merged template, so an ignored_elements
+// entry naming the store does not post it twice.
+func jobTemplateForUpdate(ctx context.Context, job *jenkins.Job, template string, managed bool, ignored []string) (string, error) {
+	keepStore := !managed && !hasFolderCredentials(template)
+	if len(ignored) == 0 && !keepStore {
 		return template, nil
 	}
 	live, err := currentItemConfig(ctx, job)
 	if err != nil {
 		return "", fmt.Errorf("reading the current configuration: %w", err)
 	}
-	return withFolderCredentials(template, live)
+	merged, err := withLiveIgnoredElements(template, live, ignored)
+	if err != nil {
+		return "", err
+	}
+	if managed || hasFolderCredentials(merged) {
+		return merged, nil
+	}
+	return withFolderCredentials(merged, live)
 }
 
 // currentItemConfig returns job's config.xml for jobTemplateForUpdate. Unlike

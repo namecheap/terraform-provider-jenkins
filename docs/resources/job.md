@@ -68,16 +68,58 @@ And in `pipeline.xml`:
 ### Required
 
 - `name` (String) The unique name of the JenkinsCI job.
-- `template` (String) The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is managed by this template only if the template contains that element. Otherwise updates keep the store the folder has in Jenkins (such as credentials added by `jenkins_credential_*` resources), and it is left out of the refreshed value so encrypted folder credentials are not copied into state; removing the element from a template that contained it deletes the store on the next apply. State written by an earlier provider version or by `terraform import` does not record whether the template contains the element, so a template that does shows one in-place update on the first plan, which re-applies it unchanged. An element whose value is `{redacted}`, the marker the `jenkins_job` and `jenkins_folder` data sources put in place of encrypted secrets, is rejected: Jenkins would store the marker itself as the secret.
+- `template` (String) The Jenkins-compatible XML template describing the job. An existing job's XML can be retrieved by appending `/config.xml` to its URL. Rendered as a Go template with the other resource arguments available as variables; do not include the XML prolog. Well-formedness is validated at plan time, and semantically-equivalent XML (differing only in attribute order, empty-element syntax, whitespace, plugin versions, or the XML declaration) does not produce a diff. An element whose value is `{redacted}`, the marker the `jenkins_job` and `jenkins_folder` data sources put in place of encrypted secrets, is rejected: Jenkins would store the marker itself as the secret. See [Folder credentials store](#folder-credentials-store) and [Ignored elements](#ignored-elements) for the elements Jenkins keeps on update.
 
 ### Optional
 
 - `disabled` (Boolean) Whether the job is disabled. When set, the provider enforces this state through the Jenkins enable/disable API and it takes precedence over any `<disabled>` element in the template; an out-of-band toggle is detected as drift. When omitted, the provider does not manage the job's enabled state and the template's own `<disabled>` value, if any, applies.
 - `folder` (String) The folder namespace to create this job in. Nested folders are separated with `/`, e.g. `parent/child`. Cannot be changed after creation, and every parent folder must already exist.
+- `ignored_elements` (Set of String) Paths of elements, from the root element, that Jenkins or a plugin rewrites on its own, such as `/jenkins.branch.OrganizationFolder/navigators/*/navigatorProjects`. They are left out of the comparison between the template and the job, and an update posts Jenkins' copy of each in place of the template's, except in the cases [Ignored elements](#ignored-elements) lists.
 
 ### Read-Only
 
 - `id` (String) The full canonical job path, e.g. `/job/job-name`.
+
+## Folder credentials store
+
+When the job is a folder, its credentials store (the `com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider_-FolderCredentialsProperty` element) is managed by `template` only if the template contains that element.
+
+-> If the template does not contain the element, every update copies the store Jenkins has into the posted configuration, so credentials added by `jenkins_credential_*` resources, the UI or JCasC are kept. The store is also left out of the refreshed `template`, so encrypted folder credentials are not copied into state.
+
+~> Removing the element from a template that contained it deletes the store on the next apply.
+
+-> State written by an earlier provider version or by `terraform import` does not record whether the template contains the element. A template that does shows one in-place update on the first plan, which re-applies it unchanged.
+
+## Ignored elements
+
+Some plugins rewrite parts of a job's `config.xml` while Jenkins runs. A GitLab organization folder scan, for example, records every project it finds in `navigatorProjects`, so every plan after a scan shows a change. List such elements in `ignored_elements`:
+
+```terraform
+resource "jenkins_job" "apps" {
+  name     = "apps"
+  template = file("${path.module}/apps.xml")
+
+  ignored_elements = [
+    "/jenkins.branch.OrganizationFolder/navigators/*/navigatorProjects",
+  ]
+}
+```
+
+Each entry is a path of element names from the root element. `*` matches any name, except in the last segment. An ignored element is:
+
+- never compared, so a plan shows no change in it;
+- kept as Jenkins has it on update;
+- posted as the template has it on create, and on the update that removes its entry.
+
+-> Keep an empty `<navigatorProjects/>` in a GitLab organization folder template: without it, scans of the folder fail.
+
+~> List only elements Jenkins or a plugin writes on its own. A change to an ignored element, in Jenkins or in the template, is neither planned nor applied.
+
+Limits:
+
+- When a folder has several elements of the same name, such as two GitLab navigators, their ignored elements are matched to Jenkins' by order. Adding or removing one resets them to the template's copy, and the update fails if the template has none; reordering or replacing one gives it another's copy.
+- A template with no copy of an ignored element shows it as removed in a plan that changes something else. The update keeps it, except in the case above.
+- `ignored_elements` must be known at plan time when the template differs from the job.
 
 ## Import
 

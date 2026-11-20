@@ -14,13 +14,25 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// buildDisabledPlan constructs a minimal tfsdk.Plan carrying only a "disabled"
-// bool attribute so templatePlanModifier.PlanModifyString can read it via
-// req.Plan.GetAttribute. A nil disabled pointer yields a null value (unmanaged).
+// buildDisabledPlan constructs a minimal tfsdk.Plan carrying only the
+// "disabled" bool and a null "ignored_elements" set, the attributes
+// templatePlanModifier.PlanModifyString reads via req.Plan.GetAttribute. A nil
+// disabled pointer yields a null value (unmanaged).
 func buildDisabledPlan(t *testing.T, ctx context.Context, disabled *bool) tfsdk.Plan {
 	t.Helper()
+	return buildTemplatePlan(t, ctx, disabled, tftypes.NewValue(ignoredElementsTFType, nil))
+}
+
+// ignoredElementsTFType is the Terraform type of the ignored_elements attribute.
+var ignoredElementsTFType = tftypes.Set{ElementType: tftypes.String}
+
+// buildTemplatePlan is buildDisabledPlan with ignored as the ignored_elements
+// value, a tftypes.Value of ignoredElementsTFType.
+func buildTemplatePlan(t *testing.T, ctx context.Context, disabled *bool, ignored tftypes.Value) tfsdk.Plan {
+	t.Helper()
 	ps := rschema.Schema{Attributes: map[string]rschema.Attribute{
-		"disabled": rschema.BoolAttribute{Optional: true},
+		"disabled":         rschema.BoolAttribute{Optional: true},
+		"ignored_elements": rschema.SetAttribute{ElementType: types.StringType, Optional: true},
 	}}
 	objType := ps.Type().TerraformType(ctx).(tftypes.Object)
 	var dv interface{}
@@ -28,7 +40,8 @@ func buildDisabledPlan(t *testing.T, ctx context.Context, disabled *bool) tfsdk.
 		dv = *disabled
 	}
 	raw := tftypes.NewValue(objType, map[string]tftypes.Value{
-		"disabled": tftypes.NewValue(tftypes.Bool, dv),
+		"disabled":         tftypes.NewValue(tftypes.Bool, dv),
+		"ignored_elements": ignored,
 	})
 	return tfsdk.Plan{Schema: ps, Raw: raw}
 }
