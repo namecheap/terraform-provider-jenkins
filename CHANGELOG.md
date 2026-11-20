@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.0](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.4.1...v1.5.0) (2026-11-20)
+
+
+### Features
+
+* **job:** add ignored_elements to leave elements plugins write into config.xml out of plans and keep Jenkins' copy on update ([f69cc0d](https://github.com/namecheap/terraform-provider-jenkins/commit/f69cc0db428ff64d8faed5e1e8aa80f43871be70))
+
+
+### Bug Fixes
+
+* **job:** drop only the leading XML declaration when comparing and validating templates, so a change later on its line is no longer hidden ([f69cc0d](https://github.com/namecheap/terraform-provider-jenkins/commit/f69cc0db428ff64d8faed5e1e8aa80f43871be70))
+* **job:** keep an unmanaged folder credentials store on update when the template has a numeric reference to a control character ([f69cc0d](https://github.com/namecheap/terraform-provider-jenkins/commit/f69cc0db428ff64d8faed5e1e8aa80f43871be70))
+
 ## [1.4.1](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.4.0...v1.4.1) (2026-10-21)
 
 
