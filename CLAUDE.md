@@ -86,7 +86,7 @@ schema or template changes) and report what they printed — including failures.
 ## CI gates
 
 `main` requires these checks to pass: `Lint`, `Unit Tests`, `Acceptance Tests`,
-`Integration Tests`, `Docs`, `Conventional PR Title`, `CI OK`, `CodeQL (go)`,
+`Integration Tests`, `Docs`, `Conventional PR Title`, `CI OK`, `CodeQL`,
 plus one approving review. `CI.md` explains the pipeline, the `changes` gate
 that skips test jobs on docs-only and release PRs, and why `CI OK` exists.
 
