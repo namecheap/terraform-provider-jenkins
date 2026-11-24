@@ -10,7 +10,7 @@ the CI mechanics.
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, unit, acceptance, integration and docs checks |
-| CodeQL (advanced) | `.github/workflows/codeql.yml` | PR, push to `main`, weekly cron, manual | Static security analysis, provides the "CodeQL (go)" check (note: branch protection currently requires the org default-setup "Analyze (go)" check, not this one) |
+| CodeQL | GitHub default setup (org security configuration, no workflow file) | PR, push to `main`, weekly | Static security analysis of the Go code and the GitHub Actions workflows; provides the required "CodeQL" check |
 | PR Title Check | `.github/workflows/pr-title.yml` | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads) |
 | Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
 | Release | `.github/workflows/release.yml` | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries |
@@ -189,14 +189,13 @@ Lint, Unit Tests and Acceptance Tests therefore set `cache: false` on
 `~/.cache/go-build`. Each job's entry holds the modules and compiled packages
 that job needs. `restore-keys` falls back to the job's previous entry when
 `go.sum` changes, so a dependency bump only downloads and recompiles what
-changed. Integration Tests and CodeQL only build the binary and keep the
+changed. Integration Tests only builds the binary and keeps the
 shared `setup-go` cache. Docs keeps its own `setup-go` key, which also
 covers `tools/go.sum`.
 
 ## Editing the pipeline — invariants to keep
 
-- **Don't add `paths`/`paths-ignore` to `test.yml` or `codeql.yml` triggers**
-  (see above; `codeql.yml` has the same required-check constraint).
+- **Don't add `paths`/`paths-ignore` to `test.yml` triggers** (see above).
 - **Keep `ci-ok` in `needs` sync**: every job added to `test.yml` must also
   be added to the `ci-ok` `needs:` list. "CI OK" is a required status check
   and only guards the jobs it watches. This is enforced — `ci-ok`'s first

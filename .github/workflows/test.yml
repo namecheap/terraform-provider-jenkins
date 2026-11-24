@@ -96,9 +96,8 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
 
-  # NOTE: CodeQL (Go) lives in codeql.yml, which owns the "CodeQL (go)"
-  # required status check. Keep it there: it has its own trigger requirements
-  # (schedule, push baseline for alert diffing) that don't fit this workflow.
+  # NOTE: CodeQL runs as GitHub default setup (org security configuration),
+  # which provides the required "CodeQL" status check. It is not a job here.
 
   unit:
     name: Unit Tests
