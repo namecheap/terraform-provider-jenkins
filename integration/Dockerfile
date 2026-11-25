@@ -14,3 +14,7 @@ COPY jenkins.yaml /var/jenkins_home/casc.yaml
 ENV CASC_JENKINS_CONFIG=/var/jenkins_home/casc.yaml
 
 HEALTHCHECK --interval=2s --start-period=3s --retries=60 CMD [ "curl", "-f", "http://localhost:8080" ]
+
+# The base image already runs as the non-root jenkins user; state it so the
+# image does not depend on that default (Trivy DS-0002).
+USER jenkins

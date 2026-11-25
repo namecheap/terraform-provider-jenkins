@@ -9,7 +9,7 @@ the CI mechanics.
 
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
-| CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, unit, acceptance, integration and docs checks |
+| CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, security scans (shared), unit, acceptance, integration and docs checks |
 | CodeQL | GitHub default setup (org security configuration, no workflow file) | PR, push to `main`, weekly | Static security analysis of the Go code and the GitHub Actions workflows; provides the required "CodeQL" check |
 | PR Title Check | `.github/workflows/pr-title.yml` (shared) | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads); provides the required "PR Title / Conventional PR Title" check |
 | Versioning | `.github/workflows/versioning.yml` (shared) | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
@@ -43,7 +43,15 @@ no signal.
 `test.yml` keeps only short comments; the reasons behind its jobs are here
 and in the sections below.
 
-- **Lint** runs golangci-lint and govulncheck.
+- **Lint** runs golangci-lint.
+- **Security** calls the shared `security-scan.yml` from
+  [terraform-provider-workflows](https://github.com/namecheap/terraform-provider-workflows).
+  `Security / Security scan (Trivy)` fails on CRITICAL/HIGH fixable
+  vulnerabilities, misconfigurations, committed secrets and licenses denied
+  in `trivy.yaml`. `Security / Security scan (govulncheck)` fails only when
+  vulnerable code is actually called, using the Go version from `go.mod`.
+  Both versions are pinned in the shared repository. `make lint` still runs
+  govulncheck locally.
 - **Unit Tests** run with `-race` and a 5% coverage floor. The floor guards
   against deleting the unit tests wholesale; it is not a target, because
   this provider gets most of its coverage from acceptance tests (about 67%
@@ -82,7 +90,7 @@ full pipeline like any other change.
 
 What runs for typical changes:
 
-| Change | Lint / Unit / Acceptance / Integration / Docs | CI OK |
+| Change | Lint / Security / Unit / Acceptance / Integration / Docs | CI OK |
 |---|---|---|
 | Go code, workflows, integration fixtures | ✅ | ✅ |
 | `docs/**` or `templates/**` (registry-published docs) | ✅ | ✅ |

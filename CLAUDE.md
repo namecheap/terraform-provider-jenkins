@@ -89,6 +89,8 @@ schema or template changes) and report what they printed — including failures.
 `Integration Tests`, `Docs`, `PR Title / Conventional PR Title`, `CI OK`,
 `CodeQL`, plus one approving review. `CI.md` explains the pipeline, the `changes` gate
 that skips test jobs on docs-only and release PRs, and why `CI OK` exists.
+The shared security scans (`Security / Security scan (Trivy)` and
+`Security / Security scan (govulncheck)`) are enforced through `CI OK`.
 
 The unit job additionally enforces a 5% total-coverage floor — a guard against
 deleting unit tests wholesale, not a coverage target; this provider gets most of
