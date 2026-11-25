@@ -11,10 +11,14 @@ the CI mechanics.
 |---|---|---|---|
 | CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, unit, acceptance, integration and docs checks |
 | CodeQL | GitHub default setup (org security configuration, no workflow file) | PR, push to `main`, weekly | Static security analysis of the Go code and the GitHub Actions workflows; provides the required "CodeQL" check |
-| PR Title Check | `.github/workflows/pr-title.yml` | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads) |
-| Versioning | `.github/workflows/versioning.yml` | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
-| Release | `.github/workflows/release.yml` | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries |
+| PR Title Check | `.github/workflows/pr-title.yml` (shared) | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads); provides the required "PR Title / Conventional PR Title" check |
+| Versioning | `.github/workflows/versioning.yml` (shared) | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
+| Release | `.github/workflows/release.yml` (shared) | Push of a `v*` tag | GoReleaser: builds, signs and publishes binaries; attests build provenance |
 | Stale | `.github/workflows/stale.yml` | Daily cron | Labels inactive issues/PRs |
+
+(shared): a thin caller of a reusable workflow in
+[`namecheap/terraform-provider-workflows`](https://github.com/namecheap/terraform-provider-workflows),
+pinned by commit SHA; see [RELEASE.md](RELEASE.md).
 
 ## Life of a change
 

@@ -16,8 +16,17 @@ cut.
 3. A maintainer merges the Release PR. That creates the `vX.Y.Z` tag and the
    GitHub Release.
 4. GoReleaser runs on the tag, builds the binaries for all platforms, signs the
-   checksums and attaches everything to the release. The Terraform Registry
+   checksums and attaches everything to the release. It then attests build
+   provenance for every file in the checksums file. The Terraform Registry
    indexes the new version within a few minutes.
+
+The Versioning, Release and PR Title Check workflows are thin callers of
+reusable workflows in
+[`namecheap/terraform-provider-workflows`](https://github.com/namecheap/terraform-provider-workflows),
+which the Namecheap Terraform providers share. Each caller pins a release of
+that repository by full commit SHA with the version in a comment, and
+Dependabot bumps both. Action versions, the GoReleaser version and the
+release-please setup are changed there, not here.
 
 ## Versioning
 
@@ -77,3 +86,16 @@ terraform {
 ```bash
 terraform init   # downloads X.Y.Z from registry.terraform.io
 ```
+
+Check that a downloaded archive was built by this repository's release
+workflow:
+
+```bash
+gh attestation verify terraform-provider-jenkins_X.Y.Z_<os>_<arch>.zip \
+  -R namecheap/terraform-provider-jenkins \
+  --signer-repo namecheap/terraform-provider-workflows
+```
+
+The attestation is signed by the shared workflow, so `--signer-repo` names
+`terraform-provider-workflows`. Releases made before the move to the shared
+workflows have no attestation.
