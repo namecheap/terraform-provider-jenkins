@@ -1,23 +1,14 @@
 name: CI
 
-# No workflow-level paths-ignore here, on purpose. This workflow's jobs are
-# required status checks, and a path-filtered required check is never reported
-# on PRs that touch only excluded files, which blocks them from merging
-# permanently. It would also stop versioning.yml's `workflow_run: [CI]` trigger
-# from firing on pushes that only touch release files, breaking the
-# release-please -> tag -> GoReleaser chain. Instead, the `changes` job below
-# detects what changed and the expensive jobs skip themselves via `if:` —
-# skipped checks DO satisfy branch protection, and the workflow still completes
-# so workflow_run still fires.
+# How the jobs fit together, and the invariants to keep when editing this
+# file, are in CI.md.
 on:
   push:
     branches:
       - main
   pull_request:
 
-# Cancel an in-progress PR run when a new commit is pushed to the same branch,
-# so superseded runs stop consuming runners. Main/release runs are never
-# cancelled (each commit there gets its own run).
+# Cancel superseded PR runs; every main run completes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -25,39 +16,26 @@ concurrency:
 permissions:
   contents: read
 
-# Suppress git's "init.defaultBranch" hint that appears on every checkout.
+# Suppress git's "init.defaultBranch" hint on every checkout.
 env:
   GIT_CONFIG_COUNT: '1'
   GIT_CONFIG_KEY_0: init.defaultBranch
   GIT_CONFIG_VALUE_0: main
 
 jobs:
-  # Gate job: decides whether the jobs below actually need to run for this
-  # change. `code` is false only when the diff touches nothing but root-level
-  # markdown (README/CHANGELOG/...), LICENSE, or the release-please manifest —
-  # most notably the release-please Release PR (CHANGELOG.md +
-  # .release-please-manifest.json) and its merge to main, which previously
-  # re-ran the full acceptance suite twice per release on code that was
-  # already tested. docs/** and templates/** deliberately count as code:
-  # docs/ is published to the Terraform Registry at each release tag, so doc
-  # changes get the full pipeline like any user-visible change.
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read  # paths-filter reads PR files via the API on pull_request events
+      pull-requests: read  # paths-filter reads PR files via the API
     outputs:
       code: ${{ steps.filter-code.outputs.code }}
     steps:
-      # Checkout is required for push events, where paths-filter diffs with git
-      # (pull_request events use the API and would not need it).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # With predicate-quantifier=every a file counts as `code` only if it
-      # matches ALL patterns, i.e. it is none of the ignored kinds. `*.md`
-      # (no globstar) matches root-level markdown only, so nested markdown —
-      # docs/**, templates/** — still counts as code on purpose.
+      # `every`: a file is code unless it is root-level markdown, LICENSE or the
+      # release-please manifest. Nested markdown (docs/, templates/) is code.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter-code
         with:
@@ -75,12 +53,11 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         id: setup-go
         with:
           go-version-file: go.mod
-          # This job keeps its own Go cache (next step); see "Go caches" in CI.md.
-          cache: false
+          cache: false # own cache below; see "Go caches" in CI.md
       - name: Restore Go module and build cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -96,9 +73,6 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
 
-  # NOTE: CodeQL runs as GitHub default setup (org security configuration),
-  # which provides the required "CodeQL" status check. It is not a job here.
-
   unit:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -106,15 +80,14 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
-      id-token: write  # required for Codecov OIDC tokenless upload
+      id-token: write  # Codecov OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         id: setup-go
         with:
           go-version-file: go.mod
-          # This job keeps its own Go cache (next step); see "Go caches" in CI.md.
-          cache: false
+          cache: false # own cache below; see "Go caches" in CI.md
       - name: Restore Go module and build cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -127,10 +100,8 @@ jobs:
       - name: Test with coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.txt ./...
 
+      # A floor against deleting unit tests, not a target; see CI.md.
       - name: Check coverage threshold
-        # This provider relies heavily on acceptance tests for coverage.
-        # The threshold guards against removing unit tests entirely, not against
-        # a low total (the acceptance job reports ~67% when Jenkins is running).
         run: |
           COVERAGE=$(go tool cover -func=coverage.txt | grep total | awk '{print $3}' | sed 's/%//')
           echo "Total coverage: ${COVERAGE}%"
@@ -167,7 +138,7 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
-      id-token: write  # required for Codecov OIDC tokenless upload
+      id-token: write  # Codecov OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -182,15 +153,10 @@ jobs:
           path: /tmp/jenkins-acc-image.tar
           key: jenkins-acc-image-${{ hashFiles('integration/Dockerfile') }}
 
+      # Load the cached image tarball, or build and save it on a miss.
       - name: Build or load Jenkins image
         env:
           COMPOSE_FILE: ./integration/docker-compose.yml
-        # On a cache hit, load the prebuilt image tarball (~5s) — no buildx
-        # container to spin up, no base-image pull, no plugin download. On a
-        # miss, build it once and save the tarball for later runs. Keyed on the
-        # Dockerfile so the cache invalidates only when the image changes. This
-        # is faster than buildx+gha cache for this small image, whose win was
-        # eaten by the ~11s buildx-container setup.
         run: |
           if [ -f /tmp/jenkins-acc-image.tar ]; then
             docker load -i /tmp/jenkins-acc-image.tar
@@ -199,22 +165,16 @@ jobs:
             docker save -o /tmp/jenkins-acc-image.tar terraform-provider-jenkins-acc:latest
           fi
 
+      # One Jenkins per shard, detached: they boot while Go is set up and the
+      # tests compile. See "Acceptance test shards" in CI.md.
       - name: Start Jenkins
-        # Start one Jenkins container per acceptance shard (see "Acceptance
-        # test shards" in CI.md), detached, and DON'T block here. Jenkins boots
-        # in the background while the next steps install Go and compile the
-        # tests, so the boot is hidden under work that has to happen anyway
-        # instead of being a serial wait.
         run: .github/scripts/acceptance-shards.sh start
 
-      # Install Go and restore module/build caches AFTER Jenkins has started,
-      # so its boot overlaps this step and the warm compile below.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         id: setup-go
         with:
           go-version-file: go.mod
-          # This job keeps its own Go cache (next step); see "Go caches" in CI.md.
-          cache: false
+          cache: false # own cache below; see "Go caches" in CI.md
       - name: Restore Go module and build cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -227,20 +187,13 @@ jobs:
       - name: Run acceptance tests
         env:
           TF_ACC: "1"
+          # Local security realm from integration/jenkins.yaml; the script sets
+          # each shard's JENKINS_URL.
           JENKINS_USERNAME: "admin"
-          # The acceptance Jenkins now runs a local security realm (see
-          # integration/jenkins.yaml) with a fixed admin/admin account, matching
-          # the integration test and local `make testacc`. Each shard gets its
-          # own JENKINS_URL from the script.
           JENKINS_PASSWORD: "admin"
         run: |
-          # Warm the build cache (compile only, run no tests) while Jenkins
-          # boots in the background. This overlaps the container startup with
-          # compilation instead of waiting for it serially. -covermode=atomic
-          # matches the real run's build flags so its compile is a cache hit.
+          # Compile only, with the real run's flags, while Jenkins boots.
           go test -covermode=atomic -run='^$' ./... >/dev/null
-          # Waits for each shard's Jenkins, runs the shards side by side and
-          # merges their coverage into coverage.txt.
           .github/scripts/acceptance-shards.sh run
 
       - name: Trust Codecov GPG key
@@ -269,11 +222,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     env:
-      # Drops Terraform's interactive hints ("Try running terraform plan").
-      TF_IN_AUTOMATION: "1"
+      TF_IN_AUTOMATION: "1" # drops Terraform's interactive hints
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: true
@@ -301,13 +253,9 @@ jobs:
       - name: Generate SSH key for credential tests
         run: ssh-keygen -t ed25519 -N "" -f integration/credentials/id_ed25519
 
+      # The "Provider development overrides are in effect" warning is expected.
       - name: Init integration
         working-directory: integration/
-        # namecheap/jenkins comes from the dev_overrides above, so init skips it
-        # and prints "Provider development overrides are in effect"; that
-        # warning is expected. The other providers install at the versions and
-        # checksums in .terraform.lock.hcl (Dependabot bumps it), and
-        # -lockfile=readonly fails the job rather than pick new ones.
         run: terraform init -input=false -lockfile=readonly
 
       - name: Run integration
@@ -321,12 +269,11 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: true
-          # `make generate` builds the doc tool from the separate tools/ module,
-          # so its go.sum must be part of the cache key alongside the root one.
+          # `make generate` builds the doc tool from the tools/ module.
           cache-dependency-path: |
             go.sum
             tools/go.sum
@@ -345,18 +292,7 @@ jobs:
             exit 1
           fi
 
-  # Summary job with two purposes:
-  # 1. A workflow run whose jobs were ALL skipped by the gate would otherwise
-  #    have no executed job, making the run-level conclusion (which gates
-  #    versioning.yml via workflow_run) ambiguous. This job executes on every
-  #    run that isn't cancelled, so the run always concludes success/failure.
-  #    `!cancelled()` rather than `always()`: a superseded PR run cancelled by
-  #    the concurrency group skips this job instead of spending a runner to
-  #    post a red check on a dead SHA (checks are evaluated per-SHA, so the
-  #    replacement run supplies the required check).
-  # 2. Branch protection requires this check: it fails if any needed job
-  #    failed or was cancelled, and passes when jobs succeeded or were
-  #    legitimately skipped by the gate.
+  # The required "CI OK" check; see CI.md. Every other job must be in `needs`.
   ci-ok:
     name: CI OK
     runs-on: ubuntu-latest
@@ -365,10 +301,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # "CI OK" only guards the jobs listed in its `needs`. A job added to the
-      # workflow but not to that list could fail without turning this check
-      # red — the exact gap this job exists to close — so assert the two lists
-      # match instead of relying on the note in CI.md.
       - name: Assert every job is watched by this gate
         run: |
           watched=$(yq '.jobs.ci-ok.needs[]' .github/workflows/test.yml | sort)

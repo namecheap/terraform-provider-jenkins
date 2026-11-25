@@ -39,6 +39,36 @@ Release PR only touches `CHANGELOG.md` and `.release-please-manifest.json`,
 so re-testing the already-merged code there added minutes and runner cost but
 no signal.
 
+## The CI jobs
+
+`test.yml` keeps only short comments; the reasons behind its jobs are here
+and in the sections below.
+
+- **Lint** runs golangci-lint and govulncheck.
+- **Unit Tests** run with `-race` and a 5% coverage floor. The floor guards
+  against deleting the unit tests wholesale; it is not a target, because
+  this provider gets most of its coverage from acceptance tests (about 67%
+  there).
+- **Acceptance Tests** run against Dockerized Jenkins, one container per
+  shard (see [Acceptance test shards](#acceptance-test-shards)). The image is
+  cached as a tarball keyed on `integration/Dockerfile`: loading it takes
+  about 5 seconds, which beat buildx with the GitHub Actions cache once the
+  buildx container setup (about 11 seconds) was counted. The containers
+  start detached before Go is set up, and the job compiles the tests with
+  the real run's flags while Jenkins boots, so the boot costs no extra time.
+  Jenkins uses the local security realm from `integration/jenkins.yaml`
+  (`admin`/`admin`), the same as `make testacc`.
+- **Integration Tests** build the provider and run `terraform test` in
+  `integration/` through a `dev_overrides` config. `terraform init` warns
+  that development overrides are in effect, which is expected; the other
+  providers install from `.terraform.lock.hcl` with `-lockfile=readonly`, so
+  the job fails rather than pick new versions.
+- **Docs** regenerates `docs/` with `make generate` and fails on drift. Its
+  Go cache key includes `tools/go.sum`, because the doc tool is built from
+  the `tools/` module.
+- **Codecov**: both coverage jobs import the Codecov CLI's GPG key with full
+  trust before uploading, so the upload's signature check does not warn.
+
 ## The changes gate
 
 The first job in CI, `changes`, uses
