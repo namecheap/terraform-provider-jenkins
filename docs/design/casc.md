@@ -86,6 +86,21 @@ every default value. Comparing it verbatim would report constant drift.
   subtree, and compare it against the declared `yaml` as a **deep subset**:
   only keys present in the declared document are compared; unmanaged keys and
   plugin defaults within the section are ignored.
+- **Sequences.** A list compares in order and by length, because JCasC list
+  configurators replace the list. Some lists come back in an order of their
+  own (a set exported in hash order, such as role-strategy permissions or
+  `disabledAdministrativeMonitors`), so a declared list can never equal its
+  export. `unordered_paths` names such lists: a path is mapping keys joined by
+  dots, `*` standing for any key or any list element. A list at a matching
+  path is equal when it has the same length and each declared element pairs
+  with a distinct exported element it is a subset of (maximum bipartite
+  matching, so a loose element cannot take the only partner of a stricter
+  one). Opt-in, because JCasC still applies the declared order, and for an
+  ordered list a reorder is real drift. A path must address a list exactly;
+  a path matching no list is silently ignored. Use one `*` for each list
+  element traversed. Changing only these paths skips the JCasC apply when
+  the section and YAML are unchanged and the live export is in sync under
+  the new paths.
 - **Normalization.** Both sides are parsed YAML → generic maps and compared
   semantically: key order, indentation, quoting style, and scalar formatting
   are not drift. This mirrors the semantic-equality approach already used for
@@ -120,7 +135,10 @@ every default value. Comparing it verbatim would report constant drift.
   resolved value), a drifted list the controller grew (it holds elements the
   document does not declare, and one inserted before the declared ones shifts
   into a declared index), and a string with an embedded `${...}`. Such a list
-  is hidden whole.
+  is hidden whole. A drifted unordered list that did not grow keeps the
+  declared elements that still pair with an exported one, then a marker for
+  every unpaired element, including scalars; the markers
+  come last so a refresh of the view renders it unchanged.
 - **Import.** There is no declared document to limit the export to, so import
   records only `section` and leaves `yaml` null; the first apply re-applies the
   configured document.

@@ -99,9 +99,9 @@ func TestCovQ_Extra(t *testing.T) {
 	}}}
 	var sca resource.SchemaResponse
 	rcasc.Schema(ctx, resource.SchemaRequest{}, &sca)
-	cascModel := &configurationAsCodeResourceModel{Section: types.StringValue("jenkins"), YAML: types.StringValue("systemMessage: hi")}
+	cascModel := cascNullModel("jenkins", "systemMessage: hi")
 	stca := tfsdk.State{Schema: sca.Schema}
-	stca.Set(ctx, cascModel)
+	stca.Set(ctx, &cascModel)
 	rr := resource.ReadResponse{State: tfsdk.State{Schema: sca.Schema}}
 	rcasc.Read(ctx, resource.ReadRequest{State: stca}, &rr)
 	if !rr.Diagnostics.HasError() {

@@ -6,7 +6,7 @@ description: |-
   Manages one top-level section of the controller configuration through the configuration-as-code (JCasC) plugin.
   Each instance owns a single top-level JCasC section (jenkins, security, unclassified, tool, ...) named by section, and applies the yaml subtree for it. See the design notes https://github.com/namecheap/terraform-provider-jenkins/blob/main/docs/design/casc.md for the full model.
   Key behaviours:
-  Merge, not replace. Applying a section merges the declared keys into the running configuration; keys present on the controller but not in yaml are left untouched. Drift is detected as a subset: only keys you declare are compared.Secrets. Use JCasC ${VAR} interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.Drift. When a declared key drifts, state keeps only the declared keys: ${VAR} placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as <drifted: controller value hidden> instead.Import. Import records only section; yaml is not read from the controller, so the first apply after import re-applies the configured document.Delete is best-effort. JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
+  Merge, not replace. Applying a section merges the declared keys into the running configuration; keys present on the controller but not in yaml are left untouched. Drift is detected as a subset: only keys you declare are compared.Secrets. Use JCasC ${VAR} interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.Sequences. Lists compare in order and by length, since JCasC list configurators replace the list. unordered_paths opts a list into an order-insensitive comparison, for lists the controller exports in an order of its own.Drift. When a declared key drifts, state keeps only the declared keys: ${VAR} placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as <drifted: controller value hidden> instead.Import. Import records only section; yaml is not read from the controller, so the first apply after import re-applies the configured document.Delete is best-effort. JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
   Requires the configuration-as-code plugin and an account with Overall/Administer.
 ---
 
@@ -20,6 +20,7 @@ Key behaviours:
 
 - **Merge, not replace.** Applying a section merges the declared keys into the running configuration; keys present on the controller but not in `yaml` are left untouched. Drift is detected as a *subset*: only keys you declare are compared.
 - **Secrets.** Use JCasC `${VAR}` interpolation for secret values; they are resolved by the controller at apply time and never stored in state or compared.
+- **Sequences.** Lists compare in order and by length, since JCasC list configurators replace the list. `unordered_paths` opts a list into an order-insensitive comparison, for lists the controller exports in an order of its own.
 - **Drift.** When a declared key drifts, state keeps only the declared keys: `${VAR}` placeholders stay as written and drifted plain values show the controller's value. A value that could carry a resolved secret or unmanaged keys is shown as `<drifted: controller value hidden>` instead.
 - **Import.** Import records only `section`; `yaml` is not read from the controller, so the first apply after import re-applies the configured document.
 - **Delete is best-effort.** JCasC cannot "unset" configuration, so destroying this resource only stops managing the section — the applied values remain on the controller.
@@ -29,12 +30,20 @@ Requires the `configuration-as-code` plugin and an account with `Overall/Adminis
 ## Example Usage
 
 ```terraform
-# Manage the controller's system message (a safe first step for JCasC adoption).
-resource "jenkins_configuration_as_code" "system_message" {
+# Manage settings in one resource per top-level section. This list disables
+# informational URL/setup monitors; it does not change authorization or roles.
+# JCasC replaces the entire list, so include any other monitors you want disabled.
+resource "jenkins_configuration_as_code" "jenkins" {
   section = "jenkins"
   yaml = yamlencode({
-    systemMessage = "Managed by Terraform — do not edit in the UI."
+    systemMessage = "Managed by Terraform: do not edit in the UI."
+    disabledAdministrativeMonitors = [
+      "hudson.diagnosis.ReverseProxySetupMonitor",
+      "jenkins.diagnostics.RootUrlNotSetMonitor",
+    ]
   })
+
+  unordered_paths = ["disabledAdministrativeMonitors"]
 }
 
 # A second instance can own a different top-level section. Secrets use JCasC
@@ -64,6 +73,10 @@ resource "jenkins_configuration_as_code" "unclassified" {
 - `section` (String) The top-level JCasC configuration section this resource manages, e.g. `jenkins`, `security`, `unclassified`, or `tool`. Changing it forces replacement.
 - `yaml` (String) The YAML subtree for `section` (the content *under* the section key, not including the key itself). May reference secrets with JCasC `${VAR}` interpolation.
 
+### Optional
+
+- `unordered_paths` (Set of String) Paths, within `section`, of the lists compared without regard to order: same length, and each declared element matching a distinct controller element. A path is mapping keys joined by dots, where `*` stands for any key or any list element, e.g. `authorizationStrategy.roleBased.roles.*.*.permissions`. A path must address a list exactly; paths matching no list are silently ignored. Use one `*` for each list element traversed. Only use it for lists whose order the controller does not keep: JCasC still applies the list as declared.
+
 ### Read-Only
 
 - `id` (String) The managed section name (same as `section`).
@@ -79,5 +92,5 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 # Only the section is imported: yaml is not read back from the controller, since
 # the export holds resolved secrets and keys this resource does not manage. The
 # first apply after import re-applies the configured yaml.
-terraform import jenkins_configuration_as_code.system_message jenkins
+terraform import jenkins_configuration_as_code.jenkins jenkins
 ```

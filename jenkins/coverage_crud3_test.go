@@ -37,11 +37,9 @@ func TestCovD3_ConfigurationAsCodeCRUD(t *testing.T) {
 		return sr.Schema
 	}
 	model := func(section, yaml string) configurationAsCodeResourceModel {
-		return configurationAsCodeResourceModel{
-			ID:      types.StringValue(section),
-			Section: types.StringValue(section),
-			YAML:    types.StringValue(yaml),
-		}
+		m := cascNullModel(section, yaml)
+		m.ID = types.StringValue(section)
+		return m
 	}
 
 	t.Run("create happy", func(t *testing.T) {
