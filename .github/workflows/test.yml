@@ -70,8 +70,15 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12
-      - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
+
+  # Trivy and govulncheck gates from the shared workflow; see CI.md.
+  security:
+    name: Security
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    permissions:
+      contents: read
+    uses: namecheap/terraform-provider-workflows/.github/workflows/security-scan.yml@7ef9d6abe17fefeb269cd485bcf4c41401592700 # v1.1.0
 
   unit:
     name: Unit Tests
@@ -296,7 +303,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-latest
-    needs: [changes, lint, unit, acceptance, integration, docs]
+    needs: [changes, lint, security, unit, acceptance, integration, docs]
     if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
