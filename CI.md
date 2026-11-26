@@ -10,6 +10,7 @@ the CI mechanics.
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/test.yml` | PR, push to `main` | Lint, security scans (shared), unit, acceptance, integration and docs checks |
+| Scheduled security scan | `.github/workflows/security-scheduled.yml` | Weekly (Mondays 06:17 UTC), manual | The same Trivy and govulncheck gates on `main`, without the summary, to catch advisories published since the last change; a failure emails whoever last edited the schedule |
 | CodeQL | GitHub default setup (org security configuration, no workflow file) | PR, push to `main`, weekly | Static security analysis of the Go code and the GitHub Actions workflows; provides the required "CodeQL" check |
 | PR Title Check | `.github/workflows/pr-title.yml` (shared) | PR | Enforces Conventional Commit PR titles (they become the squash-commit messages release-please reads); provides the required "PR Title / Conventional PR Title" check |
 | Versioning | `.github/workflows/versioning.yml` (shared) | After every CI run on `main` (`workflow_run`), manual | release-please: opens/updates the Release PR; creates the tag when it merges |
