@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.5.0...v1.5.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **deps:** bump golang.org/x/net to v0.62.0 ([#287](https://github.com/namecheap/terraform-provider-jenkins/issues/287)) ([384f49b](https://github.com/namecheap/terraform-provider-jenkins/commit/384f49baeb8bb54e0d33cf2494d74e5b52400731))
+
 ## [1.5.0](https://github.com/namecheap/terraform-provider-jenkins/compare/v1.4.1...v1.5.0) (2026-11-20)
 
 
